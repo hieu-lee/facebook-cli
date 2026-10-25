@@ -109,7 +109,7 @@
   const lines=[];
   lines.push('by\t'+tab(head.join(' / '))+(ti>=0?'\t'+tab(ch[ti]):''));
   lines.push('stats\t'+num(g('like_button'))+'/'+num(g('comment_button'))+'/'+num(g('share_button'))+'\t(react/comment/share)');
-  if(msg)lines.push('text\t'+tab(vtext(msg).join(' ⏎ ')));
+  if(msg)lines.push('text\t'+tab(F.postText(msg).replace(/\n/g,' ⏎ ')));
   const media=[...root.querySelectorAll('a[href*="/photo"] img,a[href*="/photo"],video')].length;
   if(media)lines.push('media\t'+media);
   const scEl=()=>{const a=root.querySelector('[role=article][aria-label]');return (a&&scrollerOf(a))||scrollerOf(root)||null;};

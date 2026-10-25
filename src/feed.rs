@@ -18,20 +18,6 @@ pub struct Post {
     pub ad: bool,
 }
 
-fn postish(u: &str) -> bool {
-    [
-        "/posts/",
-        "pfbid",
-        "/permalink",
-        "story_fbid",
-        "/videos/",
-        "/reel/",
-        "fbid=",
-    ]
-    .iter()
-    .any(|k| u.contains(k))
-}
-
 fn format_post(d: &Daemon, p: &Post, full: bool, urls: bool) -> String {
     let text = one_line(&p.text);
     let text = if full {
@@ -91,10 +77,16 @@ async fn step(b: &Browser, t: &Tab) -> Res<Vec<Post>> {
             let r = b
                 .eval(t, &format!("window.__fbFeed.href({x},{y},{})", p["pos"]))
                 .await?;
+            if r.is_null() {
+                return Ok(out);
+            }
             url = r.as_str().unwrap_or("").to_string();
         }
-        if !postish(&url) {
+        if !crate::ops::is_post_path(&url) {
             url = p["alt"].as_str().unwrap_or("").to_string();
+        }
+        if !crate::ops::is_post_path(&url) {
+            url.clear();
         }
         let s = |k: &str| p[k].as_str().unwrap_or("").to_string();
         out.push(Post {
@@ -120,6 +112,7 @@ async fn collect(d: &Daemon, b: &Browser, t: &Tab, url: &str, args: &Args, out: 
     wait_main(b, t).await?;
     let t0 = Instant::now();
     let mut count = 0;
+    let mut seen_urls = std::collections::HashSet::new();
     let mut last = Instant::now();
     while count < n
         && last.elapsed() < Duration::from_secs(12)
@@ -129,7 +122,11 @@ async fn collect(d: &Daemon, b: &Browser, t: &Tab, url: &str, args: &Args, out: 
         if !posts.is_empty() {
             last = Instant::now();
         }
-        for p in posts.into_iter().take(n - count) {
+        for p in posts
+            .into_iter()
+            .filter(|p| p.url.is_empty() || seen_urls.insert(p.url.clone()))
+            .take(n - count)
+        {
             count += 1;
             out.line(format_post(d, &p, full, urls));
         }
@@ -218,6 +215,7 @@ impl FeedBuf {
             })
             .await?;
             let mut last = Instant::now();
+            let mut seen_urls = std::collections::HashSet::new();
             loop {
                 let notified = self.wake.notified();
                 tokio::pin!(notified);
@@ -234,7 +232,11 @@ impl FeedBuf {
                         continue;
                     }
                 }
-                let posts = bounded(45, step(b, &t)).await?;
+                let posts: Vec<_> = bounded(45, step(b, &t))
+                    .await?
+                    .into_iter()
+                    .filter(|p| p.url.is_empty() || seen_urls.insert(p.url.clone()))
+                    .collect();
                 if !posts.is_empty() {
                     last = Instant::now();
                     let mut g = self.inner.lock().await;

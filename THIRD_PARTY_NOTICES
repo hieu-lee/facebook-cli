@@ -1,0 +1,7 @@
+Native macOS editing bindings in src/keys.rs are adapted from:
+https://github.com/microsoft/playwright/blob/1a5b60a8305a3f762645328168300132823e58b4/packages/playwright-core/src/server/macEditingCommands.ts
+Copyright 2017 Google Inc. All rights reserved.
+Modifications copyright (c) Microsoft Corporation.
+Licensed under the Apache License, Version 2.0. See LICENSE-APACHE-2.0.
+The command facts are restricted to CLI-supported physical keys, and insertion
+commands are omitted because CDP text dispatch handles insertion separately.

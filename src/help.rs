@@ -17,13 +17,19 @@ MESSENGER
   unsend <chat> [--match text] [--dry]   remove your newest loaded message (containing text) for everyone
   unlock [-]                         once: restore end-to-end encrypted chats; PIN read from $FB_PIN or stdin
 ACT
-  post <text> [--img file]... [--to public|friends|me]
+  post <text> [--img file]... [--to public|friends|me]   confirmed: posted<TAB>ref<TAB>path
   comment <post> <text>
   react <post> [like|love|care|haha|wow|sad|angry|none]
   delete <post>                      your own posts only
+BROWSER (fallback; named tabs are separate from normal commands)
+  page <name> open <url> | snapshot [filter]   bounded text + refs; max 6 pages
+  page <name> click <ref> | fill <ref> <text> | key <Ctrl+a|Enter|...> | scroll <dx> <dy>
+  page <name> upload <ref> <files>... | eval <js> | cdp <method> <json> | shot <file> | close
+  Form/editor values are omitted; use eval for explicit value reads.
+  Refs expire on snapshot/navigation/action. ok means input dispatched, not saved; read back to confirm.
 OTHER
   batch \"cmd\" \"cmd\" ...             run commands in parallel (or one per stdin line); output grouped under `## i cmd`
   login [--visible] [--from port|ws-url]   first run: copies your Chrome's Facebook session (one Allow click)
-  status | stop (daemon; hidden browser keeps running) | quit (daemon + hidden browser) | eval [url] <js> | shot <file> [url] | ax [url]
+  --version | status | stop (daemon; hidden browser keeps running) | quit (daemon + hidden browser) | eval [url] <js> | shot <file> [url] | ax [url]
 Env (read by the daemon when it starts: `fb quit` to apply a change): FB_TIMEOUT=sec per command (150), FB_PROFILE=dir (non-WSL), FB_CDP=port|ws-url (use your own Chrome).
 Each command runs in its own tab: invoke several at once (shell & or batch) for concurrency.";

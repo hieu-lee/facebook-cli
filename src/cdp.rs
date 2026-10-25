@@ -9,10 +9,11 @@ use tokio_tungstenite::tungstenite::Message;
 
 pub type Res<T> = Result<T, String>;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Event {
     pub method: String,
     pub session: Option<String>,
+    pub params: Arc<Value>,
 }
 
 type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Res<Value>>>>>;
@@ -73,7 +74,7 @@ impl Cdp {
         let reader = tokio::spawn(async move {
             while let Some(Ok(msg)) = source.next().await {
                 let Message::Text(t) = msg else { continue };
-                let Ok(v) = serde_json::from_str::<Value>(t.as_str()) else {
+                let Ok(mut v) = serde_json::from_str::<Value>(t.as_str()) else {
                     continue;
                 };
                 if let Some(id) = v.get("id").and_then(Value::as_u64) {
@@ -88,10 +89,16 @@ impl Cdp {
                         };
                         let _ = tx.send(r);
                     }
-                } else if let Some(method) = v.get("method").and_then(Value::as_str) {
+                } else if let Some(method) =
+                    v.get("method").and_then(Value::as_str).map(String::from)
+                {
+                    let session = v.get("sessionId").and_then(Value::as_str).map(String::from);
+                    let params =
+                        Arc::new(v.get_mut("params").map(Value::take).unwrap_or(Value::Null));
                     let _ = events.send(Event {
-                        method: method.to_string(),
-                        session: v.get("sessionId").and_then(Value::as_str).map(String::from),
+                        method,
+                        session,
+                        params,
                     });
                 }
             }

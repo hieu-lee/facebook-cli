@@ -14,7 +14,9 @@ pub const INJECT: &str = concat!(
     ";\n",
     include_str!("../js/ops.js"),
     ";\n",
-    include_str!("../js/act.js")
+    include_str!("../js/act.js"),
+    ";\n",
+    include_str!("../js/page.js")
 );
 
 pub struct Tab {
@@ -325,30 +327,27 @@ impl Browser {
         }
         // a fragment-only change stays in the same document: no load event will ever come
         if r.get("loaderId").is_none() {
-            return self.check_logged_in(t, url).await;
+            return self.check_logged_in(t).await;
         }
         let deadline = tokio::time::sleep(Duration::from_secs(30));
         tokio::pin!(deadline);
         loop {
             tokio::select! {
                 ev = rx.recv() => match ev {
-                    Ok(ev) if ev.session.as_deref() == Some(&t.session) && ev.method == "Page.domContentEventFired" => return self.check_logged_in(t, url).await,
+                    Ok(ev) if ev.session.as_deref() == Some(&t.session) && ev.method == "Page.domContentEventFired" => return self.check_logged_in(t).await,
                     Ok(_) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                     Err(_) => return Err("chrome connection closed".into()),
                 },
-                _ = &mut deadline => return self.check_logged_in(t, url).await,
+                _ = &mut deadline => return self.check_logged_in(t).await,
             }
         }
     }
 
     /// After loading a Facebook page: the login form means the session is gone.
-    async fn check_logged_in(&self, t: &Tab, url: &str) -> Res<()> {
-        if !url.contains("facebook.com") {
-            return Ok(());
-        }
+    async fn check_logged_in(&self, t: &Tab) -> Res<()> {
         let out = self
-            .eval(t, "!!document.querySelector('input[name=pass]')||/^\\/(login|checkpoint)/.test(location.pathname)")
+            .eval(t, "(location.hostname==='facebook.com'||location.hostname.endsWith('.facebook.com'))&&(!!document.querySelector('input[name=pass]')||/^\\/(?:login(?:\\.php)?|checkpoint)(?:\\/|$)/.test(location.pathname))")
             .await
             .unwrap_or(Value::Bool(false));
         if out == Value::Bool(true) {
@@ -388,13 +387,34 @@ impl Browser {
     }
 
     pub async fn key(&self, t: &Tab, key: &str, code: &str, vk: u32, modifiers: u32) -> Res<()> {
-        for ty in ["rawKeyDown", "keyUp"] {
+        let key = if modifiers & 8 != 0 && key.len() == 1 {
+            const LOWER: &str = "abcdefghijklmnopqrstuvwxyz1234567890-=[]\\;',./`";
+            const UPPER: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ!@#$%^&*()_+{}|:\"<>?~";
+            LOWER.find(key).map(|i| &UPPER[i..i + 1]).unwrap_or(key)
+        } else {
+            key
+        };
+        let text = (modifiers & 7 == 0 && (key.len() == 1 || key == "Enter"))
+            .then_some(if key == "Enter" { "\r" } else { key });
+        let mac = UA.get().is_some_and(|ua| ua.contains("Macintosh"));
+        let commands = crate::keys::commands(mac, code, modifiers)?;
+        for ty in [
+            if text.is_some() {
+                "keyDown"
+            } else {
+                "rawKeyDown"
+            },
+            "keyUp",
+        ] {
+            let mut params = json!({"type":ty,"key":key,"code":code,"windowsVirtualKeyCode":vk,"nativeVirtualKeyCode":vk,"modifiers":modifiers});
+            if ty == "keyDown" {
+                params["text"] = json!(text);
+            }
+            if ty != "keyUp" && !commands.is_empty() {
+                params["commands"] = json!(commands);
+            }
             self.cdp
-                .call(
-                    Some(&t.session),
-                    "Input.dispatchKeyEvent",
-                    json!({"type":ty,"key":key,"code":code,"windowsVirtualKeyCode":vk,"nativeVirtualKeyCode":vk,"modifiers":modifiers}),
-                )
+                .call(Some(&t.session), "Input.dispatchKeyEvent", params)
                 .await?;
         }
         Ok(())
@@ -429,17 +449,5 @@ impl Browser {
         self.mouse(t, "mouseMoved", x, y, "none", 0).await?;
         self.mouse(t, "mousePressed", x, y, "left", 1).await?;
         self.mouse(t, "mouseReleased", x, y, "left", 1).await
-    }
-}
-
-impl Browser {
-    pub async fn key_text(&self, t: &Tab, key: &str, code: &str, vk: u32, text: &str) -> Res<()> {
-        self.cdp
-            .call(Some(&t.session), "Input.dispatchKeyEvent", json!({"type":"keyDown","key":key,"code":code,"windowsVirtualKeyCode":vk,"nativeVirtualKeyCode":vk,"text":text}))
-            .await?;
-        self.cdp
-            .call(Some(&t.session), "Input.dispatchKeyEvent", json!({"type":"keyUp","key":key,"code":code,"windowsVirtualKeyCode":vk,"nativeVirtualKeyCode":vk}))
-            .await
-            .map(|_| ())
     }
 }

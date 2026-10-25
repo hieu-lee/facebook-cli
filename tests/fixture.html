@@ -1,0 +1,46 @@
+<!doctype html><meta charset="utf-8"><title>Facebook fixture</title>
+<style>body{font:16px sans-serif;margin:20px}button,[role=button]{padding:12px;cursor:pointer}section{border:1px solid #aaa;padding:12px;margin:10px} [role=log]{width:700px;height:240px;overflow:auto}[role=article]{width:680px;min-height:40px;display:flex;justify-content:flex-end}[dir=auto]{display:inline-block;max-width:400px} [role=dialog]{position:fixed;inset:80px;background:white;border:2px solid;z-index:100;padding:20px} [role=textbox]{border:1px solid;padding:16px;min-height:30px}</style>
+<style>[data-ad-rendering-role=story_message],[dir=auto]{white-space:pre-wrap}</style>
+<main role="main"></main>
+<script>
+const main=document.querySelector('main');
+if(location.pathname==='/profile.php')history.replaceState(null,'','/fixture/');
+const read=k=>JSON.parse(localStorage.getItem(k)||'null');
+const save=(k,v)=>localStorage.setItem(k,JSON.stringify(v));
+let posts=read('posts')||[{id:'100',text:'Existing profile post',aud:'me'}];
+const button=(text,fn,label)=>{const b=document.createElement('div');b.role='button';b.tabIndex=0;b.textContent=text;if(label)b.setAttribute('aria-label',label);b.onclick=fn;return b};
+const dialog=()=>{const d=document.createElement('div');d.role='dialog';document.body.append(d);return d};
+function postNode(p){
+ const s=document.createElement('section');s.dataset.post=p.id;if(read('recycle')==='aria')s.setAttribute('aria-posinset','1');
+ s.innerHTML='<h3 data-ad-rendering-role="profile_name"><a href="/fixture">Fixture User</a></h3><a class="time" href="?tracking=1"><span style="position:relative">Just now</span></a><div data-ad-rendering-role="story_message"></div><div data-ad-rendering-role="like_button">0</div>';
+ const msg=s.querySelector('[data-ad-rendering-role=story_message]');
+ if(read('oldHeaderPartial')&&p.id==='100'){msg.removeAttribute('data-ad-rendering-role');s.querySelector('[data-ad-rendering-role=like_button]').removeAttribute('data-ad-rendering-role')}
+ const full=()=>{msg.replaceChildren();if(read('inlineBody')){const span=document.createElement('span');span.textContent=p.text.slice(0,8);msg.append(span,document.createTextNode(p.text.slice(8)))}else msg.textContent=p.text};
+ const body=()=>{if(read('collapsedBody')&&p.text.length>120){msg.textContent=p.text.slice(0,120)+'… ';msg.append(button('See more',full))}else full()};
+ if(read('delayedBody')&&p.id!=='100')setTimeout(body,1000);else body();
+ s.querySelector('.time').onmouseover=e=>{if(read('recycleHover')&&s.dataset.post==='100'){s.dataset.post='200';msg.textContent='Hover recycled second post';e.currentTarget.href='/fixture/posts/200';return}if(s.dataset.post==='200'){e.currentTarget.href='/fixture/posts/200';return}if(read('oldUrlDeferred')&&p.id==='100'&&!read('publishAttempted'))return;e.currentTarget.href='/fixture/posts/'+p.id};
+ const action=button('Options',()=>{const menu=document.createElement('div');menu.role='menu';const item=button('Move to trash',()=>{menu.remove();const d=dialog();d.append('Move to trash?',button('Move',()=>{posts=posts.filter(x=>x.id!==p.id);save('posts',posts);s.remove();d.remove()}),button('Cancel',()=>d.remove()))});item.role='menuitem';menu.append(item);document.body.append(menu)},'Actions for this post');action.setAttribute('aria-haspopup','menu');s.append(action);
+ return s;
+}
+function render(){main.querySelectorAll('section').forEach(x=>x.remove());const id=location.pathname.match(/\/posts\/(\d+)/)?.[1];for(const p of posts.filter(p=>(!id||p.id===id)&&!(read('oldUnmounted')&&p.id==='100'&&!read('publishAttempted'))))main.append(postNode(p));}
+function composer(){
+ const d=dialog(),tb=document.createElement('div');tb.role='textbox';tb.contentEditable='true';d.append(tb);let aud='friends';
+ const ab=button('Friends',()=>{const select=document.createElement('div');for(const [k,v]of [['public','Public'],['friends','Friends'],['me','Only me']]){const lab=document.createElement('label');lab.textContent=v;lab.onclick=()=>{aud=k};select.append(lab,document.createElement('br'))}select.append(button('Done',()=>{const replacement=ab.cloneNode(true);replacement.textContent={public:'Public',friends:'Friends',me:'Only me'}[aud];replacement.onclick=ab.onclick;ab.replaceWith(replacement);select.remove()}));d.append(select)},'Audience. Friends');d.append(ab);
+ d.append(button('Post',async()=>{save('publishAttempted',true);let created=null;if(!read('failPublish')){created={id:String(Date.now()),text:tb.innerText,aud,receiptMode:read('receiptMode')};posts=[created,...posts];save('posts',posts)}render();await fetch('/api/graphql/',{method:'POST',body:new URLSearchParams({fb_api_req_friendly_name:'ComposerStoryCreateMutation',variables:JSON.stringify(created)})});d.remove()}));tb.focus();
+}
+if(location.pathname.includes('/messages')){
+ let blocked=!read('restored');
+ const locale=read('locale')||'en';const words={en:['Enter your PIN to restore your chat history','Close',"Don't restore messages",'Continue without restoring?'],vi:['Nhập mã PIN để khôi phục đoạn chat của bạn','Đóng','Không khôi phục tin nhắn','Tiếp tục mà không khôi phục?'],fr:['Saisissez votre PIN pour restaurer vos messages','Fermer','Ne pas restaurer les messages','Continuer sans restaurer ?']}[locale];
+ main.innerHTML='<div role="grid"><div role="row"><a href="/messages/t/42/" aria-label="_ay: hi"><span>_ay</span><span>hi</span><span>·</span><span>now</span></a></div></div><h2>_ay</h2><div role="log"></div><div role="textbox" contenteditable="true" aria-label="Message _ay"></div>';
+ const log=main.querySelector('[role=log]'),tb=main.querySelector('[role=textbox]');
+ let messages=read('messages')||['Earlier message'];
+ function msgs(){log.innerHTML='';messages.forEach((text,i)=>{const a=document.createElement('div');a.role='article';const bubble=document.createElement('span');bubble.dir='auto';bubble.dataset.messageId='m'+i;bubble.setAttribute('aria-label','At 10:00, You: '+text);bubble.textContent=text;a.append(bubble);log.append(a)});log.scrollTop=log.scrollHeight}
+ msgs();tb.oninput=()=>{if(read('truncateDraft')){tb.innerText=tb.innerText.slice(0,5);save('truncateDraft',false)}};tb.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();if(blocked)return;messages.push(tb.innerText.trim());save('messages',messages);tb.innerText='';msgs()}};
+ const restore=()=>{const d=dialog();d.innerHTML='<h2>'+words[0]+'</h2><input aria-label="PIN">';const input=d.querySelector('input');if(read('pinAutofocus'))input.focus();input.oninput=()=>{if(input.value==='1234'){save('unlocked',true);d.remove()}};d.append(button(words[1],()=>{const confirm=dialog();confirm.append(words[3],button(words[2],()=>{blocked=false;save('restored',true);d.remove();confirm.remove()}))},words[1]))};
+ if(blocked)setTimeout(restore,100);else if(!read('unlocked'))main.append(button({en:'Enter PIN',vi:'Nhập mã PIN',fr:'Saisir le code PIN'}[locale],restore));
+}else{
+ main.innerHTML='<div role="region"><h2>Create post</h2></div>';
+ main.querySelector('[role=region]').append(button("What is on your mind?",composer));
+ const cover=button('Cover options',()=>{throw Error('Wrong cover action selected')},'Cover photo');cover.setAttribute('aria-haspopup','menu');main.prepend(cover);render();if(read('recycle'))window.scrollBy=()=>{const s=main.querySelector('section');s.dataset.post='200';s.querySelector('[data-ad-rendering-role=story_message]').textContent='Recycled DOM second post';s.querySelector('.time').href='/fixture/posts/200';s.querySelector('.time').onmouseover=e=>{e.currentTarget.href='/fixture/posts/200'};if(read('recycle')==='aria')s.setAttribute('aria-posinset','2')};
+}
+</script>

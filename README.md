@@ -84,7 +84,7 @@ Run `fb help` for the exact list. `<who>` is `me`, a name, `@vanity`, an id, a U
 
 | Act | |
 |---|---|
-| `post <text> [--img file]... [--to public\|friends\|me]` | create a post |
+| `post <text> [--img file]... [--to public\|friends\|me]` | verified `posted<TAB>ref<TAB>path` receipt; directly usable by `view`/`delete` |
 | `comment <post> <text>` | |
 | `react <post> [like\|love\|care\|haha\|wow\|sad\|angry\|none]` | idempotent |
 | `delete <post>` | your own posts |
@@ -95,9 +95,64 @@ Run `fb help` for the exact list. `<who>` is `me`, a name, `@vanity`, an id, a U
 | `login [--visible] [--from <port\|ws-url>]`, `status`, `stop`, `quit` | `login` imports your Chrome session; `stop` stops the daemon, `quit` also closes the hidden Chrome |
 | `eval [url] <js>`, `shot <file> [url]`, `ax [url]` | escape hatches: run JS, screenshot, accessibility tree |
 
+## Any browser workflow, without a giant DOM dump
+
+Use the fast domain commands first. For settings, group administration, polls,
+message actions, and other UI without a shortcut, keep a named page:
+
+```sh
+fb page settings open https://www.facebook.com/settings
+fb page settings snapshot privacy    # filter control labels; at most 80 controls
+fb page settings click e...          # exact ref from the current snapshot
+fb page settings snapshot
+fb page settings fill e... 'value'
+fb page settings key Enter
+fb page settings shot settings.jpg
+fb page settings close
+```
+
+`page NAME` also supports `scroll DX DY`, `upload REF FILE...`, `eval JS`, and
+`cdp METHOD JSON`. `eval` returns only your selected value; `cdp` exposes Chrome's
+page-session DevTools protocol for trusted mouse/keyboard, frame, network and
+other operations beyond the shortcuts. For example:
+
+```sh
+fb page settings eval 'document.title'
+fb page settings cdp Input.dispatchMouseEvent '{"type":"mouseMoved","x":100,"y":200}'
+```
+
+Named pages never enter the normal command pool. Up to six names can be open;
+different names run independently, commands for one name serialize. Names live
+until close or daemon shutdown. Reopen after reconnect, account change, or an
+uncertain action failure. No action is automatically replayed.
+
+Snapshots contain bounded text and TSV-safe control labels. Native form values and text-editor
+contents are omitted (`[redacted]`) regardless of labels; use a targeted `eval` when
+an explicit value read is needed. URLs, labels and page text can still contain private data:
+this is not general-purpose data-loss prevention. A new snapshot, navigation (including SPA history changes) or ref action invalidates old refs.
+Detached, renamed, covered and disabled targets fail instead of guessing. `ok`
+means browser input was dispatched, **not** that Facebook saved the change: take
+a snapshot or a targeted `eval` read to verify the result. Screenshots, eval and
+CDP output are explicit full-access escape hatches; they can contain private data.
+Ordinary Enter/Shift+Enter are supported. macOS native insertion chords
+(Control+O and Control/Option+Enter, including shifted variants) are rejected before
+input rather than silently performing only part of the edit; use the ordinary keys
+or an explicit eval/CDP operation instead.
+Some workflows still require human login, 2FA or a Messenger PIN. These primitives
+provide browser-level reach, not a promise that every Facebook feature has been
+individually tested. Facebook can change its UI at any time.
+
+Posting observes this tab's create-story response and checks its author and exact
+new permalink, then opens that permalink and reads the rendered text back. Old,
+delayed or identical profile posts cannot become creation receipts. Missing or
+ambiguous creation evidence is an error, never an automatic second publish: inspect
+`fb posts me` before retrying. `delete` uses Facebook's Trash action (normally
+permanent removal after 30 days).
+
 ## End-to-end encrypted chats
 
-Most Messenger chats are end-to-end encrypted. Their history needs your Messenger PIN, because a new browser profile has no keys. Run `echo "$PIN" | fb unlock -` once (or `FB_PIN=... fb unlock`), so the PIN never appears in `ps`. Until then `chats` lists them with the `e` flag and `read`/`send` on them report that the chat is locked. Unencrypted chats and groups work immediately.
+Most Messenger chats are end-to-end encrypted. Their history needs your Messenger PIN, because a new browser profile has no keys. Run `echo "$PIN" | fb unlock -` once (or `FB_PIN=... fb unlock`), so the PIN never appears in `ps`. Until then `chats` lists them with the `e` flag and `read`/`send` on them report that the chat is locked. `unlock` can reopen the Enter PIN banner even after a normal command skipped the
+optional restore prompt. For accessible conversations, the CLI closes the optional history-restore prompt through Facebook's own buttons and continues without restoring. This does not recover missing encrypted history; `unlock` is still required for that.
 
 ## Configuration
 
@@ -106,12 +161,16 @@ These are read by the daemon when it starts. If a daemon is already running, run
 | Variable | Meaning |
 |---|---|
 | `FB_TIMEOUT` | seconds per command (default 150) |
-| `FB_TABS` | max concurrent tabs (default 10) |
+| `FB_TABS` | max concurrent command tabs (default 10); named pages are separately capped at six |
 | `FB_IDLE` | daemon exits after this many idle seconds (default 900) and closes Chrome |
 | `FB_PROFILE` | profile directory on Linux/macOS (default `~/.cache/fb/chrome`) |
 | `FB_CDP` | `port`, `host:port` or `ws://` URL of a Chrome you started with `--remote-debugging-port`: use it instead of the hidden one (`fb` never closes it) |
 | `FB_STATE` | state directory (default `~/.cache/fb`) |
 | `FB_SOCK` | unix socket path (Linux/macOS) |
+
+`fb --version` reports the installed binary version without starting the daemon.
+Release archives are published together only after CI and all five builds pass;
+`SHA256SUMS` covers every archive.
 
 State lives in `~/.cache/fb` (`%LOCALAPPDATA%\fb` on native Windows): `refs.tsv`, `chats.tsv`, `daemon.log`.
 
@@ -120,8 +179,19 @@ State lives in `~/.cache/fb` (`%LOCALAPPDATA%\fb` on native Windows): `refs.tsv`
 ```sh
 cargo test                  # unit tests, including a fake-Chrome CDP test
 node tests/js.test.js       # pure-function tests for the injected page scripts
+node tests/e2e-isolation.mjs          # isolated real Chrome + CLI; never calls the real Facebook network
 scripts/smoke.sh            # live read-only check against your logged-in profile
 ```
+
+The E2E harness intercepts requests in a disposable Chrome profile with fake cookies.
+It covers PIN dismissal, post extraction/receipts/audience/delete, ambiguous publish,
+and named-page input/isolation/stale refs. Evidence is saved in `target/e2e`
+(`report.json` and a screenshot); set `E2E_OUTPUT`, `CHROME`, or `FB` to override paths.
+For a real-account mutation check, explicitly run
+`scripts/live-acceptance.sh --live-post [fb-binary]`: it creates one unique Only-me
+post, verifies the receipt/body/audience, and trashes it (including cleanup on failure).
+It does not send Messenger messages. See `tests/FAILURES.md` for the failure contract. No new unit tests are required
+for these UI fixes.
 
 The page logic is plain JS in `js/`, injected into every tab with `Page.addScriptToEvaluateOnNewDocument`. `src/` is the daemon, the CDP client and the commands. Use `fb ax <url>` to see a page the way the selectors do.
 
@@ -134,3 +204,7 @@ The page logic is plain JS in `js/`, injected into every tab with `Page.addScrip
 ## Notes
 
 This automates a logged-in browser session. Facebook's terms restrict automated access, and its markup changes without notice. Use it on your own account, at human-like volume, and expect to update selectors now and then.
+
+Native macOS editing bindings are adapted from Playwright/Chromium under Apache
+2.0; see `THIRD_PARTY_NOTICES` and `LICENSE-APACHE-2.0`. Release archives include
+these notices alongside the CLI and its MIT license.

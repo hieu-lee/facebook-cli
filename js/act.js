@@ -11,7 +11,7 @@
   const trigger=await waitFor(()=>{
    const regs=[...m.querySelectorAll('[role=region]')];
    for(const r of regs){const h=r.querySelector('h1,h2,h3,h4');if(!h)continue;const b=[...r.querySelectorAll('[role=button]')].find(b=>btnText(b).length>6);if(b)return b;}
-   return null;
+   return [...m.querySelectorAll('[role=button]')].find(b=>/^(What.s on your mind|Bạn đang nghĩ gì|Exprimez-vous|Que voulez-vous dire)/i.test(btnText(b)))||null;
   },15000);
   if(!trigger)return 'no composer button';
   trigger.click();
@@ -37,7 +37,8 @@
  const first=t=>clean(t).split('\n')[0].trim();
  F.composeAudience=async(kind)=>{
   const d=F.composeDialog();if(!d)return 'no composer';
-  const ab=[...d.querySelectorAll('[role=button]')].find(e=>/\./.test(e.getAttribute('aria-label')||'')&&btnText(e).length>0&&btnText(e).length<30);
+  const audienceButton=()=>{const dialog=F.composeDialog();return dialog&&[...dialog.querySelectorAll('[role=button]')].find(e=>/\./.test(e.getAttribute('aria-label')||'')&&btnText(e).length>0&&btnText(e).length<30);};
+  const ab=audienceButton();
   if(!ab)return 'no audience button';
   if(AUD[kind].test(first(ab.innerText)))return true;
   ab.click();
@@ -47,8 +48,9 @@
   await sleep(300);
   const done=[...d.querySelectorAll('[role=button]')].filter(b=>btnText(b)).pop();
   if(done)done.click();
-  await sleep(600);
-  return true;
+  await sleep(200);
+  const current=await waitFor(()=>{const b=audienceButton();return b&&AUD[kind].test(first(b.innerText))},3000);
+  return current?true:'audience change not confirmed; nothing was posted';
  };
  // two steps so the caller can still abort after the (possibly slow) wait for an enabled Post button
  F.composePrepare=async()=>{
@@ -74,7 +76,8 @@
  // two steps so the caller can still abort before the irreversible click
  F.postDeleteOpen=async()=>{
   const r=postRoot();if(!r)return 'no post';
-  const act=[...r.querySelectorAll('[role=button][aria-haspopup]')].find(b=>b.getAttribute('aria-label'));
+  const cards=F.postCards();const card=cards.find(c=>r.contains(c))||r;
+  const act=[...card.querySelectorAll('[role=button][aria-haspopup]')].find(b=>b.getAttribute('aria-label'));
   if(!act)return 'no actions menu (not your post?)';
   act.click();
   const item=await waitFor(()=>[...document.querySelectorAll('[role=menuitem]')].find(i=>MENU_RE.del.test(clean(i.innerText))),5000);

@@ -489,20 +489,12 @@ pub async fn read(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     r
 }
 
-/// Put `text` into the composer (newlines as Shift+Enter).
+/// Insert the whole draft in one browser operation; no per-line focus races or round trips.
 async fn type_text(b: &std::sync::Arc<Browser>, t: &Tab, text: &str) -> Res<()> {
     if b.eval(t, "window.__fb.focusComposer()").await? != Value::Bool(true) {
         return Err("no composer".into());
     }
-    for (k, l) in text.split('\n').enumerate() {
-        if k > 0 {
-            b.key(t, "Enter", "Enter", 13, 8).await?;
-        }
-        if !l.is_empty() {
-            b.insert_text(t, l).await?;
-        }
-    }
-    Ok(())
+    b.insert_text(t, text).await
 }
 
 /// Press Enter on what the composer holds and wait until our own new message shows up: `text`
@@ -523,13 +515,26 @@ async fn submit(
     if b.eval(t, "window.__fb.markSent()").await? != Value::Bool(true) {
         return Err("could not read the conversation; nothing more was sent".into());
     }
+    // Marking may await history while a delayed restore modal steals focus.
+    if b.eval(t, "window.__fb.focusComposer()").await? != Value::Bool(true) {
+        return Err("no composer; nothing was sent".into());
+    }
+    if file.is_none()
+        && b.eval(t, &format!("window.__fb.composerMatches({})", json!(text)))
+            .await?
+            != Value::Bool(true)
+    {
+        return Err(
+            "draft changed; no text was sent; inspect the conversation before retrying".into(),
+        );
+    }
     if b.generation.load(SeqCst) != gen0 {
         return Err("the account changed while sending; nothing more was sent".into());
     }
     if out.cancelled() {
         return Err("cancelled by client; nothing more was sent".into());
     }
-    b.key_text(t, "Enter", "Enter", 13, "\r").await?;
+    b.key(t, "Enter", "Enter", 13, 0).await?;
     let mut pressed = Instant::now();
     let deadline = pressed + Duration::from_secs(wait_secs);
     let loose = file.is_some_and(|f| {
@@ -562,7 +567,7 @@ async fn submit(
             // the client may have gone while that call was in flight
             && !out.cancelled()
         {
-            b.key_text(t, "Enter", "Enter", 13, "\r").await?;
+            b.key(t, "Enter", "Enter", 13, 0).await?;
             pressed = Instant::now();
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -779,7 +784,7 @@ pub async fn unlock(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     let pin = args
         .first()
         .ok_or("usage: echo PIN | fb unlock -   (or FB_PIN=... fb unlock)")?;
-    if !pin.bytes().all(|c| c.is_ascii_digit()) {
+    if pin.is_empty() || !pin.bytes().all(|c| c.is_ascii_digit()) {
         return Err("PIN must be digits".into());
     }
     let b = d.browser(out).await?;
@@ -797,7 +802,6 @@ pub async fn unlock(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
             Value::String(s) => return Err(s),
             _ => return Err("unexpected".into()),
         }
-        tokio::time::sleep(Duration::from_secs(8)).await;
         out.line("unlocked (history restores in the background)");
         Ok(())
     }

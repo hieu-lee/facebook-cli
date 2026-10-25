@@ -1,6 +1,6 @@
 (()=>{
  const F=window.__fb;
- const {sleep,clean,vtext,waitFor,killDialogs}=F;
+ const {sleep,clean,vtext,waitFor,dismissRestore}=F;
  const parseArticle=(a,log)=>{
   const labels=[...a.querySelectorAll('[aria-label]')].map(e=>e.getAttribute('aria-label'));
   const {t,sender,text}=F.parseLabel(labels);
@@ -34,10 +34,10 @@
   return stable>=checks;
  };
  F.threadReady=async()=>{
-  killDialogs();
+  await dismissRestore();
   const t0=Date.now();
   // ready once messages render, or (empty/new conversation) once the composer has been there a moment
-  const ok=await waitFor(()=>{killDialogs();return document.querySelector('[role=log] [role=article] [aria-label]')||(location.pathname.startsWith('/messages')&&document.querySelector('[role=textbox][contenteditable=true]')&&Date.now()-t0>2500)},15000);
+  const ok=await waitFor(async()=>{await dismissRestore();return document.querySelector('[role=log] [role=article] [aria-label]')||(location.pathname.startsWith('/messages')&&document.querySelector('[role=textbox][contenteditable=true]')&&Date.now()-t0>2500)},15000);
   return !!ok;
  };
  const snapshot=log=>{
@@ -63,7 +63,7 @@
   let prev=-1,stable=0;
   // scroll up until enough history is mounted; rows that get unmounted on the way stay in `acc`
   for(let i=0;i<60&&msgCount(acc)<n+3;i++){
-   killDialogs();
+   await dismissRestore();
    const have=msgCount(acc);
    if(have===prev){if(++stable>=4)break;}else stable=0; // ~1s without growth = start of the conversation
    prev=have;
@@ -85,8 +85,8 @@
   return {msgs:res.reverse()};
  };
  F.chats=async n=>{
-  killDialogs();
-  const g=await waitFor(()=>{killDialogs();const g=document.querySelector('[role=grid]');return g&&g.querySelector('[role=row] a[href*="/t/"]')&&g},15000);
+  await dismissRestore();
+  const g=await waitFor(async()=>{await dismissRestore();const g=document.querySelector('[role=grid]');return g&&g.querySelector('[role=row] a[href*="/t/"]')&&g},15000);
   if(!g)return {err:'no chat list'};
   const sc=scroller(g)||g.parentElement;
   if(sc){sc.scrollTop=0;await sleep(400);}
@@ -126,11 +126,14 @@
   return {chats:[...seen.values()].slice(0,n),complete:complete&&seen.size<=n};
  };
  F.focusComposer=async()=>{
+  await dismissRestore();
+  if(document.querySelector('[role=dialog]'))throw Error('Messenger dialog blocks input; inspect with `fb page`');
   const tb=await waitFor(()=>document.querySelector('[role=textbox][contenteditable=true]'),8000,100);
   if(!tb)return false;
   tb.focus();
-  return true;
+  return document.activeElement===tb;
  };
+ F.composerMatches=text=>{const tb=document.querySelector('[role=textbox][contenteditable=true]');return !!tb&&document.activeElement===tb&&!document.querySelector('[role=dialog]')&&clean(tb.innerText)===clean(text)};
  // `markSent` remembers the mounted messages and which one is the newest; `sentSince` is true once a NEW
  // message that is ours (by layout) shows up BELOW that newest one. Ids, not content: identical repeated
  // messages and recycled rows are handled; "below" matters because a virtualized log mounts older rows
@@ -220,8 +223,13 @@
  const F=window.__fb;
  const pinDialog=()=>[...document.querySelectorAll('[role=dialog]')].find(d=>d.querySelector('input,[role=textbox]')&&/PIN/i.test((d.innerText||'')+[...d.querySelectorAll('[aria-label]')].map(e=>e.getAttribute('aria-label')).join(' ')));
  F.pinFocus=async()=>{
-  const d=await F.waitFor(pinDialog,15000);
-  if(!d)return 'no PIN dialog (already unlocked?)';
+  let d=pinDialog();
+  if(!d){
+   const target=await F.waitFor(()=>pinDialog()||[...document.querySelectorAll('button,[role=button]')].find(b=>/^(Enter PIN|Nhập mã PIN|Saisir (?:le |votre )?code PIN|Saisissez (?:le |votre )?code PIN)$/i.test(F.clean(b.innerText||b.getAttribute('aria-label')))),10000);
+   if(target&&target.getAttribute('role')!=='dialog')F.press(target);
+   d=await F.waitFor(pinDialog,5000);
+  }
+  if(!d)return 'PIN restore dialog not found; open Messenger history restoration with `fb page`';
   const inp=d.querySelector('input:not([type=hidden]),[role=textbox]');
   if(!inp)return 'no PIN input';
   inp.focus();return true;
@@ -238,7 +246,7 @@
  const norm=p=>p.replace(/\/$/,'');
  F.spaOpen=async path=>{
   if(!location.pathname.startsWith('/messages'))return false;
-  F.killDialogs();
+  await F.dismissRestore();
   const id=norm(path);
   if(norm(location.pathname)===id)return await F.threadReady();
   const a=[...document.querySelectorAll('[role=grid] a[href]')].find(a=>norm(a.getAttribute('href'))===id);

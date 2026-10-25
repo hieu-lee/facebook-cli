@@ -3,8 +3,42 @@
  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
  const clean=s=>(s||'').replace(/[͏​-‏⁠﻿]/g,'').replace(/[ \t ]+/g,' ').replace(/ *\n */g,'\n').trim();
  const vtext=root=>{const w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);const o=[];let n;while(n=w.nextNode()){const t=n.nodeValue;if(!t||!t.trim()||t.includes('͏'))continue;const p=n.parentElement;if(!p||p.closest('blockquote'))continue;const c=t.replace(/[​-‏⁠﻿]/g,'').replace(/ /g,' ').trim();if(c)o.push(c);}return o;};
- const waitFor=async(f,ms=10000,step=60)=>{const t=Date.now();for(;;){let v;try{v=f()}catch(e){}if(v)return v;if(Date.now()-t>ms)return null;await sleep(step);}};
- const killDialogs=()=>{document.querySelectorAll('[role=dialog]').forEach(d=>{if(/PIN|khôi phục|restore|chat history/i.test(d.innerText)||d.querySelector('[aria-label=Mã\\ PIN],[aria-label=PIN]'))d.remove();});};
+ const waitFor=async(f,ms=10000,step=60)=>{const t=Date.now();for(;;){let v;try{v=await f()}catch(e){}if(v)return v;if(Date.now()-t>ms)return null;await sleep(step);}};
+ // Use application buttons: removing a modal leaves React's focus trap and state alive.
+ const dismissRestore=async()=>{
+  const deadline=Date.now()+5000,clicked=new WeakSet();let acted=false,quiet=0;
+  while(true){
+   const ds=[...document.querySelectorAll('[role=dialog]')];
+   const d=ds.find(d=>/PIN/i.test(d.innerText)&&/restore|khôi phục|restaur/i.test(d.innerText)&&d.querySelector('input,[role=textbox]'));
+   const confirm=ds.find(d=>/Continue without restoring|Tiếp tục mà không khôi phục|Continuer sans restaurer/i.test(d.innerText));
+   if(!d&&!confirm){
+    if(!acted)return true;
+    if(!quiet)quiet=Date.now();
+    if(Date.now()-quiet>=250)return true;
+    await sleep(50);continue;
+   }
+   quiet=0;
+   const root=confirm||d;
+   const re=confirm?/^(Don't restore messages|Do not restore(?: messages)?|Không khôi phục tin nhắn|Ne pas restaurer(?: les messages)?|Continuer sans restaurer)$/i:/^(Close|Đóng|Fermer)$/i;
+   const b=[...root.querySelectorAll('button,[role=button]')].find(b=>re.test(clean(b.getAttribute('aria-label')||b.innerText)));
+   if(Date.now()>deadline)throw Error('Messenger history prompt blocked input; use `fb unlock` or inspect with `fb page`');
+   if(b&&!clicked.has(b)){b.click();clicked.add(b);acted=true;}
+   await sleep(60);
+  }
+ };
+ const postText=e=>e?clean(e.innerText):'';
+ const postCards=()=>{
+  const marker='[data-ad-rendering-role=profile_name]';
+  const cards=[...document.querySelectorAll('[aria-posinset]')].filter(u=>u.querySelector(marker));
+  for(const name of document.querySelectorAll(marker)){
+   if(cards.some(u=>u.contains(name))||name.closest('blockquote'))continue;
+   for(let u=name.parentElement;u&&u!==document.body;u=u.parentElement){
+    if(u.matches('[role=main]')||u.querySelector(marker)!==name)break;
+    if(u.querySelector('[data-ad-rendering-role=story_message],[data-ad-rendering-role=like_button]')){cards.push(u);break;}
+   }
+  }
+  return cards;
+ };
  const canon=h=>{try{const u=new URL(h,location.href);const KEEP=['fbid','story_fbid','id','v','set','idorvanity','q'];const mp=u.searchParams.get('multi_permalinks');if(mp&&/^\/groups\/\d+\/?$/.test(u.pathname))return u.pathname.replace(/\/?$/,'/posts/'+mp);for(const p of [...u.searchParams.keys()])if(!KEEP.includes(p))u.searchParams.delete(p);return u.pathname+u.search;}catch(e){return ''}};
  const TIME=/^(\d+\s*(giây|phút|giờ|ngày|tuần|tháng|năm)(\s*trước)?|Hôm qua.*|Vừa xong|Yesterday.*|Just now|\d+\s*(s|m|h|d|w|y|hr|hrs|min|mins)|\d+\s+(seconds?|minutes?|hours?|days?|weeks?|months?|years?)(\s+ago)?|\d{1,2}\s+tháng\s+\d{1,2}.*|(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2}.*|il y a .*|hier.*|\d{1,2} (janv|févr|mars|avr|mai|juin|juil|août|sept|oct|nov|déc).*)$/i;
  const SPON=/^(Được tài trợ|Sponsored|Sponsorisé|Gesponsert|Patrocinado)/i;
@@ -66,5 +100,5 @@
   const comma=before.lastIndexOf(', ');
   return {t:tm?tm[0]:'',sender:comma>=0?before.slice(comma+2).trim():'',text:colon>=0?clean(lab.slice(colon+2)):''};
  };
- window.__fb={parseLabel,mergeChunks,press,sleep,clean,vtext,waitFor,killDialogs,canon,TIME,SPON,ACT,trunc,scrollerOf,num};
+ window.__fb={parseLabel,mergeChunks,press,sleep,clean,vtext,waitFor,dismissRestore,postCards,postText,canon,TIME,SPON,ACT,trunc,scrollerOf,num};
 })();

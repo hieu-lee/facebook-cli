@@ -5,7 +5,10 @@ on:
 permissions:
   contents: write
 jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
   build:
+    needs: verify
     strategy:
       matrix:
         include:
@@ -20,15 +23,41 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - uses: Swatinem/rust-cache@v2
+      - name: Check tag matches package version
+        shell: bash
+        run: test "$GITHUB_REF_NAME" = "v$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)"
       - run: cargo build --release --locked --target ${{ matrix.target }}
       - if: runner.os != 'Windows'
-        run: tar -czf ${{ matrix.asset }}.tar.gz -C target/${{ matrix.target }}/release fb
+        run: tar -czf ${{ matrix.asset }}.tar.gz -C target/${{ matrix.target }}/release fb -C "$GITHUB_WORKSPACE" LICENSE LICENSE-APACHE-2.0 THIRD_PARTY_NOTICES
       - if: runner.os == 'Windows'
         shell: pwsh
-        run: Compress-Archive -Path target/${{ matrix.target }}/release/fb.exe -DestinationPath ${{ matrix.asset }}.zip
-      - uses: softprops/action-gh-release@v2
+        run: Compress-Archive -Path target/${{ matrix.target }}/release/fb.exe,LICENSE,LICENSE-APACHE-2.0,THIRD_PARTY_NOTICES -DestinationPath ${{ matrix.asset }}.zip
+      - uses: actions/upload-artifact@v4
         with:
-          files: |
+          name: ${{ matrix.asset }}
+          path: |
             ${{ matrix.asset }}.tar.gz
             ${{ matrix.asset }}.zip
-          fail_on_unmatched_files: false
+          if-no-files-found: error
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: fb-*
+          merge-multiple: true
+      - name: Check complete set and generate checksums
+        working-directory: dist
+        run: |
+          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 5
+          sha256sum fb-*.tar.gz fb-*.zip > SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true

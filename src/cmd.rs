@@ -66,6 +66,7 @@ async fn run_inner(d: &Daemon, argv: &[String], _cwd: &str, out: &Out) -> Res<()
             Ok(())
         }
         "status" => crate::dev::status(d, out).await,
+        "page" => crate::page::run(d, &argv[1..], _cwd, out).await,
         "eval" => crate::dev::eval(d, &argv[1..], out).await,
         "shot" => crate::dev::shot(d, &argv[1..], _cwd, out).await,
         "ax" => crate::dev::ax(d, &argv[1..], out).await,

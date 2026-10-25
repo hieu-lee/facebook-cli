@@ -3,6 +3,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_call:
 jobs:
   test:
     strategy:
@@ -23,3 +24,11 @@ jobs:
           node-version: 22
       - run: node tests/js.test.js
       - run: node -e "for (const f of require('fs').readdirSync('js')) require('child_process').execFileSync(process.execPath, ['--check', 'js/' + f])"
+      - run: node tests/e2e-isolation.mjs
+        env:
+          CHROME: ${{ runner.os == 'Linux' && 'google-chrome' || runner.os == 'macOS' && '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' || 'C:\Program Files\Google\Chrome\Application\chrome.exe' }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-${{ runner.os }}
+          path: target/e2e

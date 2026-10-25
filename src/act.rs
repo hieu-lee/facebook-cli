@@ -95,7 +95,8 @@ pub async fn post(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> 
     let t = b.acquire().await?;
     same_account(&b, gen0)?;
     let r = async {
-        b.goto(&t, "https://www.facebook.com/").await?;
+        let profile = crate::ops::profile_path(d, &b, "me").await?;
+        b.goto(&t, &format!("https://www.facebook.com{profile}")).await?;
         ok(&b.eval(&t, "window.__fb.composeOpen()").await?)?;
         if !text.is_empty() {
             type_into(&b, &t, &text).await?;
@@ -128,18 +129,133 @@ pub async fn post(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> 
             return Ok(());
         }
         ok(&b.eval(&t, "window.__fb.composePrepare()").await?)?;
-        // last chance to stop: pressing Post publishes
-        same_account(&b, gen0)?;
-        if out.cancelled() {
-            return Err("cancelled by client; nothing was posted".into());
+        let uid = crate::ops::uid(d, &b).await?;
+        let mut events = b.cdp.subscribe();
+        b.cdp.call(Some(&t.session), "Network.enable", json!({"maxTotalBufferSize":4194304,"maxResourceBufferSize":2097152,"maxPostDataSize":1048576})).await?;
+        // Last chance to stop, after all awaited capture setup and before pressing Post.
+        let ready = same_account(&b, gen0).and_then(|()| {
+            if out.cancelled() {
+                Err("cancelled by client; nothing was posted".to_string())
+            } else {
+                Ok(())
+            }
+        });
+        if let Err(e) = ready {
+            let _ = b.cdp.call(Some(&t.session), "Network.disable", json!({})).await;
+            return Err(e);
         }
-        ok(&b.eval(&t, "window.__fb.composePress()").await?)?;
-        out.line("posted");
+        let receipt = async {
+            ok(&b.eval(&t, "window.__fb.composePress()").await?)?;
+            let path = tokio::time::timeout(Duration::from_secs(15), created_post(&b, &t, &uid, &mut events)).await.map_err(|_| "creation response timed out".to_string())??;
+            b.goto(&t, &format!("https://www.facebook.com{path}")).await?;
+            let readback = b.eval(&t, &format!("window.__fb.waitFor(()=>{{window.__fbFeed.expand();const r=window.__fb.postRoot();return r&&window.__fb.postText(r.querySelector('[data-ad-rendering-role=story_message]'))===window.__fb.clean({})}},15000)", json!(text))).await?;
+            if readback != Value::Bool(true) { return Err("created post content could not be read back".into()); }
+            Ok(path)
+        }.await;
+        let _ = b.cdp.call(Some(&t.session), "Network.disable", json!({})).await;
+        let path = receipt.map_err(|e: String| format!("post may have been published, but no verified receipt: {e}; inspect `fb posts me` before retrying"))?;
+        out.line(format!("posted\t{}\t{path}", d.refs.put('p', &path)));
+
         Ok(())
     }
     .await;
     b.release(t).await;
     r
+}
+
+async fn created_post(
+    b: &Browser,
+    t: &Tab,
+    uid: &str,
+    events: &mut tokio::sync::broadcast::Receiver<crate::cdp::Event>,
+) -> Res<String> {
+    let mut request: Option<String> = None;
+    loop {
+        let event = events
+            .recv()
+            .await
+            .map_err(|_| "creation events lost".to_string())?;
+        if event.session.as_deref() != Some(&t.session) {
+            continue;
+        }
+        let p = &event.params;
+        let id = p["requestId"].as_str().unwrap_or("");
+        if event.method == "Network.requestWillBeSent"
+            && p["request"]["method"] == "POST"
+            && crate::ops::fb_path(p["request"]["url"].as_str().unwrap_or(""))
+                .is_some_and(|p| p.starts_with("/api/graphql/"))
+            && p["request"]["postData"].as_str().is_some_and(|s| {
+                s.split('&')
+                    .any(|v| v == "fb_api_req_friendly_name=ComposerStoryCreateMutation")
+            })
+        {
+            if request.as_deref().is_some_and(|old| old != id) {
+                return Err("multiple creation requests".into());
+            }
+            request = Some(id.to_string());
+        }
+        if request.as_deref() != Some(id) {
+            continue;
+        }
+        if event.method == "Network.loadingFailed" {
+            return Err("creation request failed".into());
+        }
+        if event.method != "Network.loadingFinished" {
+            continue;
+        }
+        let response = b
+            .cdp
+            .call(
+                Some(&t.session),
+                "Network.getResponseBody",
+                json!({"requestId":id}),
+            )
+            .await?;
+        let raw = response["body"].as_str().ok_or("creation body missing")?;
+        let decoded;
+        let body = if response["base64Encoded"] == true {
+            use base64::Engine;
+            decoded = String::from_utf8(
+                base64::engine::general_purpose::STANDARD
+                    .decode(raw)
+                    .map_err(|_| "invalid creation body")?,
+            )
+            .map_err(|_| "invalid creation encoding")?;
+            decoded.as_str()
+        } else {
+            raw
+        };
+        let mut paths = std::collections::HashSet::new();
+        for line in body
+            .trim_start()
+            .strip_prefix("for (;;);")
+            .unwrap_or(body)
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+        {
+            let value: Value =
+                serde_json::from_str(line).map_err(|_| "invalid creation response")?;
+            if value["errors"].as_array().is_some_and(|e| !e.is_empty()) {
+                return Err("Facebook rejected the creation request".into());
+            }
+            let story = &value["data"]["story_create"]["story"];
+            if story.is_null() {
+                continue;
+            }
+            if story["default_actor"]["id"].as_str() != Some(uid) {
+                return Err("creation actor mismatch".into());
+            }
+            let path =
+                crate::ops::fb_path(story["url"].as_str().ok_or("created story URL missing")?)
+                    .filter(|p| crate::ops::is_post_path(p))
+                    .ok_or("invalid created story URL")?;
+            paths.insert(path);
+        }
+        if paths.len() != 1 {
+            return Err("unique creation identity missing".into());
+        }
+        return Ok(paths.into_iter().next().unwrap());
+    }
 }
 
 async fn open_post(b: &Browser, t: &Tab, path: &str) -> Res<()> {
@@ -211,7 +327,7 @@ pub async fn comment(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
         if out.cancelled() {
             return Err("cancelled by client; nothing was commented".into());
         }
-        b.key_text(&t, "Enter", "Enter", 13, "\r").await?;
+        b.key(&t, "Enter", "Enter", 13, 0).await?;
         let deadline = Instant::now() + Duration::from_secs(15);
         let js = format!("window.__fb.commentSent({})", json!(text));
         // our own new comment, by content: someone else's comment arriving must not confirm ours

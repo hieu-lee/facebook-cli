@@ -43,6 +43,13 @@ pub fn run(argv: Vec<String>) -> i32 {
     let argv = with_secret_from_env_or_stdin(argv);
     if matches!(
         argv.first().map(String::as_str),
+        Some("--version" | "-V" | "version")
+    ) {
+        println!("fb {}", env!("CARGO_PKG_VERSION"));
+        return 0;
+    }
+    if matches!(
+        argv.first().map(String::as_str),
         None | Some("help" | "-h" | "--help")
     ) {
         println!("{}", crate::help::HELP);

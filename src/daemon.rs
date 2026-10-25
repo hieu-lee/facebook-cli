@@ -49,6 +49,7 @@ pub struct Daemon {
     pub import_lock: Mutex<()>,
     pub chat_scan: Mutex<()>,
     pub feed: Arc<crate::feed::FeedBuf>,
+    pub pages: crate::page::Pages,
     inflight: std::sync::atomic::AtomicUsize,
     last: std::sync::Mutex<std::time::Instant>,
     pub quit_browser: std::sync::atomic::AtomicBool,
@@ -66,6 +67,7 @@ impl Daemon {
         *self.chat_cache.lock().await = None;
         let _ = std::fs::remove_file(self.chats_file());
         self.feed.clear().await;
+        self.pages.clear().await;
         // warm tabs still show the previous account's pages (the messages tab is reused without reloading)
         let b = self.browser.lock().await.clone();
         if let Some(b) = b {
@@ -101,7 +103,7 @@ impl Daemon {
         {
             let visible = b.visible.load(std::sync::atomic::Ordering::SeqCst);
             // (a browser given via FB_CDP is the user's own and is always "visible": use it as is)
-            if !(visible && !show) || !crate::connect::managed() {
+            if !visible || show || !crate::connect::managed() {
                 return Ok(b.clone());
             }
             // an ordinary command must never run in the visible login browser
@@ -326,6 +328,7 @@ async fn run() {
     let d = Arc::new(Daemon {
         token: listener.token(),
         feed: Default::default(),
+        pages: Default::default(),
         chat_scan: Mutex::new(()),
         gate: Mutex::new(()),
         account: tokio::sync::RwLock::new(()),
