@@ -489,19 +489,102 @@ pub async fn read(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     r
 }
 
+/// Put `text` into the composer (newlines as Shift+Enter).
+async fn type_text(b: &std::sync::Arc<Browser>, t: &Tab, text: &str) -> Res<()> {
+    if b.eval(t, "window.__fb.focusComposer()").await? != Value::Bool(true) {
+        return Err("no composer".into());
+    }
+    for (k, l) in text.split('\n').enumerate() {
+        if k > 0 {
+            b.key(t, "Enter", "Enter", 13, 8).await?;
+        }
+        if !l.is_empty() {
+            b.insert_text(t, l).await?;
+        }
+    }
+    Ok(())
+}
+
+/// Press Enter on what the composer holds and wait until our own new message shows up: `text`
+/// verbatim, or (with `file`) a message carrying that attachment.
+async fn submit(
+    b: &std::sync::Arc<Browser>,
+    t: &Tab,
+    gen0: u64,
+    out: &Out,
+    text: &str,
+    file: Option<&str>,
+    wait_secs: u64,
+) -> Res<()> {
+    use std::sync::atomic::Ordering::SeqCst;
+    if b.eval(t, "window.__fb.focusComposer()").await? != Value::Bool(true) {
+        return Err("no composer".into());
+    }
+    if b.eval(t, "window.__fb.markSent()").await? != Value::Bool(true) {
+        return Err("could not read the conversation; nothing more was sent".into());
+    }
+    if b.generation.load(SeqCst) != gen0 {
+        return Err("the account changed while sending; nothing more was sent".into());
+    }
+    if out.cancelled() {
+        return Err("cancelled by client; nothing more was sent".into());
+    }
+    b.key_text(t, "Enter", "Enter", 13, "\r").await?;
+    let mut pressed = Instant::now();
+    let deadline = pressed + Duration::from_secs(wait_secs);
+    let loose = file.is_some_and(|f| {
+        let m = mime_of(f);
+        m.starts_with("image/") || m.starts_with("video/")
+    });
+    let js = format!(
+        "window.__fb.sentSince({},{},{})",
+        json!(text),
+        json!(file),
+        loose
+    );
+    // our own outgoing message: an incoming one must not count as success
+    while b.eval(t, &js).await? != Value::Bool(true) {
+        if Instant::now() > deadline {
+            return Err("not confirmed: the message did not show up as sent (timeout); check with `read` before retrying".into());
+        }
+        if out.cancelled() {
+            return Err(
+                "cancelled by client; check with `read` whether the last message went out".into(),
+            );
+        }
+        // an attachment still sitting in the composer was never sent (Enter is ignored while it uploads)
+        if let Some(f) = file
+            && !out.cancelled()
+            && pressed.elapsed() > Duration::from_secs(6)
+            && b.eval(t, &format!("window.__fb.pendingFile({})", json!(f)))
+                .await?
+                == Value::Bool(true)
+            // the client may have gone while that call was in flight
+            && !out.cancelled()
+        {
+            b.key_text(t, "Enter", "Enter", 13, "\r").await?;
+            pressed = Instant::now();
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Ok(())
+}
+
 pub async fn send(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> {
-    let a = crate::ops::parse(args, &["img"], &["dry", "fuzzy"])?;
+    let a = crate::ops::parse(args, &["file", "img"], &["dry", "fuzzy"])?;
     let dry = a.flag("dry");
-    let imgs: Vec<String> = a
-        .opts_all("img")
-        .into_iter()
-        .map(|p| crate::proto::resolve_path(cwd, p))
-        .collect();
+    // `--img` is the older name of `--file`; both attach any file, in the order given. Only the
+    // metadata is checked here; each file is read when its turn comes (memory stays bounded).
+    let mut files: Vec<(String, String)> = Vec::new();
+    for (_, p) in a.opts.iter().filter(|(k, _)| k == "file" || k == "img") {
+        let path = crate::proto::resolve_path(cwd, p);
+        files.push((check_attachment(&path)?, path));
+    }
     let (spec, text) = match a.pos.split_first() {
         Some((s, t)) => (s.as_str(), t.join(" ")),
-        None => return Err("usage: send <chat> <text> [--img file]...".into()),
+        None => return Err("usage: send <chat> <text> [--file path]...".into()),
     };
-    if text.is_empty() && imgs.is_empty() {
+    if text.trim().is_empty() && files.is_empty() {
         return Err("nothing to send".into());
     }
     let b = d.browser(out).await?;
@@ -524,46 +607,46 @@ pub async fn send(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> 
     }
     let r = async {
         open_thread(&b, &t, &path).await?;
-        for img in &imgs {
-            attach(&b, &t, img).await?;
-        }
-        if !text.is_empty() {
-            if b.eval(&t, "window.__fb.focusComposer()").await? != Value::Bool(true) {
-                return Err("no composer".into());
-            }
-            let lines: Vec<&str> = text.split('\n').collect();
-            for (k, l) in lines.iter().enumerate() {
-                if k > 0 {
-                    b.key(&t, "Enter", "Enter", 13, 8).await?;
-                }
-                if !l.is_empty() {
-                    b.insert_text(&t, l).await?;
-                }
-            }
-        }
         if dry {
+            for (name, path) in &files {
+                attach(&b, &t, name, &read_attachment(path)?).await?;
+            }
+            if !text.is_empty() {
+                type_text(&b, &t, &text).await?;
+            }
             let v = b.eval(&t, "window.__fb.draft()").await?;
             out.line(format!("dry: {}", v.as_str().unwrap_or("")));
             b.eval(&t, "window.__fb.clearDraft()").await?;
             return Ok(());
         }
-        b.eval(&t, "window.__fb.markSent()").await?;
-        if b.generation.load(std::sync::atomic::Ordering::SeqCst) != gen0 {
-            return Err("the account changed while sending; nothing was sent".into());
+        // One message per file, then the text: every step must show up as exactly its own new outgoing
+        // message, so a missing attachment can never be confirmed by another message.
+        for (k, (name, path)) in files.iter().enumerate() {
+            let step = async {
+                attach(&b, &t, name, &read_attachment(path)?).await?;
+                submit(&b, &t, gen0, out, "", Some(name), 120).await?;
+                // reported as it happens: a later failure or timeout must not hide what already went out
+                out.line(format!("sent file\t{}", one_line(name)));
+                Ok::<(), String>(())
+            };
+            step.await
+                .map_err(|e| format!(
+                    "{e} ({k} of {} files confirmed sent; this file may or may not have gone out: check with `read` before retrying)",
+                    files.len()
+                ))?;
         }
-        if out.cancelled() {
-            return Err("cancelled by client; nothing was sent".into());
-        }
-        b.key_text(&t, "Enter", "Enter", 13, "\r").await?;
-        // uploads take a while: an image message only appears once it is sent
-        let deadline = Instant::now() + Duration::from_secs(if imgs.is_empty() { 20 } else { 90 });
-        let js = format!("window.__fb.sentSince({})", json!(text));
-        // confirm our own outgoing message: an incoming one must not count as success
-        while b.eval(&t, &js).await? != Value::Bool(true) {
-            if Instant::now() > deadline {
-                return Err("not confirmed: no outgoing message appeared (timeout)".into());
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+        if !text.trim().is_empty() {
+            let step = async {
+                type_text(&b, &t, &text).await?;
+                submit(&b, &t, gen0, out, &text, None, 20).await
+            };
+            step.await.map_err(|e| {
+                if files.is_empty() {
+                    e
+                } else {
+                    format!("{e} (the files were already sent)")
+                }
+            })?;
         }
         match &target.name {
             Some(n) => out.line(format!("sent\t{n}")),
@@ -584,14 +667,13 @@ pub async fn send(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> 
     r
 }
 
-async fn attach(b: &std::sync::Arc<Browser>, t: &Tab, path: &str) -> Res<()> {
-    use base64::Engine;
-    let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-    let name = std::path::Path::new(path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("image");
-    let mime = match name
+/// Messenger refuses larger attachments.
+const MAX_ATTACHMENT: usize = 25 * 1024 * 1024;
+/// Base64 chunk size sent per CDP call (a multiple of 4: every chunk decodes on its own).
+const CHUNK: usize = 3 * 1024 * 1024;
+
+fn mime_of(name: &str) -> &'static str {
+    match name
         .rsplit('.')
         .next()
         .unwrap_or("")
@@ -599,22 +681,91 @@ async fn attach(b: &std::sync::Arc<Browser>, t: &Tab, path: &str) -> Res<()> {
         .as_str()
     {
         "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
         "webp" => "image/webp",
+        "heic" => "image/heic",
         "mp4" => "video/mp4",
+        "mov" => "video/quicktime",
+        "webm" => "video/webm",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "m4a" => "audio/mp4",
         "pdf" => "application/pdf",
-        _ => "image/jpeg",
-    };
+        "zip" => "application/zip",
+        "json" => "application/json",
+        "txt" | "log" | "md" => "text/plain",
+        "csv" => "text/csv",
+        "doc" => "application/msword",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xls" => "application/vnd.ms-excel",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "ppt" => "application/vnd.ms-powerpoint",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        _ => "application/octet-stream",
+    }
+}
+
+/// Cheap checks before any browser work starts; returns the file name Messenger will show.
+fn check_attachment(path: &str) -> Res<String> {
+    let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
+    if !meta.is_file() {
+        return Err(format!("{path}: not a file"));
+    }
+    if meta.len() == 0 {
+        return Err(format!("{path}: empty file"));
+    }
+    if meta.len() > MAX_ATTACHMENT as u64 {
+        return Err(format!("{path}: larger than Messenger's 25MB limit"));
+    }
+    std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        // a name without a visible character could never be found again to confirm the send
+.filter(|n| {
+            n.chars().any(|c| {
+                !c.is_whitespace()
+                    && !c.is_control()
+                    && !matches!(c, '\u{034f}' | '\u{200b}'..='\u{200f}' | '\u{2060}'..='\u{2064}' | '\u{feff}')
+            })
+        })
+        .map(String::from)
+        .ok_or_else(|| format!("{path}: unusable file name"))
+}
+
+/// The bytes, read through one bounded handle: a file that grew or vanished since the check is refused.
+fn read_attachment(path: &str) -> Res<Vec<u8>> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .and_then(|f| f.take(MAX_ATTACHMENT as u64 + 1).read_to_end(&mut bytes))
+        .map_err(|e| format!("{path}: {e}"))?;
+    if bytes.is_empty() || bytes.len() > MAX_ATTACHMENT {
+        return Err(format!(
+            "{path}: empty or larger than Messenger's 25MB limit"
+        ));
+    }
+    Ok(bytes)
+}
+
+async fn attach(b: &std::sync::Arc<Browser>, t: &Tab, name: &str, bytes: &[u8]) -> Res<()> {
+    use base64::Engine;
     let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+    b.eval(t, "window.__fb.upBegin()").await?;
+    for chunk in b64.as_bytes().chunks(CHUNK) {
+        // base64 is ASCII: the chunk is valid UTF-8 and needs no escaping beyond the JSON string
+        let piece = std::str::from_utf8(chunk).unwrap_or_default();
+        b.eval(t, &format!("window.__fb.upChunk({})", json!(piece)))
+            .await?;
+    }
     let js = format!(
-        "window.__fb.attach({},{},{})",
+        "window.__fb.attach({},{})",
         json!(name),
-        json!(mime),
-        json!(b64)
+        json!(mime_of(name))
     );
     let r = b.eval(t, &js).await?;
     if r != Value::Bool(true) {
-        return Err(format!("attach failed: {r}"));
+        return Err(format!("attach {name} failed: {r}"));
     }
     Ok(())
 }
@@ -716,6 +867,43 @@ pub async fn unsend(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attachments_are_validated_before_any_browser_work() {
+        let dir = std::env::temp_dir().join(format!("fb-att-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = |n: &str| dir.join(n).to_string_lossy().into_owned();
+        std::fs::write(p("a.pdf"), b"%PDF").unwrap();
+        std::fs::write(p("empty.txt"), b"").unwrap();
+        assert_eq!(check_attachment(&p("a.pdf")).unwrap(), "a.pdf");
+        assert_eq!(read_attachment(&p("a.pdf")).unwrap(), b"%PDF");
+        assert!(
+            check_attachment(&p("empty.txt"))
+                .unwrap_err()
+                .contains("empty")
+        );
+        assert!(read_attachment(&p("empty.txt")).is_err());
+        assert!(check_attachment(&p("missing.bin")).is_err());
+        assert!(read_attachment(&p("missing.bin")).is_err());
+        assert!(
+            check_attachment(&dir.to_string_lossy())
+                .unwrap_err()
+                .contains("not a file")
+        );
+        std::fs::write(p("\u{1f4ce}"), b"x").unwrap();
+        assert_eq!(check_attachment(&p("\u{1f4ce}")).unwrap(), "\u{1f4ce}");
+        std::fs::write(p("   "), b"x").unwrap();
+        assert!(
+            check_attachment(&p("   "))
+                .unwrap_err()
+                .contains("unusable")
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(mime_of("Photo.JPG"), "image/jpeg");
+        assert_eq!(mime_of("data.xyz"), "application/octet-stream");
+        assert_eq!(mime_of("noext"), "application/octet-stream");
+        assert_eq!(CHUNK % 4, 0);
+    }
 
     #[test]
     fn only_specific_threads_are_valid_targets() {

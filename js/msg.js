@@ -131,27 +131,49 @@
   tb.focus();
   return true;
  };
- // `markSent` remembers the ids of the mounted messages; `sentSince` is true once a NEW message that is
- // ours (by layout) and carries our text shows up. Ids, not content: identical repeated messages and
- // recycled rows are handled; the text check keeps a concurrent send from confirming this one.
+ // `markSent` remembers the mounted messages and which one is the newest; `sentSince` is true once a NEW
+ // message that is ours (by layout) shows up BELOW that newest one. Ids, not content: identical repeated
+ // messages and recycled rows are handled; "below" matters because a virtualized log mounts older rows
+ // while it re-renders, and those are not new. The text check keeps a concurrent send from confirming this one.
  const norm=t=>clean(t||'').toLowerCase();
+ const idOf=a=>{const e=a.querySelector('[data-message-id]');return e?e.getAttribute('data-message-id'):'';};
  F.markSent=async()=>{
-  // an empty conversation has no log yet: the marker is then simply empty
-  const log=document.querySelector('[role=log]');
-  // the newest rows must be mounted before we remember what is already there
-  if(log)await F.settleBottom(log,2,200);
-  window.__fbBefore={ids:new Set(log?[...log.querySelectorAll('[data-message-id]')].map(e=>e.getAttribute('data-message-id')):[]),els:new WeakSet(log?log.querySelectorAll('[role=article]'):[])};
+  const getLog=()=>document.querySelector('[role=log]');
+  const articles=l=>l?[...l.querySelectorAll('[role=article]')]:[];
+  // history may still be loading: only a conversation that stays empty after a grace period counts as empty
+  await waitFor(()=>articles(getLog()).length>0,4000,200);
+  const log=getLog();
+  // the newest rows must be mounted before we remember what is already there; if that cannot be
+  // established, confirming a send would be a guess
+  if(articles(log).length&&!await F.settleBottom(log,2,200))return false;
+  if(getLog()!==log)return false;
+  const arts=articles(log),last=arts[arts.length-1];
+  window.__fbBefore={ids:new Set([...(log?log.querySelectorAll('[data-message-id]'):[])].map(e=>e.getAttribute('data-message-id'))),els:new WeakSet(arts),last:last||null,lastId:last?idOf(last):''};
   return true;
  };
- F.sentSince=text=>{
+ // `file` set: a NEW outgoing message of ours that carries an attachment and, unless `loose` (images, videos:
+ // their bubbles show no name), has a leaf label that is exactly the file name. Otherwise a new outgoing
+ // message with exactly our text. Nothing to look for never counts as sent.
+ F.sentSince=(text,file,loose)=>{
   const log=document.querySelector('[role=log]');if(!log||!window.__fbBefore)return false;
-  const want=norm(text),before=window.__fbBefore;
-  return [...log.querySelectorAll('[role=article]')].some(a=>{
+  const want=norm(text),key=file?norm(file):'',before=window.__fbBefore;
+  if(!want&&!file)return false;
+  const arts=[...log.querySelectorAll('[role=article]')];
+  let from=0;
+  if(before.last){
+   // the newest message at the moment of marking is the anchor (by id when it has one: elements get
+   // recycled); if it is gone we cannot place anything
+   const k=before.lastId?arts.findIndex(x=>idOf(x)===before.lastId):arts.indexOf(before.last);
+   if(k<0)return false;
+   from=k+1;
+  }
+  const named=a=>!!key&&[...a.querySelectorAll('span,a,div')].some(e=>!e.children.length&&norm(e.textContent)===key);
+  return arts.slice(from).some(a=>{
    const m=parseArticle(a,log);
    // new = unknown id; rows without an id fall back to element identity
    if(m.id?before.ids.has(m.id):before.els.has(a))return false;
-   // text sends must carry our exact text; image-only sends must carry an attachment
-   return m.mine===true&&(want?norm(m.text)===want:!!m.att);
+   if(m.mine!==true)return false;
+   return file?(!!m.att&&(!!loose||named(a))):norm(m.text)===want;
   });
  };
  F.lastCount=()=>{const log=document.querySelector('[role=log]');return log?log.querySelectorAll('[role=article]').length:-1;};
@@ -159,17 +181,30 @@
 })();
 (()=>{
  const F=window.__fb;
- F.attach=async(name,mime,b64)=>{
-  const tb=await F.waitFor(()=>document.querySelector('[role=textbox][contenteditable=true]'),8000,100);
-  if(!tb)return 'no composer';
-  const bin=atob(b64);const u8=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u8[i]=bin.charCodeAt(i);
-  const file=new File([u8],name,{type:mime});
-  const dt=new DataTransfer();dt.items.add(file);
-  const before=document.querySelectorAll('[role=main] img[src^="blob:"]').length;
-  tb.focus();
-  tb.dispatchEvent(new ClipboardEvent('paste',{clipboardData:dt,bubbles:true,cancelable:true}));
-  const ok=await F.waitFor(()=>document.querySelectorAll('[role=main] img[src^="blob:"]').length>before,8000,100);
-  return !!ok||'no preview';
+ // The file arrives in chunks (each a base64 string that decodes on its own): one huge CDP call would be slow.
+ F.upBegin=()=>{window.__fbUp=[];return true;};
+ F.upChunk=s=>{(window.__fbUp||(window.__fbUp=[])).push(s);return true;};
+ // previews of a draft live in the composer; the log may hold blob images of its own
+ const blobs=()=>[...document.querySelectorAll('[role=main] img[src^="blob:"],[role=main] video[src^="blob:"]')].filter(e=>!e.closest('[role=log]')).length;
+ // the attachment chip in the composer shows the file name; sent messages (in the log) do not count
+ const chips=name=>[...document.querySelectorAll('[role=main] span,[role=main] div')].filter(e=>!e.children.length&&e.textContent===name&&!e.closest('[role=log]')).length;
+ // still waiting in the composer: Enter was ignored (e.g. the upload had not finished), nothing was sent
+ F.pendingFile=name=>chips(name)>0||blobs()>0;
+ F.attach=async(name,mime)=>{
+  const parts=window.__fbUp||[];window.__fbUp=null;
+  if(!parts.length)return 'no data';
+  const image=/^image\//.test(mime);
+  // images are pasted so that Messenger shows them as photos; the file input would send them as files
+  const inp=image?await F.waitFor(()=>document.querySelector('[role=textbox][contenteditable=true]'),8000,100):await F.waitFor(()=>document.querySelector('input[type=file]'),8000,100);
+  if(!inp)return image?'no composer':'no file input (is this a chat you can write to?)';
+  const bytes=parts.map(p=>{const bin=atob(p);const u8=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u8[i]=bin.charCodeAt(i);return u8;});
+  const dt=new DataTransfer();dt.items.add(new File(bytes,name,{type:mime}));
+  const b0=blobs(),c0=chips(name);
+  if(image){inp.focus();inp.dispatchEvent(new ClipboardEvent('paste',{clipboardData:dt,bubbles:true,cancelable:true}));}
+  else{inp.files=dt.files;inp.dispatchEvent(new Event('change',{bubbles:true}));}
+  const ok=await F.waitFor(()=>blobs()>b0||chips(name)>c0,15000,100);
+  const tb=document.querySelector('[role=textbox][contenteditable=true]');if(tb)tb.focus();
+  return !!ok||'attachment did not show up in the composer';
  };
 })();
 (()=>{
@@ -245,6 +280,8 @@
    if(m.mine===null)return 'cannot tell which of the newest messages are yours; nothing was changed';
    if(m.mine!==true)continue;
    if(match&&!(m.text||'').toLowerCase().includes(match.toLowerCase()))continue;
+   // an already-unsent message leaves an empty row of ours behind: nothing to unsend there
+   if(!m.text&&!m.att&&!a.querySelector('audio,video,img,canvas,svg,a[href],[role=img],[role=slider]'))continue;
    target=a;text=m.text||(m.att?'['+m.att+']':'');break;
   }
   if(!target)return match?'no recent message of yours contains that text':'no message of yours found';

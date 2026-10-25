@@ -18,7 +18,7 @@ $ fb read "Weekend plans" -n 3
 # Today
 18:38 Alice: Are we still on for Saturday?
 18:38 me: Yes, see you at 10
-$ fb send "Weekend plans" "on my way" --img photo.jpg
+$ fb send "Weekend plans" "on my way" --file report.pdf
 sent
 ```
 
@@ -78,7 +78,7 @@ Run `fb help` for the exact list. `<who>` is `me`, a name, `@vanity`, an id, a U
 |---|---|
 | `chats [-n 20] [--unread] [name]` | ref, flags (`!` unread, `g` group, `e` end-to-end encrypted), time, name, preview |
 | `read <chat> [-n 20]` | `HH:MM sender: text`, `[img]` attachments, `{😆}` reactions |
-| `send <chat> <text> [--img file]...` | text and images |
+| `send <chat> <text> [--file path]...` | text, images, any file up to 25MB (`--img` also works); each file is its own message, then the text |
 | `unsend <chat> [--match text] [--dry]` | remove your newest message (the newest of the loaded ones containing the text) for everyone |
 | `unlock [-]` | restore end-to-end encrypted chats once (PIN from `$FB_PIN` or stdin) |
 

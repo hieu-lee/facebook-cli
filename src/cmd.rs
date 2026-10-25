@@ -6,10 +6,19 @@ pub async fn run(d: &Daemon, argv: &[String], cwd: &str, out: &Out) -> Res<()> {
     let limit = if argv.first().map(String::as_str) == Some("login") {
         1200
     } else {
-        std::env::var("FB_TIMEOUT")
+        let base: u64 = std::env::var("FB_TIMEOUT")
             .ok()
             .and_then(|v| v.parse().ok())
-            .unwrap_or(150)
+            .unwrap_or(150);
+        // every attachment is uploaded and confirmed on its own (up to 120s each)
+        let files = if argv.first().map(String::as_str) == Some("send") {
+            argv.iter()
+                .filter(|a| matches!(a.split('=').next(), Some("--file" | "--img")))
+                .count() as u64
+        } else {
+            0
+        };
+        base + files * 130
     };
     match tokio::time::timeout(
         std::time::Duration::from_secs(limit),

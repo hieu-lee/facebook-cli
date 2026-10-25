@@ -13,7 +13,7 @@ READ
 MESSENGER
   chats [-n 20] [--unread] [name]    ref, flags(! unread, g group, e e2ee), time, name, preview
   read <chat> [-n 20]                `# date` lines, then `HH:MM sender: text` ([img] [file], {emoji} reactions)
-  send <chat> <text> [--img file]... [--dry]   options BEFORE `--`; after `--` is text. Name must match exactly (or use ref / --fuzzy)
+  send <chat> <text> [--file path]... [--dry]   file or image, 25MB max each, one message per file then the text. Options BEFORE `--`; after `--` is text. Name must match exactly (or use ref / --fuzzy)
   unsend <chat> [--match text] [--dry]   remove your newest loaded message (containing text) for everyone
   unlock [-]                         once: restore end-to-end encrypted chats; PIN read from $FB_PIN or stdin
 ACT
