@@ -706,6 +706,18 @@ fn mime_of(name: &str) -> &'static str {
     }
 }
 
+/// A name made only of blanks / zero-width characters could never be found again to confirm the send.
+fn has_visible_char(name: &str) -> bool {
+    name.chars().any(|c| {
+        !c.is_whitespace()
+            && !c.is_control()
+            && !matches!(
+                c,
+                '\u{034f}' | '\u{200b}'..='\u{200f}' | '\u{2060}'..='\u{2064}' | '\u{feff}'
+            )
+    })
+}
+
 /// Cheap checks before any browser work starts; returns the file name Messenger will show.
 fn check_attachment(path: &str) -> Res<String> {
     let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
@@ -721,14 +733,7 @@ fn check_attachment(path: &str) -> Res<String> {
     std::path::Path::new(path)
         .file_name()
         .and_then(|n| n.to_str())
-        // a name without a visible character could never be found again to confirm the send
-.filter(|n| {
-            n.chars().any(|c| {
-                !c.is_whitespace()
-                    && !c.is_control()
-                    && !matches!(c, '\u{034f}' | '\u{200b}'..='\u{200f}' | '\u{2060}'..='\u{2064}' | '\u{feff}')
-            })
-        })
+        .filter(|n| has_visible_char(n))
         .map(String::from)
         .ok_or_else(|| format!("{path}: unusable file name"))
 }
@@ -890,15 +895,17 @@ mod tests {
                 .unwrap_err()
                 .contains("not a file")
         );
-        std::fs::write(p("\u{1f4ce}"), b"x").unwrap();
-        assert_eq!(check_attachment(&p("\u{1f4ce}")).unwrap(), "\u{1f4ce}");
-        std::fs::write(p("   "), b"x").unwrap();
-        assert!(
-            check_attachment(&p("   "))
-                .unwrap_err()
-                .contains("unusable")
-        );
         std::fs::remove_dir_all(&dir).unwrap();
+        assert!(
+            has_visible_char("\u{1f4ce}")
+                && has_visible_char("a b")
+                && has_visible_char("\u{20ac}")
+        );
+        assert!(
+            !has_visible_char("   ")
+                && !has_visible_char("\u{200b}\u{feff}")
+                && !has_visible_char("")
+        );
         assert_eq!(mime_of("Photo.JPG"), "image/jpeg");
         assert_eq!(mime_of("data.xyz"), "application/octet-stream");
         assert_eq!(mime_of("noext"), "application/octet-stream");
