@@ -4,6 +4,8 @@
  const clean=s=>(s||'').replace(/[͏​-‏⁠﻿]/g,'').replace(/[ \t ]+/g,' ').replace(/ *\n */g,'\n').trim();
  const vtext=root=>{const w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);const o=[];let n;while(n=w.nextNode()){const t=n.nodeValue;if(!t||!t.trim()||t.includes('͏'))continue;const p=n.parentElement;if(!p||p.closest('blockquote'))continue;const c=t.replace(/[​-‏⁠﻿]/g,'').replace(/ /g,' ').trim();if(c)o.push(c);}return o;};
  const waitFor=async(f,ms=10000,step=60)=>{const t=Date.now();for(;;){let v;try{v=await f()}catch(e){}if(v)return v;if(Date.now()-t>ms)return null;await sleep(step);}};
+ const visible=e=>e.isConnected&&e.getClientRects().length&&getComputedStyle(e).visibility==='visible';
+ const enabled=e=>!e.matches(':disabled')&&e.closest('[aria-disabled="true" i],[aria-disabled="false" i]')?.getAttribute('aria-disabled').toLowerCase()!=='true';
  // Use application buttons: removing a modal leaves React's focus trap and state alive.
  const dismissRestore=async()=>{
   const deadline=Date.now()+5000,clicked=new WeakSet();let acted=false,quiet=0;
@@ -46,9 +48,12 @@
  const trunc=(s,n)=>{if(!s)return s;const a=Array.from(s);return a.length>n?a.slice(0,n).join('')+'…':s;};
  const scrollerOf=el=>{let p=el;while(p&&p!==document.body&&p!==document.documentElement){if(p.scrollHeight>p.clientHeight+20&&/auto|scroll/.test(getComputedStyle(p).overflowY))return p;p=p.parentElement;}return null;};
  const num=e=>{const g=e&&e.parentElement&&e.parentElement.parentElement;const t=g?g.innerText.trim():'';return /^[\d.,]+[KMkmN]?$/.test(t)?t:'0';};
- const press=el=>{
-  const rc=el.getBoundingClientRect();const o={bubbles:true,cancelable:true,view:window,clientX:rc.x+rc.width/2,clientY:rc.y+rc.height/2,button:0,pointerId:1,pointerType:'mouse',isPrimary:true};
-  for(const t of ['pointerover','mouseover','pointerdown','mousedown','pointerup','mouseup','click']){
+ const press=(el,{events=['pointerover','mouseover','pointerdown','mousedown','pointerup','mouseup','click'],valid=()=>true}={})=>{
+  const identity=()=>[location.href,el.getAttribute('role'),el.getAttribute('aria-label')||clean(el.innerText),el.getAttribute('href')].join('\n');
+  const key=identity();
+  for(const t of events){
+   if(!visible(el)||!enabled(el)||identity()!==key||!valid())throw Error('action target changed; nothing further was dispatched');
+   const rc=el.getBoundingClientRect();const o={bubbles:true,cancelable:true,view:window,clientX:rc.x+rc.width/2,clientY:rc.y+rc.height/2,button:0,pointerId:1,pointerType:'mouse',isPrimary:true};
    const C=t.startsWith('pointer')?PointerEvent:MouseEvent;
    el.dispatchEvent(new C(t,{...o,buttons:t.endsWith('down')?1:0}));
   }
@@ -100,5 +105,5 @@
   const comma=before.lastIndexOf(', ');
   return {t:tm?tm[0]:'',sender:comma>=0?before.slice(comma+2).trim():'',text:colon>=0?clean(lab.slice(colon+2)):''};
  };
- window.__fb={parseLabel,mergeChunks,press,sleep,clean,vtext,waitFor,dismissRestore,postCards,postText,canon,TIME,SPON,ACT,trunc,scrollerOf,num};
+ window.__fb={parseLabel,mergeChunks,press,sleep,clean,vtext,waitFor,visible,enabled,dismissRestore,postCards,postText,canon,TIME,SPON,ACT,trunc,scrollerOf,num};
 })();

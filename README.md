@@ -28,7 +28,7 @@ sent
 - **Warm pages.** Messenger tabs stay open and switch chats in place. The feed is read ahead in the background, so the second `fb feed` returns in about a second. Chat names resolve from a cached list.
 - **Headless Chrome, no windows.** Your session is copied once into a dedicated profile. Nothing appears on screen and nothing steals focus.
 - **Token-lean output.** TSV records, no headers, no JSON envelopes. Posts, chats and profiles get 5-character refs (`p3k9a`, `c8x2f`, `u1abc`) that every command accepts back. Long text is truncated unless you pass `--full`. `fb help` is about 450 tokens.
-- **Locale independent.** Selectors use structure (`role`, `data-ad-rendering-role`, layout geometry), not button labels, so it works with any Facebook UI language. A few menu actions (delete, audience) also match English, Vietnamese and French labels.
+- **Structural selectors, localized actions.** Reading mostly uses structure (`role`, `data-ad-rendering-role`, layout geometry). Publish, audience, delete and PIN actions recognize English, Vietnamese and French labels; use the browser primitives for other UI languages or controls.
 
 ## Install (for people and for AI agents)
 
@@ -143,7 +143,8 @@ provide browser-level reach, not a promise that every Facebook feature has been
 individually tested. Facebook can change its UI at any time.
 
 Posting observes this tab's create-story response and checks its author and exact
-new permalink, then opens that permalink and reads the rendered text back. Old,
+new permalink, then opens that permalink and reads the rendered text back.
+Retained audience controls cannot be mistaken for the visible publish button. Old,
 delayed or identical profile posts cannot become creation receipts. Missing or
 ambiguous creation evidence is an error, never an automatic second publish: inspect
 `fb posts me` before retrying. `delete` uses Facebook's Trash action (normally

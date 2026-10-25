@@ -59,6 +59,41 @@ try{
   await evaluate('localStorage.removeItem("truncateDraft");JSON.stringify(true)');
  });
  await check('post receipt, Only me, view and delete',async()=>{const result=await fb('post','fixture private post','--to','me');assert.match(result,/^posted\tp\w+\t\/.*posts\//);const ref=result.split('\t')[1];assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.posts)[0].aud)'),'me');assert.match(await fb('view',ref),/fixture private post/);assert.match(await fb('delete',ref),/^deleted/);assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.posts).some(x=>x.text==="fixture private post"))'),false)});
+ await check('retained audience panes never become publish targets',async()=>{
+  for(const label of ['Post','Đăng','Publier']){
+   await evaluate(`localStorage.retainedAudience="true";localStorage.trailingControl="true";localStorage.postLabel=JSON.stringify(${JSON.stringify(label)});localStorage.wrongPublishTarget="false";JSON.stringify(true)`);
+   const result=await fb('post','retained audience '+label,'--to','me');assert.match(result,/^posted\tp\w+\t/);assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.posts)[0].aud)'),'me');assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.wrongPublishTarget))'),false);await fb('delete',result.split('\t')[1]);
+  }
+  await evaluate('localStorage.removeItem("retainedAudience");localStorage.removeItem("trailingControl");localStorage.removeItem("postLabel");JSON.stringify(true)');
+  await fb('page','publish','open','https://www.facebook.com/fixture');await fb('page','publish','eval','window.__fb.composeOpen()');await fb('page','publish','cdp','Input.insertText','{"text":"do not publish changed target"}');await fb('page','publish','eval','window.__fb.composePrepare()');assert.match(await fb('page','publish','eval','window.__fbPostBtn.textContent="Other action";window.__fbPostBtn.setAttribute("aria-label","Other action");window.__fb.composePress()'),/post button changed/);assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.posts).some(p=>p.text==="do not publish changed target"))'),false);await fb('page','publish','close');
+ });
+ await check('collapsed publish control never dispatches',async()=>{
+  const original=env,before=await evaluate('JSON.stringify(JSON.parse(localStorage.posts||"[]").length)');await evaluate('localStorage.collapsedPublish="true";JSON.stringify(true)');env={...env,FB_STATE:path.join(temp,'collapsed-state'),FB_TIMEOUT:'5'};
+  try{await assert.rejects(()=>fb('post','never publish collapsed control','--to','me'));assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.posts||"[]").length)'),before)}finally{try{await fb('stop')}finally{env=original;await evaluate('localStorage.removeItem("collapsedPublish");JSON.stringify(true)')}}
+ });
+ await check('publish inherits disabled state but permits explicit false override',async()=>{
+  const original=env,before=await evaluate('JSON.stringify(JSON.parse(localStorage.posts||"[]").length)');await evaluate('localStorage.publishDisabled=JSON.stringify("inherited");JSON.stringify(true)');env={...env,FB_STATE:path.join(temp,'publish-disabled-state'),FB_TIMEOUT:'5'};
+  try{await assert.rejects(()=>fb('post','never publish ancestor disabled','--to','me'));assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.posts||"[]").length)'),before)}finally{try{await fb('stop')}finally{env=original;await evaluate('localStorage.removeItem("publishDisabled");JSON.stringify(true)')}}
+  await evaluate('localStorage.publishDisabled=JSON.stringify("override");JSON.stringify(true)');try{const result=await fb('post','explicit enabled override','--to','me');assert.match(result,/^posted\t/);await fb('delete',result.split('\t')[1])}finally{await evaluate('localStorage.removeItem("publishDisabled");JSON.stringify(true)')}
+ });
+ await check('publish revalidates after hover and every synthetic input event',async()=>{
+  const before=await evaluate('JSON.stringify(JSON.parse(localStorage.posts||"[]").length)');
+  try{for(const mutation of [
+   ...['hide','disable','rename','detach','replace'].map(kind=>({event:'pointerover',kind})),
+   {event:'mouseover',kind:'hide',queued:true},
+   {event:'pointerdown',kind:'rename'},
+   {event:'mousedown',kind:'disable'},
+   {event:'pointerup',kind:'detach'},
+   {event:'mouseup',kind:'hide'}
+  ]){
+   await evaluate(`localStorage.publishMutation=JSON.stringify(${JSON.stringify(mutation)});JSON.stringify(true)`);
+   await assert.rejects(()=>fb('post','never publish mutated target','--to','me'));
+   assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.posts||"[]").length)'),before);
+  }}finally{await evaluate('localStorage.removeItem("publishMutation");JSON.stringify(true)')}
+ });
+ await check('snapshot omits CSS collapsed and hidden content',async()=>{
+  await fb('page','visibility','open','https://www.facebook.com/fixture');await fb('page','visibility','eval',`document.body.innerHTML='<p style="visibility:collapse">COLLAPSED_TEXT</p><button style="visibility:collapse">COLLAPSED_CONTROL</button><p style="visibility:hidden">HIDDEN_TEXT</p><button>Visible action</button>'`);const snap=await fb('page','visibility','snapshot');assert(!snap.includes('COLLAPSED'));assert(!snap.includes('HIDDEN_TEXT'));assert(snap.includes('Visible action'));await fb('page','visibility','close');
+ });
  await check('receipt variants: hydration, inline markup and collapsed long text',async()=>{
   for(const flag of ['delayedBody','inlineBody','collapsedBody']){
    await evaluate(`localStorage.${flag}="true";JSON.stringify(true)`);

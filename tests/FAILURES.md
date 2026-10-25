@@ -155,3 +155,22 @@ but four pending auto-attach runIfWaitingForDebugger calls time out. A separate
 local diagnostic also observes a pending Fetch.enable during actual target detach.
 Only send runIfWaitingForDebugger when the attachment explicitly says it is
 waiting; already-running targets need interception setup, not a resume command.
+
+Live v0.1.4 acceptance found Facebook retains the audience pane's Done control
+inside the composer during/after transition. The last labelled button can be Done,
+not Post, even while the privacy readback already says Only me. Only a unique,
+visible, enabled semantic Post/Đăng/Publier button may be prepared and pressed.
+Retained hidden controls and visible unrelated trailing controls must not publish
+or consume the action. Revalidate this exact publish target at the press boundary.
+Computed CSS visibility must equal visible; collapse can retain layout rectangles
+but is not visible. Snapshot text/control discovery and publication must agree.
+A temporarily collapsed publish button must wait until visible before dispatch.
+The post target must use the same effective enabled state as generic ref actions:
+native :disabled is independent, and nearest valid inherited ARIA true/false wins.
+An ancestor-disabled publish button must not publish; explicit false stays usable.
+
+Publication preparation must settle hover handlers and queued browser work BEFORE the final
+account/cancellation check. Final publication must not hover again. Revalidate the exact
+unique semantic target between synthetic pointer/mouse events, not only before the sequence.
+Hover/down/up handlers that hide, disable, rename, detach, or replace the target must never
+publish. Shared synthetic presses must also reject changed state/identity before dispatch.

@@ -52,19 +52,21 @@
   const current=await waitFor(()=>{const b=audienceButton();return b&&AUD[kind].test(first(b.innerText))},3000);
   return current?true:'audience change not confirmed; nothing was posted';
  };
- // two steps so the caller can still abort after the (possibly slow) wait for an enabled Post button
+ const postButton=()=>{const d=F.composeDialog();const bs=d?[...d.querySelectorAll('[role=button]')].filter(b=>F.visible(b)&&/^(Post|Đăng|Publier)$/i.test(clean(b.getAttribute('aria-label')||btnText(b)))):[];return bs.length===1?bs[0]:null;};
+ // Retained audience panes can put Done after Post; order is not action identity.
  F.composePrepare=async()=>{
-  const d=F.composeDialog();if(!d)return 'no composer';
-  // the Post button is the last labelled button of the composer; it stays disabled while media uploads
-  const find=()=>[...d.querySelectorAll('[role=button]')].filter(b=>btnText(b)).pop();
-  const post=await waitFor(()=>{const b=find();return b&&b.getAttribute('aria-disabled')!=='true'?b:null},60000,150);
+  if(!F.composeDialog())return 'no composer';
+  const post=await waitFor(()=>{const b=postButton();return b&&F.enabled(b)?b:null},60000,150);
   if(!post)return 'Post button never became enabled (upload still running?)';
+  F.press(post,{events:['pointerover','mouseover'],valid:()=>post===postButton()&&F.enabled(post)});
+  await sleep(0);
+  if(post!==postButton()||!F.enabled(post))return 'post button changed; nothing was posted';
   window.__fbPostBtn=post;
   return true;
  };
  F.composePress=async()=>{
-  const post=window.__fbPostBtn;if(!post||!post.isConnected)return 'post button vanished';
-  F.press(post);
+  const post=window.__fbPostBtn;if(!post||post!==postButton()||!F.enabled(post))return 'post button changed; nothing was posted';
+  F.press(post,{events:['pointerdown','mousedown','pointerup','mouseup','click'],valid:()=>post===postButton()&&F.enabled(post)});
   const closed=await waitFor(()=>!F.composeDialog(),90000,200);
   return closed?true:'post dialog still open (upload slow?)';
  };
