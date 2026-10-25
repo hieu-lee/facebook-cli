@@ -1,0 +1,24 @@
+[package]
+name = "fb"
+version = "0.1.0"
+edition = "2024"
+description = "Facebook + Messenger CLI for LLM agents, driving your logged-in Chrome"
+license = "MIT"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "process", "sync", "time", "macros", "fs", "signal"] }
+tokio-tungstenite = "0.30"
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
