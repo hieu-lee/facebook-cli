@@ -369,5 +369,8 @@ async fn run() {
 }
 
 pub fn main() {
+    let dir = crate::proto::state_dir();
+    crate::proto::private_dir(&dir);
+    crate::ipc::daemon_stderr_to(&dir.join("daemon.log"));
     run();
 }

@@ -97,6 +97,28 @@ mod unix_impl {
         }
     }
 
+    /// Start the daemon: no stdin/stdout, stderr appended to its log.
+    pub fn spawn_daemon() -> std::io::Result<()> {
+        use std::process::{Command, Stdio};
+        let log_dir = crate::proto::state_dir();
+        crate::proto::private_dir(&log_dir);
+        let log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log_dir.join("daemon.log"))
+            .map(Stdio::from)
+            .unwrap_or_else(|_| Stdio::null());
+        let mut c = Command::new(std::env::current_exe()?);
+        c.arg("__daemon")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(log);
+        spawn_detached(&mut c).map(|_| ())
+    }
+
+    /// Unix daemons are started with stderr already pointing at the log.
+    pub fn daemon_stderr_to(_log: &std::path::Path) {}
+
     /// Start a long-lived background child (descriptors are close-on-exec: nothing leaks into it).
     pub fn spawn_detached(c: &mut std::process::Command) -> std::io::Result<std::process::Child> {
         unsafe {
@@ -188,43 +210,122 @@ mod windows_impl {
         }
     }
 
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn GetStdHandle(which: u32) -> isize;
-        fn GetHandleInformation(h: isize, flags: *mut u32) -> i32;
-        fn SetHandleInformation(h: isize, mask: u32, flags: u32) -> i32;
+    #[repr(C)]
+    struct StartupInfoW {
+        cb: u32,
+        reserved: *mut u16,
+        desktop: *mut u16,
+        title: *mut u16,
+        numbers: [u32; 7],
+        flags: u32,
+        show_window: u16,
+        reserved2_len: u16,
+        reserved2: *mut u8,
+        std_handles: [isize; 3],
     }
 
+    #[repr(C)]
+    struct ProcessInformation {
+        process: isize,
+        thread: isize,
+        pid: u32,
+        tid: u32,
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn CreateProcessW(
+            app: *const u16,
+            command_line: *mut u16,
+            process_attrs: *const u8,
+            thread_attrs: *const u8,
+            inherit_handles: i32,
+            flags: u32,
+            environment: *const u8,
+            cwd: *const u16,
+            startup: *const StartupInfoW,
+            info: *mut ProcessInformation,
+        ) -> i32;
+        fn CloseHandle(h: isize) -> i32;
+        fn SetStdHandle(which: u32, h: isize) -> i32;
+    }
+
+    /// DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP: no console (so no window), survives the client and
+    /// ignores its Ctrl-C.
+    const DETACHED: u32 = 0x0000_0008 | 0x0000_0200;
+
     /// Start a long-lived background child that survives the client and owns no console.
-    /// DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP: no window, ignores the client's Ctrl-C.
-    /// A child inherits every inheritable handle of its parent, whatever it is given as stdio: if it
-    /// held the client's stdout pipe, whoever reads `fb`'s output would wait for the daemon to exit.
-    /// So the client's own std handles are made non-inheritable for the duration of the spawn.
     pub fn spawn_detached(c: &mut std::process::Command) -> std::io::Result<std::process::Child> {
-        const INHERIT: u32 = 1;
-        // STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE: -10, -11, -12
-        let mut changed = Vec::new();
-        for which in [-10i32, -11, -12] {
+        c.creation_flags(DETACHED).spawn()
+    }
+
+    /// Start the daemon. `Command` always lets a child inherit every inheritable handle of its parent,
+    /// so a daemon started that way would hold the client's stdout pipe (and whatever the caller of
+    /// the client passed down) and whoever reads `fb`'s output would wait for the daemon to exit.
+    /// CreateProcess with bInheritHandles = FALSE passes nothing; the daemon opens its own log.
+    pub fn spawn_daemon() -> std::io::Result<()> {
+        use std::os::windows::ffi::OsStrExt;
+        let exe = std::env::current_exe()?;
+        let wide = |s: &std::ffi::OsStr| -> Vec<u16> { s.encode_wide().chain(Some(0)).collect() };
+        // the path goes in lpApplicationName too: from the command line alone it is capped at MAX_PATH
+        let app = wide(exe.as_os_str());
+        let mut cmd =
+            wide(std::ffi::OsString::from(format!("\"{}\" __daemon", exe.display())).as_os_str());
+        let startup = StartupInfoW {
+            cb: std::mem::size_of::<StartupInfoW>() as u32,
+            reserved: std::ptr::null_mut(),
+            desktop: std::ptr::null_mut(),
+            title: std::ptr::null_mut(),
+            numbers: [0; 7],
+            flags: 0,
+            show_window: 0,
+            reserved2_len: 0,
+            reserved2: std::ptr::null_mut(),
+            std_handles: [0; 3],
+        };
+        let mut info = ProcessInformation {
+            process: 0,
+            thread: 0,
+            pid: 0,
+            tid: 0,
+        };
+        let ok = unsafe {
+            CreateProcessW(
+                app.as_ptr(),
+                cmd.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                DETACHED,
+                std::ptr::null(),
+                std::ptr::null(),
+                &startup,
+                &mut info,
+            )
+        };
+        if ok == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        unsafe {
+            CloseHandle(info.process);
+            CloseHandle(info.thread);
+        }
+        Ok(())
+    }
+
+    /// The daemon's stderr goes to its log (it was started without any standard handles).
+    pub fn daemon_stderr_to(log: &std::path::Path) {
+        use std::os::windows::io::IntoRawHandle;
+        if let Ok(f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log)
+        {
+            // STD_ERROR_HANDLE = -12
             unsafe {
-                let h = GetStdHandle(which as u32);
-                let mut flags = 0u32;
-                if h != 0
-                    && h != -1
-                    && GetHandleInformation(h, &mut flags) != 0
-                    && flags & INHERIT != 0
-                {
-                    SetHandleInformation(h, INHERIT, 0);
-                    changed.push(h);
-                }
+                SetStdHandle(-12i32 as u32, f.into_raw_handle() as isize);
             }
         }
-        let r = c.creation_flags(0x0000_0008 | 0x0000_0200).spawn();
-        for h in changed {
-            unsafe {
-                SetHandleInformation(h, INHERIT, INHERIT);
-            }
-        }
-        r
     }
 
     pub struct Listener {

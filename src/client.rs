@@ -1,25 +1,6 @@
 use crate::proto::{self, ERR, EXIT, OUT};
 use std::io::Write;
-use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
-
-fn spawn_daemon() {
-    let exe = std::env::current_exe().expect("exe");
-    let log_dir = crate::proto::state_dir();
-    proto::private_dir(&log_dir);
-    let log = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_dir.join("daemon.log"))
-        .map(Stdio::from)
-        .unwrap_or_else(|_| Stdio::null());
-    let mut c = Command::new(exe);
-    c.arg("__daemon")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(log);
-    let _ = crate::ipc::spawn_detached(&mut c);
-}
 
 fn connect() -> Result<crate::ipc::ClientStream, String> {
     if let Some(s) = crate::ipc::try_connect()? {
@@ -30,7 +11,7 @@ fn connect() -> Result<crate::ipc::ClientStream, String> {
     while t.elapsed() < Duration::from_secs(15) {
         // a daemon that is still shutting down holds the lock and makes a new one exit: keep trying
         if last_spawn.is_none_or(|l| l.elapsed() > Duration::from_millis(1200)) {
-            spawn_daemon();
+            let _ = crate::ipc::spawn_daemon();
             last_spawn = Some(Instant::now());
         }
         if let Some(s) = crate::ipc::try_connect()? {
