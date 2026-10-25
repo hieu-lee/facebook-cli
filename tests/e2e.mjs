@@ -13,8 +13,10 @@ await mkdir(out,{recursive:true});
 const temp=await mkdtemp(path.join(tmpdir(),'fb-e2e-'));
 const chrome=process.env.CHROME||({'darwin':'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome','win32':'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'}[process.platform]||'google-chrome');
 const child=spawn(chrome,['--headless=new','--no-sandbox','--disable-gpu','--no-first-run','--remote-debugging-port=0','--user-data-dir='+path.join(temp,'chrome'),'about:blank'],{stdio:'ignore'});
-let socket,env,cancelHoverStarted=false;const report=[];let id=0;const pending=new Map();
-async function call(method,params={},sessionId){const n=++id;return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{pending.delete(n);reject(Error(method+' timed out'))},15000);pending.set(n,{resolve:v=>{clearTimeout(timer);resolve(v)},reject:e=>{clearTimeout(timer);reject(e)}});socket.send(JSON.stringify({id:n,method,params,sessionId}))})}
+let socket,env,cancelHoverStarted=false,closed=false;const report=[];let id=0;const pending=new Map(),detached=new Set();
+class TargetClosed extends Error {}
+async function call(method,params={},sessionId){if(closed||detached.has(sessionId))throw new TargetClosed(method+' target closed');const n=++id;return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{pending.delete(n);reject(Error(method+' timed out in '+(sessionId||'browser')))},15000);pending.set(n,{method,sessionId,resolve:v=>{clearTimeout(timer);resolve(v)},reject:e=>{clearTimeout(timer);reject(e)}});socket.send(JSON.stringify({id:n,method,params,sessionId}))})}
+function cancelCalls(sessionId){const methods=[];for(const [n,p] of pending){if(sessionId&&p.sessionId!==sessionId)continue;pending.delete(n);methods.push(p.method);p.reject(new TargetClosed(p.method+' target closed'))}if(methods.length)report.push({targetClosed:sessionId||'browser',cancelledMethods:methods})}
 const binary=path.resolve(process.env.FB||path.join(root,'target/release/fb'+(process.platform==='win32'?'.exe':'')));
 async function fb(...args){const t=performance.now();try{const r=await exec(binary,args,{env,timeout:45000,maxBuffer:1024*1024});report.push({args,ms:Math.round(performance.now()-t),stdout:r.stdout,stderr:r.stderr});return r.stdout.trim()}catch(e){report.push({args,ms:Math.round(performance.now()-t),stdout:e.stdout,stderr:e.stderr,error:e.message});throw e}}
 async function evaluate(js){return JSON.parse(await fb('eval','https://www.facebook.com/fixture',js))}
@@ -22,11 +24,14 @@ try{
  let portInfo;for(let i=0;i<150;i++){try{portInfo=await readFile(path.join(temp,'chrome/DevToolsActivePort'),'utf8');break}catch{await new Promise(r=>setTimeout(r,100))}}
  assert(portInfo,'Chrome started');const [port,wsPath]=portInfo.trim().split('\n');
  socket=new WebSocket('ws://127.0.0.1:'+port+wsPath);await new Promise((resolve,reject)=>{socket.onopen=resolve;socket.onerror=reject});
+ socket.onclose=()=>{closed=true;cancelCalls()};
  const fixture=await readFile(path.join(root,'tests/fixture.html'),'utf8');
  socket.onmessage=async ev=>{const m=JSON.parse(ev.data);if(m.id){const p=pending.get(m.id);if(p){pending.delete(m.id);m.error?p.reject(Error(m.error.message)):p.resolve(m.result)}return}try{
-  if(m.method==='Target.attachedToTarget'){const s=m.params.sessionId;await call('Fetch.enable',{patterns:[{urlPattern:'*',requestStage:'Request'}]},s);await call('Runtime.runIfWaitingForDebugger',{},s)}
+  if(m.method==='Target.detachedFromTarget'){detached.add(m.params.sessionId);cancelCalls(m.params.sessionId)}
+  if(m.method==='Target.attachedToTarget'){const s=m.params.sessionId;report.push({attachedTarget:{type:m.params.targetInfo.type,url:m.params.targetInfo.url,waitingForDebugger:m.params.waitingForDebugger}});await call('Fetch.enable',{patterns:[{urlPattern:'*',requestStage:'Request'}]},s);if(m.params.waitingForDebugger)await call('Runtime.runIfWaitingForDebugger',{},s)}
   if(m.method==='Fetch.requestPaused'){const u=new URL(m.params.request.url);if(u.pathname==='/fixture/redirect-away'){await call('Fetch.fulfillRequest',{requestId:m.params.requestId,responseCode:302,responseHeaders:[{name:'Location',value:'https://example.test/login'}]},m.sessionId);return}if(u.pathname==='/fixture/cancel-start')cancelHoverStarted=true;let body=Buffer.from(['www.facebook.com','example.test'].includes(u.hostname)?fixture:'').toString('base64');if(u.pathname==='/api/graphql/'){const p=JSON.parse(new URLSearchParams(m.params.request.postData).get('variables'));const mode=p?.receiptMode;body=Buffer.from(mode==='malformed'?'not json':JSON.stringify(p?{data:{story_create:{story:{url:mode==='external'?'https://example.test/fixture/posts/'+p.id:'https://www.facebook.com/fixture/posts/'+p.id,default_actor:{id:mode==='wrongActor'?'999':'12345'}}}}}:{errors:[{message:'fixture publish failed'}]})).toString('base64')}await call('Fetch.fulfillRequest',{requestId:m.params.requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'text/html; charset=utf-8'}],body},m.sessionId)}
- }catch(e){if(!e.message.includes('Session with given id not found'))report.push({harnessError:e.message})}};
+ }catch(e){if(!(e instanceof TargetClosed)&&!e.message.includes('Session with given id not found'))report.push({harnessError:e.message,event:m.method,sessionId:m.sessionId||m.params.sessionId})}};
+ report.push({runtime:{node:process.version,platform:process.platform,browser:await call('Browser.getVersion')}});
  await call('Target.setAutoAttach',{autoAttach:true,waitForDebuggerOnStart:true,flatten:true});
  await call('Storage.setCookies',{cookies:[{name:'c_user',value:'12345',domain:'.facebook.com',path:'/'}]});
  env={...process.env,FB_STATE:path.join(temp,'state'),FB_CDP:'ws://127.0.0.1:'+port+wsPath,FB_TIMEOUT:'40'};delete env.FB_SOCK;

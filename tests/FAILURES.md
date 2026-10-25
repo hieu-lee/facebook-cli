@@ -144,3 +144,14 @@ not promote a nested textarea or editable draft into the control name. Reuse the
 same editor-aware label traversal instead of an unrestricted innerText fallback.
 This also applies to control names inside a noneditable island within an editor:
 the plain descendant text remains draft content, not an explicit accessible label.
+
+The fixture CDP boundary must settle every pending call when its exact session
+detaches, and every call when the socket closes. Closing a disposable target while
+its auto-attach setup is pending is expected lifecycle cancellation, not a delayed
+15-second interception failure. Unexpected live-session errors/timeouts must still
+fail the suite. Record command/session context so CI failures are diagnosable.
+CI run 40241390139 is the red artifact: all32 scenarios pass on Linux and macOS,
+but four pending auto-attach runIfWaitingForDebugger calls time out. A separate
+local diagnostic also observes a pending Fetch.enable during actual target detach.
+Only send runIfWaitingForDebugger when the attachment explicitly says it is
+waiting; already-running targets need interception setup, not a resume command.
