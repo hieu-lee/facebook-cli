@@ -97,13 +97,15 @@ mod unix_impl {
         }
     }
 
-    pub fn detach(c: &mut std::process::Command) {
+    /// Start a long-lived background child (descriptors are close-on-exec: nothing leaks into it).
+    pub fn spawn_detached(c: &mut std::process::Command) -> std::io::Result<std::process::Child> {
         unsafe {
             c.pre_exec(|| {
                 libc::setsid();
                 Ok(())
             });
         }
+        c.spawn()
     }
 
     pub struct Listener(tokio::net::UnixListener);
@@ -186,10 +188,43 @@ mod windows_impl {
         }
     }
 
-    pub fn detach(c: &mut std::process::Command) {
-        // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP: no console (so no window), survives the
-        // client and ignores its Ctrl-C
-        c.creation_flags(0x0000_0008 | 0x0000_0200);
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetStdHandle(which: u32) -> isize;
+        fn GetHandleInformation(h: isize, flags: *mut u32) -> i32;
+        fn SetHandleInformation(h: isize, mask: u32, flags: u32) -> i32;
+    }
+
+    /// Start a long-lived background child that survives the client and owns no console.
+    /// DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP: no window, ignores the client's Ctrl-C.
+    /// A child inherits every inheritable handle of its parent, whatever it is given as stdio: if it
+    /// held the client's stdout pipe, whoever reads `fb`'s output would wait for the daemon to exit.
+    /// So the client's own std handles are made non-inheritable for the duration of the spawn.
+    pub fn spawn_detached(c: &mut std::process::Command) -> std::io::Result<std::process::Child> {
+        const INHERIT: u32 = 1;
+        // STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE: -10, -11, -12
+        let mut changed = Vec::new();
+        for which in [-10i32, -11, -12] {
+            unsafe {
+                let h = GetStdHandle(which as u32);
+                let mut flags = 0u32;
+                if h != 0
+                    && h != -1
+                    && GetHandleInformation(h, &mut flags) != 0
+                    && flags & INHERIT != 0
+                {
+                    SetHandleInformation(h, INHERIT, 0);
+                    changed.push(h);
+                }
+            }
+        }
+        let r = c.creation_flags(0x0000_0008 | 0x0000_0200).spawn();
+        for h in changed {
+            unsafe {
+                SetHandleInformation(h, INHERIT, INHERIT);
+            }
+        }
+        r
     }
 
     pub struct Listener {

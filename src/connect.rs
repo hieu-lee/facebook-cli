@@ -273,8 +273,8 @@ async fn spawn_process(exe: &str, args: &[String], windows: bool) -> Res<()> {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        crate::ipc::detach(&mut c);
-        let mut child = c.spawn().map_err(|e| format!("launch chrome: {e}"))?;
+        let mut child =
+            crate::ipc::spawn_detached(&mut c).map_err(|e| format!("launch chrome: {e}"))?;
         // reap it when it exits (a closed visible login Chrome would otherwise stay a zombie)
         std::thread::spawn(move || {
             let _ = child.wait();

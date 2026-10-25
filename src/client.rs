@@ -18,8 +18,7 @@ fn spawn_daemon() {
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(log);
-    crate::ipc::detach(&mut c);
-    let _ = c.spawn();
+    let _ = crate::ipc::spawn_detached(&mut c);
 }
 
 fn connect() -> Result<crate::ipc::ClientStream, String> {
