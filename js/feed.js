@@ -1,5 +1,5 @@
 (()=>{
- const {TIME,SPON,vtext,num,postCards,postText,canon}=window.__fb;
+ const {TIME,SPON,vtext,num,postCards,postText,canon,waitFor}=window.__fb;
  let seen=new WeakMap();let seq=0,current=null;
  const timeNode=(u,tt)=>{const w=document.createTreeWalker(u,NodeFilter.SHOW_TEXT);let n;while(n=w.nextNode()){const t=n.nodeValue;if(!t||t.includes('\u034f')||n.parentElement.closest('blockquote'))continue;if(t.replace(/[\u200b-\u200f\u2060\ufeff]/g,'').trim()===tt)return n;}return null;};
  const decode=a=>{
@@ -16,11 +16,20 @@
  const identity=u=>render(u)+'\0'+(timeLink(u)?.getAttribute('href')||'');
  window.__fbFeed={
   /* returns at most one new post: the caller must hover it before the page scrolls again */
-  step(){
+  async step(){
    const out=[];
    for(const u of postCards()){
     const name=g(u,'profile_name');
     if(!name)continue;
+    /* Facebook leaves the timestamp link as ?__cft__ until it is hovered or focused; focus needs no
+       coordinates. It fills the href in asynchronously, so wait for it before keying the card,
+       or the revealed href makes the same card look like a new post on the next step. */
+    const hidden=timeLink(u);
+    if(hidden&&/^\?/.test(hidden.getAttribute('href'))){
+     hidden.focus({preventScroll:true});
+     await waitFor(()=>!/^\?/.test(hidden.getAttribute('href')||''),400,30);
+     hidden.blur();
+    }
     const key=identity(u);if(seen.get(u)===key)continue;
     seen.set(u,key);
     const pos=++seq;current={pos,u,render:render(u),name,msg:g(u,'story_message')};
@@ -33,7 +42,7 @@
     const tlk=timeLink(u);
     if(tlk){tlk.scrollIntoView({block:'center'});dt=decode(tlk);if(dt)hover=[dt.x,dt.y];}
     if(!hover){const tn=ti<0?null:timeNode(u,ch[ti]);if(tn){tn.parentElement.scrollIntoView({block:'center'});const rg=document.createRange();rg.selectNodeContents(tn);const r=rg.getBoundingClientRect();if(r.width>0)hover=[r.x+r.width/2,r.y+r.height/2];}}
-    const alt=[...u.querySelectorAll('a[href]')].map(a=>a.getAttribute('href')).find(h=>/\/posts\/|pfbid|\/permalink|story_fbid|\/videos\/|\/reel\/|\/photo\/?\?fbid/.test(h)&&!/comment_id/.test(h));
+    const alt=[...u.querySelectorAll('a[href]')].map(a=>a.getAttribute('href')).find(h=>/\/posts\/|pfbid|\/permalink|story_fbid|multi_permalinks|\/videos\/|\/reel\/|\/photo\/?\?fbid/.test(h)&&!/comment_id/.test(h));
     out.push({pos,alt:alt?canon(alt):'',author:head.join(' / '),time:dt&&dt.text?dt.text:(ti<0?'':ch[ti]),text:postText(msg),
       r:num(g(u,'like_button')),c:num(g(u,'comment_button')),s:num(g(u,'share_button')),
       ad:ch.slice(0,12).some(c=>SPON.test(c)),hover});
