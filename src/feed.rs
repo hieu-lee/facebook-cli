@@ -59,50 +59,63 @@ async fn wait_main(b: &Browser, t: &Tab) -> Res<()> {
     Ok(())
 }
 
-/// Posts that newly appeared on screen, each resolved to a permalink via a trusted hover
-/// (the page script hands out one post at a time so its hover coordinates stay valid).
+/// Posts that newly appeared on screen. Most arrive with the permalink focus revealed; the rest
+/// resolve via a trusted hover (the page script ends a batch with at most one of those, so its
+/// hover coordinates stay valid).
 async fn step(b: &Browser, t: &Tab) -> Res<Vec<Post>> {
     let mut out = Vec::new();
     loop {
         let raw = b.eval(t, "window.__fbFeed.step()").await?;
-        let Some(p) = raw.as_array().and_then(|a| a.first()).cloned() else {
+        let batch = raw.as_array().cloned().unwrap_or_default();
+        if batch.is_empty() {
             return Ok(out);
-        };
-        let mut url = String::new();
-        if let Some(h) = p["hover"].as_array()
-            && let (Some(x), Some(y)) = (h[0].as_f64(), h[1].as_f64())
-        {
-            b.hover(t, x, y).await?;
-            tokio::time::sleep(Duration::from_millis(30)).await;
-            let r = b
-                .eval(t, &format!("window.__fbFeed.href({x},{y},{})", p["pos"]))
-                .await?;
-            if r.is_null() {
+        }
+        for p in batch {
+            if let Some(post) = resolve(b, t, &p).await? {
+                out.push(post);
+            } else {
                 return Ok(out);
             }
-            url = r.as_str().unwrap_or("").to_string();
         }
-        if !crate::ops::is_post_path(&url) {
-            url = p["alt"].as_str().unwrap_or("").to_string();
-        }
-        if !crate::ops::is_post_path(&url) {
-            url.clear();
-        }
-        let s = |k: &str| p[k].as_str().unwrap_or("").to_string();
-        out.push(Post {
-            author: s("author"),
-            time: s("time"),
-            stats: format!(
-                "{}/{}/{}",
-                p["r"].as_str().unwrap_or("0"),
-                p["c"].as_str().unwrap_or("0"),
-                p["s"].as_str().unwrap_or("0")
-            ),
-            text: s("text"),
-            url,
-            ad: p["ad"] == Value::Bool(true),
-        });
     }
+}
+
+/// `None` when the hovered card changed under the pointer; the page script retries it next step.
+async fn resolve(b: &Browser, t: &Tab, p: &Value) -> Res<Option<Post>> {
+    let mut url = p["url"].as_str().unwrap_or("").to_string();
+    if let Some(h) = p["hover"].as_array()
+        && let (Some(x), Some(y)) = (h[0].as_f64(), h[1].as_f64())
+    {
+        b.hover(t, x, y).await?;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let r = b
+            .eval(t, &format!("window.__fbFeed.href({x},{y},{})", p["pos"]))
+            .await?;
+        if r.is_null() {
+            return Ok(None);
+        }
+        url = r.as_str().unwrap_or("").to_string();
+    }
+    if !crate::ops::is_post_path(&url) {
+        url = p["alt"].as_str().unwrap_or("").to_string();
+    }
+    if !crate::ops::is_post_path(&url) {
+        url.clear();
+    }
+    let s = |k: &str| p[k].as_str().unwrap_or("").to_string();
+    Ok(Some(Post {
+        author: s("author"),
+        time: s("time"),
+        stats: format!(
+            "{}/{}/{}",
+            p["r"].as_str().unwrap_or("0"),
+            p["c"].as_str().unwrap_or("0"),
+            p["s"].as_str().unwrap_or("0")
+        ),
+        text: s("text"),
+        url,
+        ad: p["ad"] == Value::Bool(true),
+    }))
 }
 
 /// One-shot scroll of any page whose posts use the feed layout (profiles, pages, groups).
@@ -174,7 +187,7 @@ struct Inner {
     error: Option<String>,
 }
 
-const AHEAD: usize = 25;
+const AHEAD: usize = 60;
 const STALE: Duration = Duration::from_secs(20 * 60);
 
 impl FeedBuf {
@@ -208,13 +221,16 @@ impl FeedBuf {
             return Ok(());
         }
         let t = bounded(60, b.new_tab(None)).await?;
-        let r = async {
+        let open = || {
             bounded(60, async {
                 b.goto(&t, "https://www.facebook.com/").await?;
                 wait_main(b, &t).await
             })
-            .await?;
+        };
+        let r = async {
+            open().await?;
             let mut last = Instant::now();
+            let mut reloads = 0;
             let mut seen_urls = std::collections::HashSet::new();
             loop {
                 let notified = self.wake.notified();
@@ -239,6 +255,7 @@ impl FeedBuf {
                     .collect();
                 if !posts.is_empty() {
                     last = Instant::now();
+                    reloads = 0;
                     let mut g = self.inner.lock().await;
                     if g.epoch != epoch {
                         return Ok(());
@@ -246,8 +263,16 @@ impl FeedBuf {
                     g.posts.extend(posts);
                     drop(g);
                     self.wake.notify_waiters();
-                } else if last.elapsed() > Duration::from_secs(25) {
-                    return Err("feed stopped loading".into());
+                } else if last.elapsed() > Duration::from_secs(8) {
+                    // Facebook sometimes stops adding posts to a page; a fresh load has more at once
+                    // (seen_urls drops the repeats), so only quit when reloading stops helping.
+                    if reloads == 2 {
+                        return Err("feed stopped loading".into());
+                    }
+                    reloads += 1;
+                    open().await?;
+                    last = Instant::now();
+                    continue;
                 }
                 bounded(10, b.eval(&t, "window.__fbFeed.scroll()")).await?;
                 tokio::time::sleep(Duration::from_millis(150)).await;
