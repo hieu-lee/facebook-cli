@@ -18,13 +18,8 @@ pub struct Post {
     pub ad: bool,
 }
 
-fn format_post(d: &Daemon, p: &Post, full: bool, urls: bool) -> String {
+fn format_post(d: &Daemon, p: &Post, urls: bool) -> String {
     let text = one_line(&p.text);
-    let text = if full {
-        text
-    } else {
-        crate::messenger::trunc(&text, 280)
-    };
     let id = if p.url.is_empty() {
         "-".to_string()
     } else if urls {
@@ -120,7 +115,7 @@ async fn resolve(b: &Browser, t: &Tab, p: &Value) -> Res<Option<Post>> {
 
 /// One-shot scroll of any page whose posts use the feed layout (profiles, pages, groups).
 async fn collect(d: &Daemon, b: &Browser, t: &Tab, url: &str, args: &Args, out: &Out) -> Res<()> {
-    let (n, full, urls) = (args.n.unwrap_or(10), args.flag("full"), args.flag("urls"));
+    let (n, urls) = (args.n.unwrap_or(10), args.flag("urls"));
     b.goto(t, url).await?;
     wait_main(b, t).await?;
     let t0 = Instant::now();
@@ -141,7 +136,7 @@ async fn collect(d: &Daemon, b: &Browser, t: &Tab, url: &str, args: &Args, out: 
             .take(n - count)
         {
             count += 1;
-            out.line(format_post(d, &p, full, urls));
+            out.line(format_post(d, &p, urls));
         }
         b.eval(t, "window.__fbFeed.scroll()").await?;
         tokio::time::sleep(Duration::from_millis(150)).await;
@@ -374,9 +369,9 @@ pub async fn feed(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     let a = crate::ops::parse(args, &[], &["refresh", "full", "urls"])?;
     let b = d.browser(out).await?;
     d.feed.start(&b, a.flag("refresh")).await;
-    let (full, urls) = (a.flag("full"), a.flag("urls"));
+    let urls = a.flag("urls");
     for p in d.feed.take(a.n.unwrap_or(10)).await? {
-        out.line(format_post(d, &p, full, urls));
+        out.line(format_post(d, &p, urls));
     }
     Ok(())
 }

@@ -12,6 +12,7 @@
  };
  const timeLink=u=>[...u.querySelectorAll('a[href]')].find(a=>/^(\?|.*(?:\/posts\/|story_fbid|\/permalink))/.test(a.getAttribute('href')));
  const g=(u,r)=>u.querySelector('[data-ad-rendering-role='+r+']');
+ const more=msg=>msg?[...msg.querySelectorAll('[role=button],button')].filter(b=>window.__fb.visible(b)&&/^(See more|Xem thêm|Voir plus|Afficher la suite)$/i.test(clean(b.innerText))):[];
  const render=u=>[u.getAttribute('aria-posinset')||'',g(u,'profile_name')?.innerText||'',g(u,'profile_name')?.querySelector('a')?.getAttribute('href')||'',postText(g(u,'story_message')),timeLink(u)?.innerText||''].join('\0');
  const POST=/\/posts\/|pfbid|\/permalink|story_fbid|multi_permalinks|\/videos\/|\/reel\/|\/photo\/?\?fbid/;
  /* which post a card shows: author and text only, since its time and links fill in later and
@@ -29,10 +30,12 @@
   /* returns every new post that needs no hover, then at most one that does: the caller must
      hover that last one before the page scrolls again */
   async step(){
+   await this.expand();
    const out=[];
    for(const u of postCards()){
     const name=g(u,'profile_name');
     if(!name)continue;
+    if(more(g(u,'story_message')).length)continue;
     /* skip read cards before any waiting: ads never reveal, so waiting on every mounted card
        each step made one page of posts take a minute */
     if(seen.get(u)===key(u))continue;
@@ -78,13 +81,16 @@
    seen.set(u,key(u));
    return a&&u&&u.contains(a)?canon(a.href):'';
   },
-  expand(){
+  async expand(){
+   const pending=[];
    for(const card of postCards()){
     const msg=g(card,'story_message');if(!msg)continue;
-    for(const b of msg.querySelectorAll('[role=button],button')){
-     if(/^(See more|Xem thêm|Voir plus|Afficher la suite)$/i.test(window.__fb.clean(b.innerText)))window.__fb.press(b);
+    for(const b of more(msg)){
+     pending.push(msg);window.__fb.press(b);
     }
    }
+   // Expand the whole batch together; never cache a card while its text is still collapsed.
+   if(pending.length)await waitFor(()=>pending.every(msg=>!more(msg).length),1500,30);
   },
   scroll(){window.scrollBy(0,innerHeight*0.7)},
   /* the feed sometimes stops loading at the bottom; leaving and re-entering it starts it again */

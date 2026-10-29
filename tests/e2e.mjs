@@ -39,6 +39,26 @@ try{
  const failures=[];
  async function check(name,fn){if(process.env.E2E_ONLY&&!name.includes(process.env.E2E_ONLY))return;try{await fn();report.push({check:name,pass:true})}catch(e){failures.push(name);report.push({check:name,pass:false,error:e.message})}}
  await check('profile extraction and obfuscated timestamp',async()=>{const posts=await fb('posts','me','-n','1');assert.match(posts,/^p\w+\t.*Existing profile post/m)});
+ await check('feed and post lists expand full text before deduplication',async()=>{
+  const saved=await evaluate('JSON.stringify(JSON.parse(localStorage.posts||"null"))');
+  const stories=Array.from({length:3},(_,i)=>({id:String(900+i),text:('Full story '+i+' ').repeat(60)+'END '+i,aud:'me'}));
+  try{
+   await evaluate(`localStorage.posts=JSON.stringify(${JSON.stringify(stories)});localStorage.collapsedBody="true";localStorage.expandDelay="120";JSON.stringify(true)`);
+   for(const label of ['See more','Xem thêm','Voir plus','Afficher la suite']){
+    await evaluate(`localStorage.expandLabel=JSON.stringify(${JSON.stringify(label)});JSON.stringify(true)`);
+    const output=await fb('posts','me','-n','3');
+    for(const story of stories)assert(output.includes(story.text),'complete post text including ending');
+    assert(!output.includes(label),'expansion control is not post text');
+   }
+   const output=await fb('feed','--refresh','-n','3');for(const story of stories)assert(output.includes(story.text),'home feed keeps full text');
+   await fb('page','expanded','open','https://www.facebook.com/fixture');
+   await fb('page','expanded','eval',`for(const a of document.querySelectorAll('.time'))a.href='/fixture/posts/'+a.closest('section').dataset.post`);
+   const first=JSON.parse(await fb('page','expanded','eval','window.__fbFeed.step().then(JSON.stringify)'));
+   assert.equal(first.length,3);for(let i=0;i<3;i++)assert.equal(first[i].text,stories[i].text);
+   assert.deepEqual(JSON.parse(await fb('page','expanded','eval','window.__fbFeed.step().then(JSON.stringify)')),[],'async expansion cannot emit duplicate cards');
+   await fb('page','expanded','close');
+  }finally{await evaluate(`localStorage.posts=JSON.stringify(${JSON.stringify(saved)});for(const k of ['collapsedBody','expandDelay','expandLabel'])localStorage.removeItem(k);JSON.stringify(true)`)}
+ });
  await check('PIN modal send is single and confirmed in three locales',async()=>{for(const locale of ['en','vi','fr']){
   await evaluate(`localStorage.restored="false";localStorage.locale=JSON.stringify("${locale}");JSON.stringify(true)`);
   assert.match(await fb('send','42','fixture send '+locale),/^sent/);
