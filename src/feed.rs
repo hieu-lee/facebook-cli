@@ -231,6 +231,7 @@ impl FeedBuf {
             open().await?;
             let mut last = Instant::now();
             let mut reloads = 0;
+            let mut nudged = Instant::now();
             let mut seen_urls = std::collections::HashSet::new();
             loop {
                 let notified = self.wake.notified();
@@ -263,9 +264,9 @@ impl FeedBuf {
                     g.posts.extend(posts);
                     drop(g);
                     self.wake.notify_waiters();
-                } else if last.elapsed() > Duration::from_secs(8) {
-                    // Facebook sometimes stops adding posts to a page; a fresh load has more at once
-                    // (seen_urls drops the repeats), so only quit when reloading stops helping.
+                } else if last.elapsed() > Duration::from_secs(12) {
+                    // Nudging did not help; a fresh load has more posts (seen_urls drops the repeats),
+                    // so only quit when reloading stops helping too.
                     if reloads == 2 {
                         return Err("feed stopped loading".into());
                     }
@@ -273,6 +274,12 @@ impl FeedBuf {
                     open().await?;
                     last = Instant::now();
                     continue;
+                } else if last.elapsed() > Duration::from_secs(3)
+                    && nudged.elapsed() > Duration::from_secs(3)
+                {
+                    // Facebook sometimes stops adding posts at the bottom of the page
+                    bounded(10, b.eval(&t, "window.__fbFeed.nudge()")).await?;
+                    nudged = Instant::now();
                 }
                 bounded(10, b.eval(&t, "window.__fbFeed.scroll()")).await?;
                 tokio::time::sleep(Duration::from_millis(150)).await;

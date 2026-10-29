@@ -46,6 +46,8 @@
     const dot=ch.indexOf('·');
     const head=ch.slice(0,ti>=0?ti:(dot>0?dot:1)).filter(c=>c!=='·'&&c.length>1);
     const msg=g(u,'story_message');
+    /* an unfilled card has no author or text yet; once rendered it no longer matches its mark */
+    if(!head.length&&!postText(msg))continue;
     let hover=null,dt=null;
     const tlk=timeLink(u);
     if(tlk){if(!url)tlk.scrollIntoView({block:'center'});dt=decode(tlk);if(dt)hover=[dt.x,dt.y];}
@@ -77,7 +79,9 @@
     }
    }
   },
-  scroll(){window.scrollBy(0,innerHeight*0.7)}
+  scroll(){window.scrollBy(0,innerHeight*0.7)},
+  /* the feed sometimes stops loading at the bottom; leaving and re-entering it starts it again */
+  async nudge(){scrollBy(0,-innerHeight*2);await new Promise(r=>setTimeout(r,400));scrollTo(0,document.body.scrollHeight);return 1}
  };
  return 1;
 })()
