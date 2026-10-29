@@ -1024,6 +1024,7 @@ mod tests {
                 } else {
                     let _ = socket.write_all(&served).await;
                 }
+                let _ = socket.shutdown().await;
             }
         });
         let client = client_builder()
