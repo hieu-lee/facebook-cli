@@ -39,6 +39,16 @@ try{
  const failures=[];
  async function check(name,fn){if(process.env.E2E_ONLY&&!name.includes(process.env.E2E_ONLY))return;try{await fn();report.push({check:name,pass:true})}catch(e){failures.push(name);report.push({check:name,pass:false,error:e.message})}}
  await check('profile extraction and obfuscated timestamp',async()=>{const posts=await fb('posts','me','-n','1');assert.match(posts,/^p\w+\t.*Existing profile post/m)});
+ await check('feed authors include shared sources before reactions',async()=>{
+  await fb('page','authors','open','https://www.facebook.com/fixture');
+  try{
+   await fb('page','authors','eval',`(()=>{const card=document.querySelector('section'),time=card.querySelector('.time'),likes=card.querySelector('[data-ad-rendering-role=like_button]');card.setAttribute('aria-posinset','1');time.href='/fixture/posts/100';card.querySelector('h3').insertAdjacentHTML('beforebegin','<b>Fixture Group</b>');likes.insertAdjacentHTML('beforebegin','<h3 data-ad-rendering-role="profile_name">Doughnut Love</h3><h3 data-ad-rendering-role="profile_name">Doughnut Love</h3><h3 style="display:none" data-ad-rendering-role="profile_name">Hidden template</h3><blockquote><h3 data-ad-rendering-role="profile_name">Quoted commenter</h3></blockquote>');likes.insertAdjacentHTML('afterend','<h3 data-ad-rendering-role="profile_name">Comment author</h3>');})()`);
+   const posts=JSON.parse(await fb('page','authors','eval','window.__fbFeed.step().then(JSON.stringify)'));
+   assert.equal(posts[0].author,'Fixture Group / Fixture User / Doughnut Love');
+   assert.equal(posts[0].url,'/fixture/posts/100');
+   assert.equal(posts[0].text,'Existing profile post');
+  }finally{await fb('page','authors','close')}
+ });
  await check('post text omits only actual trailing collapse controls',async()=>{
   await fb('page','posttext','open','https://www.facebook.com/fixture');
   for(const label of ['See less','Thu gọn','Afficher moins','Réduire']){

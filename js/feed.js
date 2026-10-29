@@ -55,6 +55,12 @@
     let ti=ch.findIndex((c,i)=>i<10&&TIME.test(c));
     const dot=ch.indexOf('·');
     const head=ch.slice(0,ti>=0?ti:(dot>0?dot:1)).filter(c=>c!=='·'&&c.length>1);
+    /* Shared-source headers follow the first timestamp; comments follow the post's reactions. */
+    const reactions=g(u,'like_button');
+    for(const profile of u.querySelectorAll('[data-ad-rendering-role=profile_name]')){
+     if(!window.__fb.visible(profile)||profile.closest('blockquote')||(reactions&&!(profile.compareDocumentPosition(reactions)&Node.DOCUMENT_POSITION_FOLLOWING)))continue;
+     const author=clean(profile.innerText);if(author&&!head.includes(author))head.push(author);
+    }
     const msg=g(u,'story_message');
     /* an unfilled card has no author or text yet: read it again once Facebook renders it */
     if(!head.length&&!postText(msg)){seen.delete(u);continue}
