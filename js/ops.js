@@ -1,6 +1,6 @@
 (()=>{
  const F=window.__fb;
- const {sleep,clean,vtext,waitFor,canon,TIME,SPON,ACT,trunc,scrollerOf,num}=F;
+ const {sleep,clean,vtext,waitFor,canon,groupPath,TIME,SPON,ACT,trunc,scrollerOf,num}=F;
  const main=()=>document.querySelector('[role=main]');
  const tab=s=>String(s==null?'':s).replace(/[\t\r\n]+/g,' ');
  const abs=h=>{try{const u=new URL(h,location.href);return u.pathname+u.search}catch(e){return h}};
@@ -105,6 +105,24 @@
     out.push({k:base,v:[clean(link.innerText),{r:'u',v:base},clean(m.innerText)]});
    }
    return out;
+  });
+  return {rows:rows.map(r=>r.v)};
+ };
+ F.groups=async(n)=>{
+  const ok=await waitFor(()=>document.querySelector('[role=main] a[href*="/groups/"]'),12000);
+  if(!ok)return {rows:[],note:'no groups visible'};
+  await sleep(600);
+  const rows=await gather(n,()=>{
+   const byPath=new Map();
+   for(const a of document.querySelectorAll('[role=main] a[href]')){
+    const p=groupPath(a.getAttribute('href'));if(!p)continue;
+    const chunks=vtext(a).map(clean).filter(Boolean);
+    if(!chunks.length)continue;
+    const cur=byPath.get(p)||{name:chunks[0],info:[]};
+    for(const c of chunks.slice(1))if(c!==cur.name&&!cur.info.includes(c))cur.info.push(c);
+    byPath.set(p,cur);
+   }
+   return [...byPath.entries()].map(([p,g])=>({k:p,v:[g.name,p,trunc(g.info.join(' · '),120)]}));
   });
   return {rows:rows.map(r=>r.v)};
  };

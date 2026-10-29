@@ -21,6 +21,13 @@ assert.strictEqual(F.canon('https://www.facebook.com/groups/123/?multi_permalink
 assert.strictEqual(F.canon('https://www.facebook.com/page/posts/pfbid0X?__cft__[0]=zz&__tn__=%2CO'), '/page/posts/pfbid0X');
 assert.strictEqual(F.canon('https://www.facebook.com/photo/?fbid=99&set=a.1&__cft__[0]=z'), '/photo/?fbid=99&set=a.1');
 assert.strictEqual(F.clean('a͏ ​b  c'), 'a b c');
+assert.strictEqual(F.groupPath('https://www.facebook.com/groups/123456/'), '/groups/123456');
+assert.strictEqual(F.groupPath('/groups/hikers.uk?__cft__[0]=x'), '/groups/hikers.uk');
+assert.strictEqual(F.groupPath('https://www.facebook.com/groups/123/posts/456'), null);
+assert.strictEqual(F.groupPath('https://www.facebook.com/groups/feed/'), null);
+assert.strictEqual(F.groupPath('https://www.facebook.com/groups/joins'), null);
+assert.strictEqual(F.groupPath('https://www.facebook.com/somepage'), null);
+console.log('js groupPath ok');
 assert.strictEqual(F.trunc('abcdef', 3), 'abc…');
 assert(F.ACT.test('Thích') && F.ACT.test('Reply') && !F.ACT.test('Hello'));
 console.log('js ok');

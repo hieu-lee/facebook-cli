@@ -351,6 +351,55 @@ pub async fn friends(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     run_js(d, &b, out, &url, "friends", a.n.unwrap_or(30)).await
 }
 
+/// The groups the user has joined, from the joined-groups list page
+/// (facebook.com/groups/joins) — not the groups feed, whose links mix in
+/// suggestions and only cover groups with recently rendered posts.
+/// Rows: name, ref (or the group URL with --urls), privacy/size info.
+pub async fn groups(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
+    let a = parse(args, &[], &["urls"])?;
+    let b = d.browser(out).await?;
+    let t = b.acquire().await?;
+    let r = async {
+        b.goto(&t, "https://www.facebook.com/groups/joins").await?;
+        let v = b
+            .eval(
+                &t,
+                &format!(
+                    "window.__fb.groups({}).then(JSON.stringify)",
+                    a.n.unwrap_or(100)
+                ),
+            )
+            .await?;
+        let v: Value =
+            serde_json::from_str(v.as_str().unwrap_or("{}")).map_err(|e| e.to_string())?;
+        if let Some(e) = v["err"].as_str() {
+            return Err(e.to_string());
+        }
+        for row in v["rows"].as_array().cloned().unwrap_or_default() {
+            let cells: Vec<Value> = row.as_array().cloned().unwrap_or_default();
+            let get = |i: usize| cells.get(i).and_then(Value::as_str).unwrap_or("");
+            let path = get(1);
+            let id = if a.flag("urls") {
+                format!("https://www.facebook.com{path}")
+            } else {
+                d.refs.put('u', path)
+            };
+            out.line(format!(
+                "{}\t{id}\t{}",
+                get(0).replace(['\t', '\n'], " "),
+                get(2).replace(['\t', '\n'], " ")
+            ));
+        }
+        if let Some(note) = v["note"].as_str() {
+            out.err(format!("{note}\n"));
+        }
+        Ok(())
+    }
+    .await;
+    b.release(t).await;
+    r
+}
+
 pub async fn profile(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     let a = parse(args, &[], &[])?;
     let b = d.browser(out).await?;
