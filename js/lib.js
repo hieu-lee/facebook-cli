@@ -28,7 +28,17 @@
    await sleep(60);
   }
  };
- const postText=e=>e?clean(e.innerText):'';
+ const postText=e=>{
+  if(!e)return '';
+  const text=clean(e.innerText);
+  for(const b of e.querySelectorAll('[role=button],button')){
+   const label=clean(b.innerText);
+   if(!/^(See less|Thu gọn|Afficher moins|Réduire)$/i.test(label)||!visible(b)||!text.endsWith(label))continue;
+   const tail=document.createRange();tail.selectNodeContents(e);tail.setStartAfter(b);
+   if(!clean(tail.toString()))return clean(text.slice(0,-label.length));
+  }
+  return text;
+ };
  const postCards=()=>{
   const marker='[data-ad-rendering-role=profile_name]';
   const cards=[...document.querySelectorAll('[aria-posinset]')].filter(u=>u.querySelector(marker));

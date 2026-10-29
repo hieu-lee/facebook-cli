@@ -39,6 +39,18 @@ try{
  const failures=[];
  async function check(name,fn){if(process.env.E2E_ONLY&&!name.includes(process.env.E2E_ONLY))return;try{await fn();report.push({check:name,pass:true})}catch(e){failures.push(name);report.push({check:name,pass:false,error:e.message})}}
  await check('profile extraction and obfuscated timestamp',async()=>{const posts=await fb('posts','me','-n','1');assert.match(posts,/^p\w+\t.*Existing profile post/m)});
+ await check('post text omits only actual trailing collapse controls',async()=>{
+  await fb('page','posttext','open','https://www.facebook.com/fixture');
+  for(const label of ['See less','Thu gọn','Afficher moins','Réduire']){
+   const text=await fb('page','posttext','eval',`(()=>{const msg=document.createElement('div');msg.style.whiteSpace='pre-wrap';msg.textContent='First paragraph\\n\\nFinal paragraph ';const b=document.createElement('span');b.role='button';b.textContent=${JSON.stringify(label)};msg.append(b);document.body.append(msg);return window.__fb.postText(msg)})()`);
+   assert.equal(text,'First paragraph\n\nFinal paragraph');
+  }
+  for(const html of ['Real prose ending See less','Real prose ending Thu gọn','Real prose ending Afficher moins','Real prose ending Réduire','Collapsed… <span role="button">See more</span>','Full story <button>Translate</button>','<button>See less</button> Real prose ending See less']){
+   const result=JSON.parse(await fb('page','posttext','eval',`(()=>{const msg=document.createElement('div');msg.innerHTML=${JSON.stringify(html)};document.body.append(msg);return JSON.stringify({actual:window.__fb.postText(msg),expected:window.__fb.clean(msg.innerText)})})()`));
+   assert.equal(result.actual,result.expected,'preserve prose, other actions, and unresolved collapsed text');
+  }
+  await fb('page','posttext','close');
+ });
  await check('feed and post lists expand full text before deduplication',async()=>{
   const saved=await evaluate('JSON.stringify(JSON.parse(localStorage.posts||"null"))');
   const stories=Array.from({length:3},(_,i)=>({id:String(900+i),text:('Full story '+i+' ').repeat(60)+'END '+i,aud:'me'}));
