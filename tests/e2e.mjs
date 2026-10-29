@@ -156,6 +156,11 @@ try{
    const fresh=await fb('page','fill','snapshot','Typed input'),ref=fresh.split('\n').find(l=>/^e/.test(l)).split('\t')[0];
    await fb('page','fill','fill',ref,after);assert.equal(await fb('page','fill','eval','document.querySelector("input").value'),after);
   }
+  // Lexical keeps an empty editor's caret inside its own <p><br></p>, not around the editor
+  await fb('page','fill','eval',`document.body.insertAdjacentHTML("beforeend",'<div role="textbox" contenteditable="true" aria-label="Rich editor"><p><br></p></div>');const ed=document.querySelector('[aria-label="Rich editor"]');document.addEventListener('selectionchange',()=>{const s=getSelection();if(s.anchorNode===ed){const r=document.createRange();r.setStart(ed.firstChild,0);s.removeAllRanges();s.addRange(r)}});1`);
+  const rich=(await fb('page','fill','snapshot','Rich editor')).split('\n').find(l=>/^e/.test(l)).split('\t')[0];
+  await fb('page','fill','fill',rich,'shared text');
+  assert.equal(await fb('page','fill','eval',`document.querySelector('[aria-label="Rich editor"]').textContent`),'shared text');
   await fb('page','fill','close');
  });
  await check('ARIA referenced labels redact secrets and invalidate renamed refs',async()=>{
