@@ -96,8 +96,8 @@ try{
   try{const before=new Set(await contexts());const request=fb('page','story-setup','stories','https://www.facebook.com/stories/fixture');request.catch(()=>{});await bounded(gate.held);const context=(await contexts()).find(id=>!before.has(id));assert(context,'temporary context exists');await assert.rejects(()=>request,/preparing story session timed out/);let removed=false;for(let i=0;i<100;i++){if(!(await contexts()).includes(context)){removed=true;break}await new Promise(resolve=>setTimeout(resolve,50))}assert(removed,'timed-out context is disposed')}
   finally{gate.release();try{await fb('stop')}finally{await relay.close();env=original}}
  });
- for(const [method,error] of [['Target.createBrowserContext',/creating story session timed out/],['Target.createTarget',/creating story tab timed out/]])await check('protected story stalled '+method+' disposes its context',async()=>{
-  const original=env,relay=await proxy(env.FB_CDP),gate=relay.hold(method);env={...env,FB_STATE:path.join(temp,'story-stalled-'+method),FB_CDP:relay.url};
+ for(const [method,error,state] of [['Target.createBrowserContext',/creating story session timed out/,'ctx'],['Target.createTarget',/creating story tab timed out/,'tab']])await check('protected story stalled '+method+' disposes its context',async()=>{
+  const original=env,relay=await proxy(env.FB_CDP),gate=relay.hold(method);env={...env,FB_STATE:path.join(temp,state),FB_CDP:relay.url};
   const contexts=async()=>(await call('Target.getBrowserContexts')).browserContextIds||[];
   let timer;
   try{const before=new Set(await contexts()),request=fb('page','story-stalled','stories','https://www.facebook.com/stories/fixture');request.catch(()=>{});await Promise.race([gate.held,new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('setup signal timed out')),8000)})]);const context=(await contexts()).find(id=>!before.has(id));assert(context,'temporary context exists');await assert.rejects(()=>request,error);let removed=false;for(let i=0;i<100;i++){if(!(await contexts()).includes(context)){removed=true;break}await new Promise(resolve=>setTimeout(resolve,50))}assert(removed,'timed-out context is disposed')}
