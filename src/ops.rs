@@ -123,12 +123,27 @@ pub async fn run_js(
     call: &str,
     n: usize,
 ) -> Res<()> {
+    run_expression(
+        d,
+        b,
+        out,
+        url,
+        &format!("window.__fb.{call}({n}).then(JSON.stringify)"),
+    )
+    .await
+}
+
+async fn run_expression(
+    d: &Daemon,
+    b: &std::sync::Arc<Browser>,
+    out: &Out,
+    url: &str,
+    expression: &str,
+) -> Res<()> {
     let t = b.acquire().await?;
     let r = async {
         b.goto(&t, url).await?;
-        let v = b
-            .eval(&t, &format!("window.__fb.{call}({n}).then(JSON.stringify)"))
-            .await?;
+        let v = b.eval(&t, expression).await?;
         let v: Value =
             serde_json::from_str(v.as_str().unwrap_or("{}")).map_err(|e| e.to_string())?;
         if let Some(e) = v["err"].as_str() {
@@ -238,7 +253,38 @@ pub async fn profile_path(d: &Daemon, b: &std::sync::Arc<Browser>, who: &str) ->
     {
         return Ok(format!("/{who}"));
     }
-    // free-text name: take the first people result
+    person_path(b, who).await
+}
+
+pub async fn profile_path_explicit(
+    d: &Daemon,
+    b: &std::sync::Arc<Browser>,
+    who: &str,
+) -> Res<String> {
+    let name = who.trim_start_matches('@');
+    if name.is_empty() {
+        return Err("invalid account".into());
+    }
+    if who.starts_with('@')
+        && !name
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'-')
+    {
+        return Err("invalid account handle".into());
+    }
+    if who == "me"
+        || who.starts_with('@')
+        || d.refs.get(who).is_some()
+        || who.bytes().all(|c| c.is_ascii_digit())
+        || who.starts_with('/')
+        || who.starts_with("http")
+    {
+        return profile_path(d, b, who).await;
+    }
+    Err("search for the name and use a profile ref".into())
+}
+
+async fn person_path(b: &std::sync::Arc<Browser>, who: &str) -> Res<String> {
     let t = b.acquire().await?;
     let r = async {
         b.goto(
@@ -262,17 +308,31 @@ pub async fn profile_path(d: &Daemon, b: &std::sync::Arc<Browser>, who: &str) ->
 }
 
 pub async fn search(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
-    let a = parse(args, &["type"], &[])?;
+    let a = parse(args, &["type", "match"], &[])?;
     let q = a.pos.join(" ");
     if q.is_empty() {
         return Err(
-            "usage: search <query> [--type people|pages|groups|posts|events] [-n N]".into(),
+            "usage: search <query> [--type people|pages|groups|posts|events] [--match text] [-n N]"
+                .into(),
         );
     }
     let ty = a.opt("type").unwrap_or("people");
+    if !["people", "pages", "groups", "posts", "events"].contains(&ty) {
+        return Err("invalid search type".into());
+    }
+    let clues = a.opts_all("match");
+    if clues.iter().any(|clue| clue.trim().is_empty()) {
+        return Err("--match needs text".into());
+    }
     let b = d.browser(out).await?;
     let url = format!("https://www.facebook.com/search/{ty}/?q={}", enc(&q));
-    run_js(d, &b, out, &url, "search", a.n.unwrap_or(10)).await
+    let expression = format!(
+        "window.__fb.search({},{},{}).then(JSON.stringify)",
+        a.n.unwrap_or(10),
+        serde_json::json!(clues),
+        serde_json::json!(ty)
+    );
+    run_expression(d, &b, out, &url, &expression).await
 }
 
 pub async fn friends(d: &Daemon, args: &[String], out: &Out) -> Res<()> {

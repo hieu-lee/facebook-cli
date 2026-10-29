@@ -14,6 +14,8 @@ const RESTRICT_CHANNELS: &str = include_str!("../js/story-channels.js");
 // Unknown or rotated story-query document IDs fail closed.
 const QUERY_NAME: &str = "StoriesViewerBucketPrefetcherMultiBucketsQuery";
 const QUERY_ID: &str = "9340191609394579";
+const PHOTO_QUERY_NAME: &str = "ProfileCometAppCollectionPhotosRendererPaginationQuery";
+const PHOTO_QUERY_ID: &str = "27028962643386672";
 const QUERY_KEYS: &[&str] = &[
     "av",
     "__aaid",
@@ -69,14 +71,14 @@ impl Drop for StoryGuard {
     }
 }
 
-fn read_only_query(body: &str) -> bool {
+fn read_only_query(body: &str, query_name: &str, query_id: &str, keys: &[&str]) -> bool {
     let mut name = None;
     let mut id = None;
     for part in body.split('&') {
         let Some((key, value)) = part.split_once('=') else {
             return false;
         };
-        if !QUERY_KEYS.contains(&key) {
+        if !keys.contains(&key) {
             return false;
         }
         match key {
@@ -85,10 +87,16 @@ fn read_only_query(body: &str) -> bool {
             _ => {}
         }
     }
-    name == Some(QUERY_NAME) && id == Some(QUERY_ID)
+    name == Some(query_name) && id == Some(query_id)
 }
 
-fn allow_request(event: &Value, root: &str) -> bool {
+fn allow_request(
+    event: &Value,
+    root: &str,
+    query_name: &str,
+    query_id: &str,
+    keys: &[&str],
+) -> bool {
     if event["resourceType"] == "Document" && event["frameId"].as_str() != Some(root) {
         return false;
     }
@@ -106,7 +114,7 @@ fn allow_request(event: &Value, root: &str) -> bool {
             }
             let path = crate::ops::fb_path(url);
             if let Some(("/api/graphql/", body)) = path.as_deref().and_then(|p| p.split_once('?')) {
-                read_only_query(body)
+                read_only_query(body, query_name, query_id, keys)
             } else {
                 !path.as_deref().is_some_and(|p| {
                     matches!(p.split('?').next(), Some("/api/graphql" | "/api/graphql/"))
@@ -161,13 +169,30 @@ fn allow_request(event: &Value, root: &str) -> bool {
             }) {
                 return false;
             }
-            read_only_query(&body)
+            read_only_query(&body, query_name, query_id, keys)
         }
         _ => false,
     }
 }
 
 pub async fn protect(browser: &Arc<Browser>, tab: &Tab) -> Res<StoryGuard> {
+    protect_with_query(browser, tab, false).await
+}
+
+pub async fn protect_photos(browser: &Arc<Browser>, tab: &Tab) -> Res<StoryGuard> {
+    protect_with_query(browser, tab, true).await
+}
+
+async fn protect_with_query(browser: &Arc<Browser>, tab: &Tab, photos: bool) -> Res<StoryGuard> {
+    let (query_name, query_id) = if photos {
+        (PHOTO_QUERY_NAME, PHOTO_QUERY_ID)
+    } else {
+        (QUERY_NAME, QUERY_ID)
+    };
+    let mut keys = QUERY_KEYS.to_vec();
+    if photos {
+        keys.extend(["__crn", "__hblp", "__hsdp", "__sjsp"]);
+    }
     let cdp = browser.cdp.clone();
     let session = tab.session.clone();
     let target = tab.target.clone();
@@ -189,7 +214,7 @@ pub async fn protect(browser: &Arc<Browser>, tab: &Tab) -> Res<StoryGuard> {
     cdp.call(
         Some(&session),
         "Page.addScriptToEvaluateOnNewDocument",
-        json!({"source":format!("({RESTRICT_CHANNELS})({},{},{})", json!(QUERY_NAME), json!(QUERY_ID), json!(QUERY_KEYS))}),
+        json!({"source":format!("({RESTRICT_CHANNELS})({},{},{})", json!(query_name), json!(query_id), json!(keys))}),
     )
     .await?;
     let mut events = cdp.subscribe();
@@ -225,7 +250,7 @@ pub async fn protect(browser: &Arc<Browser>, tab: &Tab) -> Res<StoryGuard> {
                     Ok(event) if event.method == "Target.detachedFromTarget" && event.params["sessionId"].as_str() == Some(&task_session) => break,
                     Ok(event) if event.session.as_deref() == Some(&task_session) && event.method == "Fetch.requestPaused" => {
                         let Some(id) = event.params["requestId"].as_str() else { break };
-                        let (method, params) = if allow_request(&event.params, &root) {
+                        let (method, params) = if allow_request(&event.params, &root, query_name, query_id, &keys) {
                             ("Fetch.continueRequest", json!({"requestId":id}))
                         } else {
                             ("Fetch.failRequest", json!({"requestId":id,"errorReason":"BlockedByClient"}))

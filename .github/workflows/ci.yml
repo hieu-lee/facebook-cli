@@ -23,6 +23,7 @@ jobs:
         with:
           node-version: 22
       - run: node tests/js.test.js
+      - run: node tests/media.test.js
       - run: node -e "for (const f of require('fs').readdirSync('js')) require('child_process').execFileSync(process.execPath, ['--check', 'js/' + f])"
       - run: node tests/e2e-isolation.mjs
         env:

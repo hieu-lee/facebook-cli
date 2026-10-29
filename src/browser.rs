@@ -237,6 +237,23 @@ impl Browser {
     }
 
     pub async fn new_story_tab(self: &Arc<Self>) -> Res<Tab> {
+        self.story_tab(None).await
+    }
+
+    pub async fn acquire_story_tab(self: &Arc<Self>) -> Res<Tab> {
+        let permit = self
+            .slots
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|e| e.to_string())?;
+        self.story_tab(Some(permit)).await
+    }
+
+    async fn story_tab(
+        self: &Arc<Self>,
+        permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    ) -> Res<Tab> {
         let me = self.clone();
         tokio::spawn(async move {
             let owner = tokio::time::timeout(Duration::from_secs(10), crate::connect::attach())
@@ -303,9 +320,12 @@ impl Browser {
             tokio::time::timeout(Duration::from_secs(10), setup)
                 .await
                 .map_err(|_| "preparing story session timed out".to_string())??;
-            tokio::time::timeout(Duration::from_secs(10), me.create_tab(Some(context)))
-                .await
-                .map_err(|_| "creating story tab timed out".to_string())?
+            let mut tab =
+                tokio::time::timeout(Duration::from_secs(10), me.create_tab(Some(context)))
+                    .await
+                    .map_err(|_| "creating story tab timed out".to_string())??;
+            tab.permit = permit;
+            Ok(tab)
         })
         .await
         .map_err(|e| e.to_string())?
@@ -411,7 +431,7 @@ impl Browser {
 
     pub async fn close(&self, mut t: Tab) {
         t.armed = false;
-        t.permit = None;
+        let permit = t.permit.take();
         self.owned.lock().await.remove(&t.target);
         if let Some(mut context) = t.context.take() {
             let _ = tokio::time::timeout(
@@ -425,7 +445,9 @@ impl Browser {
             .await;
             context.armed = false;
             context.cdp.close();
+            drop(permit);
         } else {
+            drop(permit);
             let _ = self
                 .cdp
                 .call(None, "Target.closeTarget", json!({"targetId":t.target}))

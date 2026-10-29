@@ -7,34 +7,90 @@
  // canonical path; keeps the query only where it identifies the target (profile.php?id=, permalink.php?story_fbid=&id=, photo?fbid=)
  const stripQ=h=>{const c=canon(h);return c.includes('?')?c:(c.replace(/\/$/,'')||'/');};
  // scroll the page until `collect()` yields n rows or growth stalls
- const gather=async(n,collect,ms=25000,sc=null)=>{
+ const gather=async(n,collect,ms=25000,sc=null,progress=null,finalize=null,order=null)=>{
   const t0=Date.now();let last=0,stall=0;const map=new Map();
   while(Date.now()-t0<ms){
-   for(const r of collect())if(!map.has(r.k))map.set(r.k,r);
+   for(const r of collect(map))if(!map.has(r.k))map.set(r.k,r);
    if(map.size>=n)break;
-   if(map.size===last){if(++stall>=14)break;}else{stall=0;last=map.size;}
+   const current=progress?progress():map.size;
+   if(current===last){if(++stall>=14)break;}else{stall=0;last=current;}
    const el=typeof sc==='function'?sc():sc;
    if(el)el.scrollTop+=el.clientHeight*0.8;else window.scrollBy(0,innerHeight*0.8);
    await sleep(220);
   }
-  return [...map.values()].slice(0,n);
+  if(finalize?.())for(const r of collect(map,true))if(!map.has(r.k))map.set(r.k,r);
+  const rows=[...map.values()];if(order)rows.sort(order);return rows.slice(0,n);
  };
- F.search=async(n)=>{
-  const feed=await waitFor(()=>document.querySelector('[role=main] [role=feed] [role=article]')&&document.querySelector('[role=main] [role=feed]'),12000);
-  if(!feed){const m=main();return {rows:[],note:m&&/không tìm thấy|no results|aucun résultat/i.test(m.innerText)?'no results':'no results loaded'};}
-  const rows=await gather(n,()=>[...feed.querySelectorAll('[role=article]')].map(a=>{
-   const links=[...a.querySelectorAll('a[href]')];
-   const l=links.find(x=>/\/posts\/|pfbid|\/permalink|\/videos\/|\/reel\/|fbid=/.test(x.getAttribute('href')))||links[0];
-   if(!l)return null;
-   const all=vtext(a);
-   const img=l.querySelector('img');
-   const name=all[0]||clean((img&&img.alt)||'');
-   const btn=new Set([...a.querySelectorAll('[role=button]')].map(b=>clean(b.innerText)));
-   const info=all.slice(1).filter(c=>c!==name&&!btn.has(c)&&c!=='·');
-   const url=stripQ(l.href);
-   return {k:url,v:[name,{r:'u',v:url},trunc(info.join(' · '),160)]};
-  }).filter(Boolean));
-  return {rows:rows.map(r=>r.v)};
+ F.search=async(n,clues=[],type='people')=>{
+  const normalize=s=>s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[đĐ]/g,'d').toLowerCase();
+  clues=clues.map(c=>normalize(c.trim()));
+  const exposed=e=>{for(;e;e=e.parentElement){const s=getComputedStyle(e);if(e.hidden||s.display==='none'||s.visibility!=='visible'||Number(s.opacity)===0)return false}return true};
+  const state=await waitFor(()=>{
+   const f=document.querySelector('[role=main] [role=feed]');if(f?.querySelector('[role=article]')&&exposed(f))return {feed:f};
+   const m=main();if(m&&exposed(m)&&!m.querySelector('[role=article]')&&/không tìm thấy|no results|aucun résultat/i.test(m.innerText))return {empty:true};
+   return null;
+  },12000);
+  if(!state?.feed)return {rows:[],note:state?.empty?'no results':'no results loaded'};
+  const feed=state.feed;
+  const pending=new Set(),dirty=new Set(),observed=new WeakSet(),signatures=new Set();let progress=0,signatureBytes=0,lastProgress=0,idle=0;
+  const queue=a=>{if(!observed.has(a)){observed.add(a);progress++}pending.add(a)};
+  const scan=node=>{if(node.nodeType!==1)return;if(node.matches('[role=article]'))queue(node);for(const a of node.querySelectorAll('[role=article]'))queue(a)};
+  scan(feed);
+  const observer=new MutationObserver(records=>{for(const record of records){
+   const target=record.target.nodeType===1?record.target:record.target.parentElement,closest=target?.closest('[role=article]'),article=closest&&feed.contains(closest)?closest:null;
+   if(article)queue(article);
+   if(record.type==='childList')for(const node of record.addedNodes)scan(node);
+   else if(record.type==='attributes'&&!article){
+    const key=record.attributeName;
+    if(key==='style'){
+     const old=document.createElement('span');old.setAttribute('style',record.oldValue||'');
+     if(['display','visibility','opacity','content-visibility'].some(p=>old.style.getPropertyValue(p)!==target.style.getPropertyValue(p)))dirty.add(feed.contains(target)?target:feed);
+    }else if(['class','id','hidden','aria-hidden'].includes(key))dirty.add(feed.contains(target)?target:feed);
+   }
+  }});
+  observer.observe(feed,{subtree:true,childList:true,characterData:true,attributes:true,attributeOldValue:true});
+  for(let e=feed.parentElement;e;e=e.parentElement)observer.observe(e,{attributes:true,attributeOldValue:true});
+  const shown=x=>x.checkVisibility?x.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}):x.getClientRects().length;
+  const content=x=>{const u=new URL(x.href);return /\/posts\/|pfbid|\/permalink|\/videos?\/|\/reel\/|\/photos?(?:\/|$)|\/photo\.php$/i.test(u.pathname)||u.searchParams.has('fbid')};
+  const person=x=>{const u=new URL(x.href);return (u.hostname==='facebook.com'||u.hostname.endsWith('.facebook.com'))&&/^\/(?:profile\.php|people\/[^/]+\/\d+|[a-z0-9.%_-]+)\/?$/i.test(u.pathname)&&!content(x)&&u.pathname!=='/search'};
+  const nameText=(link,parts)=>{const rendered=clean(link.innerText||'');return rendered&&normalize(rendered).replace(/\s+/g,'')===normalize(parts.join('')).replace(/\s+/g,'')?rendered:clean(parts.join(' '))};
+  const compareNodes=(a,b)=>{const p=a.compareDocumentPosition(b);return p&Node.DOCUMENT_POSITION_DISCONNECTED?0:p&Node.DOCUMENT_POSITION_FOLLOWING?-1:p&Node.DOCUMENT_POSITION_PRECEDING?1:0};
+  const order=(a,b)=>compareNodes(a.node,b.node);
+  try{
+   const rows=await gather(n,(seen,final=false)=>{
+    if(progress===lastProgress)idle++;else{lastProgress=progress;idle=0}
+    if(idle>=12&&dirty.size){for(const node of dirty)scan(node);dirty.clear()}
+    const found=[],added=new Set(),cards=final?[...pending].sort(compareNodes):pending;for(const a of cards){
+    pending.delete(a);if(!a.isConnected||!feed.contains(a))continue;
+    const rawLinks=[...a.querySelectorAll('a[href]')];let signature='';for(const link of rawLinks){const url=stripQ(link.href);if(signature.length+url.length+1>8192){signature='';break}signature+=url+'\n'}
+    if(signature&&signature.length<=8192&&signatureBytes+signature.length<=4*1024*1024&&!signatures.has(signature)){signatures.add(signature);signatureBytes+=signature.length;progress++}
+    const all=vtext(a,true,true),label=all[0]||'';
+    const visibleLinks=rawLinks.filter(x=>!x.closest('[hidden]')&&(shown(x)||getComputedStyle(x).display==='contents'&&(vtext(x,true,true).length||[...x.querySelectorAll('img,svg')].some(shown))));
+    const links=visibleLinks.filter(x=>!x.closest('[aria-hidden="true"]'));
+    let l,nameParts=[];if(type==='people'){
+     const candidates=visibleLinks.filter(person),accessible=links.filter(person);
+     const headed=candidates.filter(x=>x.closest('[role=heading],h1,h2,h3,h4,h5,h6')&&accessible.some(y=>stripQ(x.href)===stripQ(y.href)));
+     const choices=headed.length?headed:accessible;if(new Set(choices.map(x=>stripQ(x.href))).size!==1)continue;
+     const url=stripQ(choices[0].href),group=candidates.filter(x=>stripQ(x.href)===url),names=group.map(x=>({link:x,parts:vtext(x,true,true)})).filter(x=>x.parts.length);
+     const paired=names.find(x=>x.link.closest('[aria-hidden="true"]')&&accessible.some(y=>{if(stripQ(y.href)!==url)return false;const label=normalize(clean(y.getAttribute('aria-label')||y.querySelector('img')?.alt||'')),name=normalize(nameText(x.link,x.parts));return label===name||label.endsWith(' '+name)}));
+     const chosen=names.find(x=>headed.includes(x.link))||paired||names.find(x=>!x.link.closest('[aria-hidden="true"]'));
+     if(chosen){l=chosen.link;nameParts=chosen.parts;if(l.closest('[aria-hidden="true"]')&&chosen!==paired)continue}
+     else {l=choices[0];const alt=clean(l.querySelector('img')?.alt||'');if(alt)nameParts=[alt]}
+     if(!nameParts.length||(!headed.length&&!paired&&!nameParts.some(t=>normalize(t)===normalize(label))))continue;
+    }else l=visibleLinks.find(content)||links[0];
+    if(!l)continue;
+    const url=stripQ(l.href);if((seen.has(url)&&!final)||added.has(url))continue;
+    const name=type==='people'?nameText(l,nameParts):(label||clean(l.querySelector('img')?.alt||''));
+    if(clues.length){const text=normalize([name,...all].join(' '));if(!clues.every(c=>text.includes(c))){const raw=normalize(vtext(a,true,true,true).join(''));if(!clues.every(c=>text.includes(c)||raw.includes(c)))continue}}
+    const btn=new Set([...a.querySelectorAll('[role=button]')].map(b=>clean(b.innerText)));
+    const info=all.filter(c=>c!==name&&!nameParts.includes(c)&&!btn.has(c)&&c!=='·');
+    const row={k:url,node:a,v:[name,{r:'u',v:url},trunc(info.join(' · '),160)]};
+    if(seen.has(url)){if(order(row,seen.get(url))<0)seen.set(url,row);continue}
+    added.add(url);found.push(row);
+    if((final?found.length:seen.size+found.length)>=n)break;
+   }return found;},25000,null,()=>progress,()=>{for(const node of dirty)scan(node);dirty.clear();return pending.size>0},order);
+   return {rows:rows.map(r=>r.v),...(!rows.length&&clues.length?{note:'no matching results'}:{})};
+  }finally{observer.disconnect()}
  };
  F.friends=async(n)=>{
   const ok=await waitFor(()=>document.querySelector('[role=main] a[href*="friends_mutual"]')||document.querySelector('[role=main] [role=tablist]'),12000);

@@ -15,7 +15,7 @@ fn reject_symlink(path: &std::path::Path) -> Res<()> {
     }
 }
 
-struct RecordingFile {
+pub(crate) struct RecordingFile {
     temp: std::path::PathBuf,
     destination: std::path::PathBuf,
     handle: Option<std::fs::File>,
@@ -23,7 +23,7 @@ struct RecordingFile {
 }
 
 impl RecordingFile {
-fn create(file: &str) -> Res<Self> {
+pub(crate) fn create(file: &str) -> Res<Self> {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let path = std::path::Path::new(file);
     reject_symlink(path)?;
@@ -44,12 +44,12 @@ fn create(file: &str) -> Res<Self> {
     Ok(Self { temp, destination: path.to_owned(), handle: Some(handle), committed: false })
 }
 
-fn write(&mut self, bytes: &[u8]) -> Res<()> {
+pub(crate) fn write(&mut self, bytes: &[u8]) -> Res<()> {
     use std::io::Write;
     self.handle.as_mut().unwrap().write_all(bytes).map_err(|e| e.to_string())
 }
 
-fn sync(&self) -> Res<()> {
+pub(crate) fn sync(&self) -> Res<()> {
     self.handle.as_ref().unwrap().sync_all().map_err(|e| e.to_string())
 }
 
@@ -61,6 +61,13 @@ fn finish(mut self, out: &Out, story_guard: Option<&crate::stories::StoryGuard>)
     if story_guard.is_some_and(|guard| guard.finished()) { return Err("story protection stopped; page closed".into()); }
     std::fs::rename(&self.temp, &self.destination).map_err(|e| e.to_string())?;
     self.committed = true;
+    Ok(())
+}
+
+pub(crate) fn finish_new(mut self, check: impl FnOnce() -> Res<()>) -> Res<()> {
+    drop(self.handle.take());
+    check()?;
+    std::fs::hard_link(&self.temp, &self.destination).map_err(|e| e.to_string())?;
     Ok(())
 }
 }

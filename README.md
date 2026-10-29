@@ -71,7 +71,9 @@ Run `fb help` for the exact list. `<who>` is `me`, a name, `@vanity`, an id, a U
 | `view <post> [-n 10]` | post body and comments |
 | `profile [who]` | key/value lines |
 | `friends [who] [-n 30]` | name, ref, mutual friends |
-| `search <q> [--type people\|pages\|groups\|posts\|events]` | name, ref, info |
+| `search <q> [--type people\|pages\|groups\|posts\|events] [--match text]... [-n 10]` | name, ref, visible info |
+| `stories <who> [--out dir] [-n N]` | download visible stories in a protected session |
+| `photos <who> [--out dir] [-n 10 \| --all]` | download visible profile photos in a protected session |
 | `notifs [-n]` | time, unread flag, text, ref |
 
 | Messenger | |
@@ -128,6 +130,30 @@ uncertain action failure. No action is automatically replayed.
 
 ### Stories (experimental)
 
+Use the account commands for downloads:
+
+```sh
+fb search 'Alex Example' --match Paris --match University -n 5
+fb stories u1abc --out ./stories
+fb photos u1abc --out ./photos -n 10
+```
+
+Search accepts arbitrary repeated `--match` clues; all must occur in the visible
+result text, without regard to case or accents. Facebook may omit information
+from a result, so a missing match does not prove it is wrong. Search for names,
+then use a ref, profile URL, ID, `me`, or `@handle` for media commands. `-n` limits results; stories default to all
+available cards, and photos default to ten. A specific story URL starts at that card.
+`photos --all` follows the account's
+visible collection, up to 1,000 photos; incomplete pagination is an error.
+Stories also report incomplete if Facebook does not provide evidence that all
+cards were loaded; any downloaded files remain available. Facebook may not expose every photo. For large
+collections, increase `FB_TIMEOUT` before starting the daemon if needed.
+
+Media output is `d<TAB>directory`, followed by numbered filenames as files finish,
+potentially out of order. Join each filename to the directory. Existing files are never
+overwritten; the output filesystem must support hard links. A failed command may leave completed files. Original media can omit
+Facebook overlays or separately played music.
+
 ```sh
 fb page stories stories                     # open the Facebook story tray
 fb page stories snapshot                    # find a story's control
@@ -142,10 +168,12 @@ specific story. For GraphQL, the page permits only a known story-bucket query ID
 It blocks other POSTs and non-GET/HEAD methods, including the known story-seen
 mutation; GET/HEAD requests outside GraphQL remain allowed. Other queries are blocked,
 so the story tray or viewer may fail to load, especially if Facebook changes its
-query IDs. It disables workers and sockets and restricts actions that could
+query IDs. Profile-photo sessions allow a separate known pagination query and
+report incomplete results if its ID changes. They also disable workers and
+sockets and restrict actions that could
 disable those protections. **This is not a guarantee of anonymity:** Facebook
-can record views by other means or change its protocol. It has not been verified
-against a live story owner's viewer list. The blue unread border can
+can record views by other means or change its protocol, even though one user
+reported a successful live check. The blue unread border can
 change locally, so it is not proof that Facebook did or did not record a view.
 Each story page uses a temporary browser context with a copy of the Facebook
 cookies from the CLI's profile; Chrome removes it when the page closes or the
@@ -211,6 +239,7 @@ State lives in `~/.cache/fb` (`%LOCALAPPDATA%\fb` on native Windows): `refs.tsv`
 ```sh
 cargo test                  # unit tests, including a fake-Chrome CDP test
 node tests/js.test.js       # pure-function tests for the injected page scripts
+node tests/media.test.js    # story and photo metadata extraction
 node tests/e2e-isolation.mjs          # isolated real Chrome + CLI; never calls the real Facebook network
 scripts/smoke.sh            # live read-only check against your logged-in profile
 ```

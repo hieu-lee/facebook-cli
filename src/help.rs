@@ -8,7 +8,10 @@ READ
   view <post> [-n 10]                by, stats, text, then c<TAB>author<TAB>time<TAB>text per comment
   profile [who]                      key<TAB>value lines
   friends [who] [-n 30]              name, ref, mutual friends
-  search <q> [--type people|pages|groups|posts|events] [-n 10]
+  search <q> [--type people|pages|groups|posts|events] [--match text]... [-n 10]   match visible clues
+  stories <who> [--out dir] [-n N]  protected downloads, all visible stories by default
+  photos <who> [--out dir] [-n 10 | --all]  protected profile-photo downloads
+  Media output: d<TAB>directory, then numbered filenames; join them to form paths. Search names first and use a ref.
   notifs [-n 15]                     time, !=unread, text, ref
 MESSENGER
   chats [-n 20] [--unread] [name]    ref, flags(! unread, g group, e e2ee), time, name, preview

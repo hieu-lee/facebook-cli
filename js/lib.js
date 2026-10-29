@@ -2,7 +2,23 @@
  if(window.__fb)return;
  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
  const clean=s=>(s||'').replace(/[͏​-‏⁠﻿]/g,'').replace(/[ \t ]+/g,' ').replace(/ *\n */g,'\n').trim();
- const vtext=root=>{const w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);const o=[];let n;while(n=w.nextNode()){const t=n.nodeValue;if(!t||!t.trim()||t.includes('͏'))continue;const p=n.parentElement;if(!p||p.closest('blockquote'))continue;const c=t.replace(/[​-‏⁠﻿]/g,'').replace(/ /g,' ').trim();if(c)o.push(c);}return o;};
+ const vtext=(root,visibleOnly=false,includeAriaHidden=false,preserveSpace=false)=>{
+  const w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT),o=[];let n;
+  while(n=w.nextNode()){
+   const t=n.nodeValue,p=n.parentElement;if(!t||(!preserveSpace&&!t.trim())||(!visibleOnly&&t.includes('͏'))||!p||!visibleOnly&&p.closest('blockquote'))continue;
+   if(visibleOnly){
+    if(p.closest('[hidden]')||!includeAriaHidden&&p.closest('[aria-hidden="true"]'))continue;
+    const shown=p.checkVisibility?p.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}):p.getClientRects().length&&getComputedStyle(p).visibility==='visible';
+    if(!shown){
+     if(getComputedStyle(p).display!=='contents')continue;
+     let hidden=false;for(let e=p;e;e=e.parentElement){const s=getComputedStyle(e);if(s.display==='none'||s.visibility!=='visible'||Number(s.opacity)===0){hidden=true;break}}
+     if(hidden)continue;const r=document.createRange();r.selectNodeContents(n);if(!r.getClientRects().length)continue;
+    }
+   }
+   const c=t.replace(/[͏​-‏⁠﻿]/g,'').replace(/ /g,' ');if(preserveSpace?c:c.trim())o.push(preserveSpace?c:c.trim());
+  }
+  return o;
+ };
  const waitFor=async(f,ms=10000,step=60)=>{const t=Date.now();for(;;){let v;try{v=await f()}catch(e){}if(v)return v;if(Date.now()-t>ms)return null;await sleep(step);}};
  const visible=e=>e.isConnected&&e.getClientRects().length&&getComputedStyle(e).visibility==='visible';
  const enabled=e=>!e.matches(':disabled')&&e.closest('[aria-disabled="true" i],[aria-disabled="false" i]')?.getAttribute('aria-disabled').toLowerCase()!=='true';

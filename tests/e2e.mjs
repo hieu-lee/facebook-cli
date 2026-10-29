@@ -8,13 +8,14 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {createHash} from 'node:crypto';
+import {createServer} from 'node:net';
 const exec=promisify(execFile),root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const out=path.resolve(process.env.E2E_OUTPUT||path.join(root,'target/e2e'));
 await mkdir(out,{recursive:true});
 const temp=await mkdtemp(path.join(tmpdir(),'fb-e2e-'));
 const chrome=process.env.CHROME||({'darwin':'/Applications/Google Chrome.app/Contents/MacOS/Google Chrome','win32':'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'}[process.platform]||'google-chrome');
 const child=spawn(chrome,['--headless=new','--no-sandbox','--disable-gpu','--no-first-run','--remote-debugging-port=0','--user-data-dir='+path.join(temp,'chrome'),'about:blank'],{stdio:'ignore'});
-let socket,env,cancelHoverStarted=false,closed=false,storySeenRequests=0;const report=[];let id=0;const pending=new Map(),detached=new Set(),targetSessions=new Map();
+let socket,env,cancelHoverStarted=false,closed=false,storySeenRequests=0,photoQueryRequests=0,photoDetailRequests=0,mediaStallRequests=0;const report=[];let id=0;const pending=new Map(),detached=new Set(),targetSessions=new Map();
 class TargetClosed extends Error {}
 async function call(method,params={},sessionId){if(closed||detached.has(sessionId))throw new TargetClosed(method+' target closed');const n=++id;return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{pending.delete(n);reject(Error(method+' timed out in '+(sessionId||'browser')))},15000);pending.set(n,{method,sessionId,resolve:v=>{clearTimeout(timer);resolve(v)},reject:e=>{clearTimeout(timer);reject(e)}});socket.send(JSON.stringify({id:n,method,params,sessionId}))})}
 function cancelCalls(sessionId){const methods=[];for(const [n,p] of pending){if(sessionId&&p.sessionId!==sessionId)continue;pending.delete(n);methods.push(p.method);p.reject(new TargetClosed(p.method+' target closed'))}if(methods.length)report.push({targetClosed:sessionId||'browser',cancelledMethods:methods})}
@@ -34,7 +35,7 @@ try{
  socket.onmessage=async ev=>{const m=JSON.parse(ev.data);if(m.id){const p=pending.get(m.id);if(p){pending.delete(m.id);m.error?p.reject(Error(m.error.message)):p.resolve(m.result)}return}try{
   if(m.method==='Target.detachedFromTarget'){detached.add(m.params.sessionId);cancelCalls(m.params.sessionId)}
   if(m.method==='Target.attachedToTarget'){const s=m.params.sessionId;targetSessions.set(m.params.targetInfo.targetId,s);report.push({attachedTarget:{type:m.params.targetInfo.type,url:m.params.targetInfo.url,waitingForDebugger:m.params.waitingForDebugger}});await call('Fetch.enable',{patterns:[{urlPattern:'*',requestStage:'Request'}]},s);if(m.params.waitingForDebugger)await call('Runtime.runIfWaitingForDebugger',{},s)}
-  if(m.method==='Fetch.requestPaused'){const u=new URL(m.params.request.url);if(u.pathname==='/fixture/story.webm'||u.pathname==='/fixture/cross-origin.webm'){const range=Object.entries(m.params.request.headers).find(([k])=>k.toLowerCase()==='range')?.[1]?.match(/^bytes=(\d+)-(\d*)$/);const start=range?Number(range[1]):0,end=range?.[2]?Math.min(Number(range[2]),storyVideo.length-1):storyVideo.length-1;const headers=[{name:'Content-Type',value:'video/webm'},{name:'Accept-Ranges',value:'bytes'}];if(range)headers.push({name:'Content-Range',value:`bytes ${start}-${end}/${storyVideo.length}`});await call('Fetch.fulfillRequest',{requestId:m.params.requestId,responseCode:range?206:200,responseHeaders:headers,body:storyVideo.subarray(start,end+1).toString('base64')},m.sessionId);return}if(u.pathname==='/fixture/redirect-away'||u.pathname==='/stories/login'){await call('Fetch.fulfillRequest',{requestId:m.params.requestId,responseCode:302,responseHeaders:[{name:'Location',value:u.pathname==='/stories/login'?'https://www.facebook.com/login':'https://example.test/login'}]},m.sessionId);return}if(u.pathname==='/fixture/cancel-start')cancelHoverStarted=true;const page=u.pathname.startsWith('/stories/fixture')?fixture.replace('const main=',`window.__serverStorySeen=${storySeenRequests>0};const main=`):fixture;let body=Buffer.from(['www.facebook.com','example.test'].includes(u.hostname)?page:'').toString('base64');if(u.pathname==='/api/graphql/'){const form=m.params.request.method==='GET'?u.searchParams:new URLSearchParams(m.params.request.postData);if((u.searchParams.get('doc_id')||form.get('doc_id'))==='111')storySeenRequests++;const p=JSON.parse(form.get('variables'));const mode=p?.receiptMode;body=Buffer.from(mode==='malformed'?'not json':JSON.stringify(p?{data:{story_create:{story:{url:mode==='external'?'https://example.test/fixture/posts/'+p.id:'https://www.facebook.com/fixture/posts/'+p.id,default_actor:{id:mode==='wrongActor'?'999':'12345'}}}}}:{errors:[{message:'fixture publish failed'}]})).toString('base64')}await call('Fetch.fulfillRequest',{requestId:m.params.requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'text/html; charset=utf-8'}],body},m.sessionId)}
+  if(m.method==='Fetch.requestPaused'){const u=new URL(m.params.request.url);if(u.pathname==='/media-stall')mediaStallRequests++;if(u.pathname==='/photo.php'&&u.searchParams.has('fbid'))photoDetailRequests++;if(u.pathname==='/fixture/story.webm'||u.pathname==='/fixture/cross-origin.webm'){const range=Object.entries(m.params.request.headers).find(([k])=>k.toLowerCase()==='range')?.[1]?.match(/^bytes=(\d+)-(\d*)$/);const start=range?Number(range[1]):0,end=range?.[2]?Math.min(Number(range[2]),storyVideo.length-1):storyVideo.length-1;const headers=[{name:'Content-Type',value:'video/webm'},{name:'Accept-Ranges',value:'bytes'}];if(range)headers.push({name:'Content-Range',value:`bytes ${start}-${end}/${storyVideo.length}`});await call('Fetch.fulfillRequest',{requestId:m.params.requestId,responseCode:range?206:200,responseHeaders:headers,body:storyVideo.subarray(start,end+1).toString('base64')},m.sessionId);return}if(u.pathname==='/fixture/redirect-away'||u.pathname==='/stories/login'){await call('Fetch.fulfillRequest',{requestId:m.params.requestId,responseCode:302,responseHeaders:[{name:'Location',value:u.pathname==='/stories/login'?'https://www.facebook.com/login':'https://example.test/login'}]},m.sessionId);return}if(u.pathname==='/fixture/cancel-start')cancelHoverStarted=true;const page=u.pathname.startsWith('/stories/fixture')?fixture.replace('const main=',`window.__serverStorySeen=${storySeenRequests>0};const main=`):fixture;let body=Buffer.from(['www.facebook.com','example.test'].includes(u.hostname)?page:'').toString('base64');if(u.pathname==='/api/graphql/'){const form=m.params.request.method==='GET'?u.searchParams:new URLSearchParams(m.params.request.postData);const docId=u.searchParams.get('doc_id')||form.get('doc_id');if(form.get('__crn')==='duplicate-b')await new Promise(resolve=>setTimeout(resolve,800));if(docId==='111')storySeenRequests++;if(docId==='27028962643386672')photoQueryRequests++;const p=JSON.parse(form.get('variables'));const mode=p?.receiptMode;body=Buffer.from(docId==='27028962643386672'?JSON.stringify({padding:form.get('__crn')==='large'?'x'.repeat(8*1024*1024+1):'',data:{node:{id:'collection',pageItems:{edges:[{node:{__typename:'TimelineAppCollectionItem',node:{__typename:'Photo',id:['ranked','missing-page','three'].includes(form.get('__crn'))?'1':form.get('__crn')==='extra-b'?'3':'2',viewer_image:{uri:form.get('__crn')==='empty'?'':form.get('__crn')==='rehydrate'?'https://fixture.fbcdn.net/media':form.get('__crn')==='ranked'?'https://top.fbcdn.net/media':form.get('__crn')==='expired'?'https://fresh.fbcdn.net/media':form.get('__crn')==='missing-page'?'https://late.fbcdn.net/media':form.get('__crn')==='invalid-later'?'https://allowed.fbcdn.net/media':form.get('__crn')==='three'?'https://third.fbcdn.net/media':'https://invalid.example/2.jpg'}}}},...(form.get('__crn')==='duplicate-a'?[{node:{__typename:'TimelineAppCollectionItem',node:{__typename:'Photo',id:'3',viewer_image:{uri:'https://invalid.example/3.jpg'}}}}]:[])],page_info:form.get('__crn')==='oversize'?{end_cursor:'x'.repeat(4097),has_next_page:true}:{end_cursor:'cursor2',has_next_page:false}}}}}):mode==='malformed'?'not json':JSON.stringify(p?{data:{story_create:{story:{url:mode==='external'?'https://example.test/fixture/posts/'+p.id:'https://www.facebook.com/fixture/posts/'+p.id,default_actor:{id:mode==='wrongActor'?'999':'12345'}}}}}:{errors:[{message:'fixture publish failed'}]})).toString('base64')}await call('Fetch.fulfillRequest',{requestId:m.params.requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'text/html; charset=utf-8'}],body},m.sessionId)}
  }catch(e){if(!(e instanceof TargetClosed)&&!e.message.includes('Session with given id not found'))report.push({harnessError:e.message,event:m.method,sessionId:m.sessionId||m.params.sessionId})}};
  report.push({runtime:{node:process.version,platform:process.platform,browser:await call('Browser.getVersion')}});
  await call('Target.setAutoAttach',{autoAttach:true,waitForDebuggerOnStart:true,flatten:true});
@@ -43,6 +44,99 @@ try{
  assert.match(await fb('status'),/logged in as 12345/);
  const failures=[];
  async function check(name,fn){if(process.env.E2E_ONLY&&!name.includes(process.env.E2E_ONLY))return;try{await fn();report.push({check:name,pass:true})}catch(e){failures.push(name);report.push({check:name,pass:false,error:e.message})}}
+ await check('search arbitrary clues and limit',async()=>{
+  const result=(await fb('search','Alice','--match',' paris ','--match','dai hoc','-n','1')).split('\n');
+  assert.equal(result.length,1);assert.match(result[0],/^Alice One\tu[a-z0-9]+\t.*Paris.*Đại học NEOMA$/);
+  await assert.rejects(()=>fb('stories',result[0].split('\t')[1]),/unsupported media host/);
+  assert.match(await fb('search','Alice','--match','Science Academy','-n','1'),/^Alice One\t/);
+  assert.match(await fb('search','Alice','--match','Mira','-n','1'),/^Mira\t/);
+  assert.match(await fb('search','Alice','--match','Visible College','-n','1'),/^Alice Three\t/);
+  const both=(await fb('search','Alice','--match','PARIS','--match','NEOMA','-n','2')).split('\n');
+  assert.deepEqual(both.map(row=>row.split('\t')[0]),['Alice One','Alice Two']);
+  assert.equal(await fb('search','Alice','--match','Secret University','-n','1'),'');
+  assert.equal(await fb('search','Alice','--match','Hidden College','-n','1'),'');
+  assert.equal(await fb('search','Alice','--match','Ghost College','-n','1'),'');
+  assert.match(await fb('search','Sparse','--match','Rare University','-n','1'),/^Sparse 16\tu[a-z0-9]+\tRare University$/);
+  assert.match(await fb('search','Recycled','--match','Rare University','-n','1'),/^Recycled 16\tu[a-z0-9]+\t/);
+  assert.match(await fb('search','Reveal','--match','Paris','-n','1'),/^Earlier\t/);
+  assert.match(await fb('search','Delayed','--match','Paris','-n','1'),/^Delayed\t/);
+  assert.match(await fb('search','Alias','--match','Paris','-n','1'),/^Marc\t/);
+  assert.match(await fb('search','Alias','--match','Academy','-n','1'),/^Marc\t/);
+  const emptyStart=performance.now();assert.equal(await fb('search','Empty','-n','1'),'');assert(performance.now()-emptyStart<10000);
+  assert.equal(await fb('search','Ambiguous','--match','Alice','-n','1'),'');
+  const start=performance.now();assert.equal(await fb('search','Ticker','--match','Missing','-n','1'),'');assert(performance.now()-start<18000);
+  const postRef=(await fb('search','Alice','--type','posts','-n','1')).split('\t')[1];await assert.rejects(()=>fb('stories',postRef),/need a profile URL or ref/);
+  await assert.rejects(()=>fb('stories','Alice Person'),/search.*profile ref/);
+  await assert.rejects(()=>fb('stories','Alice'),/search.*profile ref/);
+ });
+ await check('account story download remains protected',async()=>{
+  storySeenRequests=0;const dir=path.join(out,'account-stories');await mkdir(dir,{recursive:true});
+  await assert.rejects(()=>fb('stories','/media-user','--out',dir),/unsupported media host/);
+  assert.equal(storySeenRequests,0);assert.deepEqual(await readdir(dir),[]);
+  await assert.rejects(()=>fb('stories','/media-no-story','--out',dir),/no story visible/);
+  assert.equal(storySeenRequests,0);
+ });
+ await check('account photo pagination remains protected',async()=>{
+  storySeenRequests=0;photoQueryRequests=0;photoDetailRequests=0;const dir=path.join(out,'account-photos');await mkdir(dir,{recursive:true});
+  await assert.rejects(()=>fb('photos','/media-user','--out',dir,'-n','2'),/invalid media (?:URL|host)|unsupported media host/);
+  assert(photoQueryRequests>=1&&photoQueryRequests<=2);assert.equal(photoDetailRequests,0);assert.equal(storySeenRequests,0);assert.deepEqual(await readdir(dir),[]);
+  photoQueryRequests=0;
+  await assert.rejects(()=>fb('photos','/media-fetch','--out',dir,'-n','1'),/invalid media (?:URL|host)|unsupported media host/);
+  assert(photoQueryRequests>=1&&photoQueryRequests<=2);assert.equal(photoDetailRequests,0);assert.equal(storySeenRequests,0);
+  for(const route of ['/media-get-xhr','/media-get-fetch']){photoQueryRequests=0;await assert.rejects(()=>fb('photos',route,'--out',dir,'-n','1'),/invalid media (?:URL|host)|unsupported media host/);assert(photoQueryRequests>=1&&photoQueryRequests<=2)}
+  assert.equal(photoDetailRequests,0);assert.equal(storySeenRequests,0);photoQueryRequests=0;
+  await assert.rejects(()=>fb('photos','/media-overcursor','--all','--out',dir),/photo pagination blocked/);
+  assert.equal(photoQueryRequests,1);assert.equal(storySeenRequests,0);photoQueryRequests=0;
+  await assert.rejects(()=>fb('photos','/media-large','--all','--out',dir),/photo pagination blocked/);
+  assert.equal(photoQueryRequests,1);assert.equal(storySeenRequests,0);photoQueryRequests=0;
+  await assert.rejects(()=>fb('photos','/media-empty','--out',dir,'-n','1'),/invalid media (?:URL|host)|unsupported media host/);
+  assert(photoQueryRequests>=1&&photoQueryRequests<=2);assert.equal(photoDetailRequests,1);assert.equal(storySeenRequests,0);photoQueryRequests=0;
+  await assert.rejects(()=>fb('photos','/media-parallel','--all','--out',dir),/photo pagination blocked/);
+  assert.equal(photoQueryRequests,4);assert.equal(storySeenRequests,0);photoQueryRequests=0;
+  await assert.rejects(()=>fb('photos','/media-parallel-fetch','--all','--out',dir),/photo pagination blocked/);
+  assert.equal(photoQueryRequests,4);assert.equal(storySeenRequests,0);photoQueryRequests=0;
+  await assert.rejects(()=>fb('photos','/media-duplicate','--all','--out',dir),/photo pagination blocked/);
+  assert.equal(photoQueryRequests,2);assert.equal(storySeenRequests,0);photoQueryRequests=0;
+  await assert.rejects(()=>fb('photos','/media-extra','--all','--out',dir),/photo list incomplete/);
+  assert(photoQueryRequests>=2&&photoQueryRequests<=4);assert.equal(storySeenRequests,0);photoQueryRequests=0;
+  await assert.rejects(()=>fb('photos','/media-initial-extra','--all','--out',dir),/photo list incomplete/);
+  assert(photoQueryRequests>=1&&photoQueryRequests<=2);assert.equal(storySeenRequests,0);photoQueryRequests=0;
+  const preparingStart=performance.now();await assert.rejects(()=>fb('photos','/media-preparing','--all','--out',dir),/photo pagination blocked/);
+  assert(performance.now()-preparingStart>=600);assert(photoQueryRequests>=1&&photoQueryRequests<=2);assert.equal(storySeenRequests,0);
+  const beforeSlow=photoQueryRequests;await assert.rejects(()=>fb('photos','/media-slowlimit','--all','--out',dir),/photo pagination blocked/);
+  assert(photoQueryRequests-beforeSlow<=4);const afterSlow=photoQueryRequests;
+  for(const route of ['/media-null-vars','/media-null-fetch','/media-null-get'])await assert.rejects(()=>fb('photos',route,'--all','--out',dir),/photo pagination blocked/);
+  assert.equal(photoQueryRequests,afterSlow);
+  await assert.rejects(()=>fb('photos','/media-rotated','--all','--out',dir),/photo pagination blocked/);
+  assert.equal(photoQueryRequests,afterSlow);assert.equal(storySeenRequests,0);
+ });
+ await check('account media respects timeout',async()=>{
+  const previous=env;env={...env,FB_STATE:path.join(temp,'to'),FB_TIMEOUT:'2'};mediaStallRequests=0;
+  try{await fb('status');const start=performance.now();await assert.rejects(()=>fb('stories','/media-stall'),/timed out after 2s/);assert(mediaStallRequests>0);assert(performance.now()-start<8000)}finally{await fb('stop').catch(()=>{});env=previous}
+ });
+ await check('account media batch respects tab limit',async()=>{
+  const previous=env;env={...env,FB_STATE:path.join(temp,'slots'),FB_TABS:'1'};photoDetailRequests=0;
+  let maxContexts=0,sampling=null;const timer=setInterval(()=>{if(!sampling)sampling=call('Target.getBrowserContexts').then(r=>{maxContexts=Math.max(maxContexts,r.browserContextIds.length)}).finally(()=>sampling=null)},25);
+  try{
+   await fb('status');
+   const one=JSON.stringify(path.join(temp,'media-one')),two=JSON.stringify(path.join(temp,'media-two'));
+   await assert.rejects(()=>fb('batch',`photos /media-empty --out ${one} -n 1`,`photos /media-empty --out ${two} -n 1`),e=>{assert.equal((e.stdout.match(/! error:/g)||[]).length,2);return true});
+   assert.equal(photoDetailRequests,2);assert(maxContexts<=1,'protected contexts exceeded FB_TABS: '+maxContexts);
+  }finally{clearInterval(timer);if(sampling)await sampling;await fb('stop').catch(()=>{});env=previous}
+ });
+ await check('account photo uses later direct URL',async()=>{
+  const previous=env,connects=[];const proxy=createServer(socket=>{socket.once('data',data=>{const match=data.toString().match(/^CONNECT ([^ ]+) /);if(match)connects.push(match[1]);socket.end('HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n')})});
+  await new Promise(resolve=>proxy.listen(0,'127.0.0.1',resolve));const address=proxy.address();const proxyUrl='http://127.0.0.1:'+address.port;
+  env={...env,FB_STATE:path.join(temp,'hydrate'),FB_TABS:'1',HTTPS_PROXY:proxyUrl,https_proxy:proxyUrl,ALL_PROXY:'',all_proxy:'',NO_PROXY:'',no_proxy:''};photoDetailRequests=0;
+  try{await fb('status');await assert.rejects(()=>fb('photos','/media-rehydrate','--out',path.join(temp,'hydrate-out'),'-n','2'),/unsupported media host/);assert.deepEqual(connects,['fixture.fbcdn.net:443']);assert.equal(photoDetailRequests,1);
+   await assert.rejects(()=>fb('photos','/media-ranked','--out',path.join(temp,'ranked-out'),'-n','1'),/unsupported media host/);assert.deepEqual(connects,['fixture.fbcdn.net:443','top.fbcdn.net:443']);assert.equal(photoDetailRequests,2);
+   await assert.rejects(()=>fb('photos','/media-expired','--out',path.join(temp,'expired-out'),'-n','2'),/unsupported media host/);assert.deepEqual(connects,['fixture.fbcdn.net:443','top.fbcdn.net:443','expired.fbcdn.net:443','fresh.fbcdn.net:443']);assert.equal(photoDetailRequests,3);
+   await assert.rejects(()=>fb('photos','/media-initial-expired','--out',path.join(temp,'initial-expired-out'),'-n','1'),/media request failed/);assert.deepEqual(connects.slice(-2),['expired.fbcdn.net:443','fresh.fbcdn.net:443']);assert.equal(photoDetailRequests,4);
+   await assert.rejects(()=>fb('photos','/media-missing-page','--out',path.join(temp,'missing-page-out'),'-n','1'),/media request failed/);assert.equal(connects.at(-1),'late.fbcdn.net:443');assert.equal(photoDetailRequests,5);
+   await assert.rejects(()=>fb('photos','/media-invalid-later','--out',path.join(temp,'invalid-later-out'),'-n','2'),/unsupported media host/);assert.equal(connects.at(-1),'allowed.fbcdn.net:443');assert.equal(photoDetailRequests,6);
+   await assert.rejects(()=>fb('photos','/media-three-urls','--out',path.join(temp,'three-urls-out'),'-n','1'),/media request failed/);assert.deepEqual(connects.slice(-3),['first.fbcdn.net:443','second.fbcdn.net:443','third.fbcdn.net:443']);assert.equal(photoDetailRequests,7)}
+  finally{await fb('stop').catch(()=>{});env=previous;await new Promise(resolve=>proxy.close(resolve))}
+ });
  await check('protected story receipt and unread indicator',async()=>{
   const create=async(name,action)=>{const prior=new Set((await call('Target.getTargets')).targetInfos.map(t=>t.targetId));const snap=await fb('page',name,action,'https://www.facebook.com/stories/fixture');const target=(await call('Target.getTargets')).targetInfos.find(t=>!prior.has(t.targetId)&&t.url==='https://www.facebook.com/stories/fixture');assert(target,'story target exists');const session=targetSessions.get(target.targetId);assert(session,'fixture attached');return {snap,session,context:target.browserContextId}};
   const read=async(session,expression)=>(await call('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true},session)).result.value;
