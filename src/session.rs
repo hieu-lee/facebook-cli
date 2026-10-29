@@ -37,7 +37,7 @@ fn has_login(cookies: &[Value]) -> bool {
 /// Facebook cookies of the first browser context that holds a login (`all_contexts`: also the
 /// non-default ones, for import sources; a destination only counts its default context, where fb opens tabs). Chrome's default context
 /// follows its last-used profile; other profiles appear as extra browser contexts.
-async fn fb_cookies(cdp: &Cdp, all_contexts: bool) -> Res<Vec<Value>> {
+pub(crate) async fn fb_cookies(cdp: &Cdp, all_contexts: bool) -> Res<Vec<Value>> {
     let mut contexts: Vec<Option<String>> = vec![None];
     if all_contexts && let Ok(r) = cdp.call(None, "Target.getBrowserContexts", json!({})).await {
         contexts.extend(
@@ -78,7 +78,7 @@ pub async fn logged_in(cdp: &Cdp) -> bool {
 }
 
 /// A cookie as returned by `Storage.getCookies`, reduced to what `Storage.setCookies` accepts.
-fn cookie_param(c: &Value) -> Value {
+pub(crate) fn cookie_param(c: &Value) -> Value {
     let mut o = serde_json::Map::new();
     for k in [
         "name", "value", "domain", "path", "secure", "httpOnly", "sameSite", "priority",

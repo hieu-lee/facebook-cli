@@ -1,6 +1,6 @@
 use crate::cdp::{Cdp, Res};
 use serde_json::{Value, json};
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
@@ -29,6 +29,27 @@ pub struct Tab {
     /// what the tab last showed (e.g. "messages"); lets ops reuse a warm page
     pub kind: String,
     permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    context: Option<StoryContext>,
+}
+
+impl Tab {
+    pub fn story_connection(&self) -> Option<Arc<Cdp>> {
+        self.context.as_ref().map(|context| context.cdp.clone())
+    }
+}
+
+struct StoryContext {
+    id: String,
+    cdp: Arc<Cdp>,
+    armed: bool,
+}
+
+impl Drop for StoryContext {
+    fn drop(&mut self) {
+        if self.armed {
+            self.cdp.close();
+        }
+    }
 }
 
 /// A tab that is dropped while an op still holds it (cancel/timeout/panic) may be mid-script: close it.
@@ -38,18 +59,32 @@ impl Drop for Tab {
             && let Some(b) = self.home.upgrade()
         {
             let target = std::mem::take(&mut self.target);
+            let context_owned = self.context.is_some();
             tokio::spawn(async move {
                 b.owned.lock().await.remove(&target);
-                let _ = b
-                    .cdp
-                    .call(None, "Target.closeTarget", json!({"targetId":target}))
-                    .await;
+                if !context_owned {
+                    let _ = b
+                        .cdp
+                        .call(None, "Target.closeTarget", json!({"targetId":target}))
+                        .await;
+                }
             });
         }
     }
 }
 
 pub static UA: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+pub fn evaluation_result(r: &Value) -> Res<&Value> {
+    if let Some(ex) = r.get("exceptionDetails") {
+        let msg = ex["exception"]["description"]
+            .as_str()
+            .or(ex["text"].as_str())
+            .unwrap_or("js exception");
+        return Err(format!("js: {msg}"));
+    }
+    Ok(&r["result"])
+}
 
 pub struct Browser {
     pub cdp: Arc<Cdp>,
@@ -63,7 +98,7 @@ pub struct Browser {
     /// this browser was launched with a visible window (`login --visible`)
     pub visible: std::sync::atomic::AtomicBool,
     idle: Mutex<Vec<Tab>>,
-    owned: Mutex<HashSet<String>>,
+    owned: Mutex<HashMap<String, Option<String>>>,
 }
 
 const MAX_IDLE: usize = 6;
@@ -133,7 +168,7 @@ impl Browser {
             generation: Default::default(),
             visible: Default::default(),
             idle: Mutex::new(Vec::new()),
-            owned: Mutex::new(HashSet::new()),
+            owned: Mutex::new(HashMap::new()),
         })
     }
 
@@ -193,7 +228,7 @@ impl Browser {
         let me = self.clone();
         tokio::spawn(async move {
             // no inner timeout: cancelling here could drop the createTarget reply and orphan the tab
-            let mut tab = me.create_tab().await?;
+            let mut tab = me.create_tab(None).await?;
             tab.permit = permit;
             Ok(tab)
         })
@@ -201,17 +236,94 @@ impl Browser {
         .map_err(|e| e.to_string())?
     }
 
-    async fn create_tab(self: &Arc<Self>) -> Res<Tab> {
-        let r = self
-            .cdp
-            .call(
-                None,
-                "Target.createTarget",
-                json!({"url":"about:blank","newWindow":true}),
+    pub async fn new_story_tab(self: &Arc<Self>) -> Res<Tab> {
+        let me = self.clone();
+        tokio::spawn(async move {
+            let owner = tokio::time::timeout(Duration::from_secs(10), crate::connect::attach())
+                .await
+                .map_err(|_| "connecting story session timed out".to_string())?
+                .ok_or("could not connect a story session")?;
+            let created = tokio::time::timeout(
+                Duration::from_secs(10),
+                owner.call(
+                    None,
+                    "Target.createBrowserContext",
+                    json!({"disposeOnDetach":true}),
+                ),
             )
-            .await?;
+            .await;
+            let r = match created {
+                Ok(Ok(result)) => result,
+                Ok(Err(error)) => {
+                    owner.close();
+                    return Err(error);
+                }
+                Err(_) => {
+                    owner.close();
+                    return Err("creating story session timed out".into());
+                }
+            };
+            let id = r["browserContextId"]
+                .as_str()
+                .ok_or("no story browser context")?
+                .to_owned();
+            let context = StoryContext {
+                id,
+                cdp: owner,
+                armed: true,
+            };
+            let setup = async {
+                let cookies = crate::session::fb_cookies(&me.cdp, false).await?;
+                let cookies: Vec<_> = cookies
+                    .iter()
+                    .filter(|c| {
+                        let domain = c["domain"].as_str().unwrap_or("").trim_start_matches('.');
+                        (domain == "facebook.com" || domain.ends_with(".facebook.com"))
+                            && c["partitionKey"].is_null()
+                            && c["partitionKeyOpaque"] != true
+                    })
+                    .collect();
+                if !cookies.iter().any(|c| crate::session::is_login_cookie(c)) {
+                    return Err(crate::session::NOT_LOGGED_IN.into());
+                }
+                let params: Vec<_> = cookies
+                    .into_iter()
+                    .map(crate::session::cookie_param)
+                    .collect();
+                context
+                    .cdp
+                    .call(
+                        None,
+                        "Storage.setCookies",
+                        json!({"browserContextId":context.id,"cookies":params}),
+                    )
+                    .await?;
+                Ok::<(), String>(())
+            };
+            tokio::time::timeout(Duration::from_secs(10), setup)
+                .await
+                .map_err(|_| "preparing story session timed out".to_string())??;
+            tokio::time::timeout(Duration::from_secs(10), me.create_tab(Some(context)))
+                .await
+                .map_err(|_| "creating story tab timed out".to_string())?
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+
+    async fn create_tab(self: &Arc<Self>, context: Option<StoryContext>) -> Res<Tab> {
+        let params = match &context {
+            Some(context) => {
+                json!({"url":"about:blank","newWindow":true,"browserContextId":context.id})
+            }
+            None => json!({"url":"about:blank","newWindow":true}),
+        };
+        let r = self.cdp.call(None, "Target.createTarget", params).await?;
         let target = r["targetId"].as_str().ok_or("no targetId")?.to_string();
-        self.owned.lock().await.insert(target.clone());
+        self.owned
+            .lock()
+            .await
+            .insert(target.clone(), context.as_ref().map(|c| c.id.clone()));
         // the guard exists before the next await, so cancellation closes the target
         let mut tab = Tab {
             target,
@@ -221,6 +333,7 @@ impl Browser {
             gen_at: self.generation.load(std::sync::atomic::Ordering::SeqCst),
             kind: String::new(),
             permit: None,
+            context,
         };
         // bounded once the guard exists: a stalled setup closes the target and frees the slot
         let setup = async {
@@ -300,19 +413,37 @@ impl Browser {
         t.armed = false;
         t.permit = None;
         self.owned.lock().await.remove(&t.target);
-        let _ = self
-            .cdp
-            .call(None, "Target.closeTarget", json!({"targetId":t.target}))
+        if let Some(mut context) = t.context.take() {
+            let _ = tokio::time::timeout(
+                Duration::from_secs(4),
+                context.cdp.call(
+                    None,
+                    "Target.disposeBrowserContext",
+                    json!({"browserContextId":context.id}),
+                ),
+            )
             .await;
+            context.armed = false;
+            context.cdp.close();
+        } else {
+            let _ = self
+                .cdp
+                .call(None, "Target.closeTarget", json!({"targetId":t.target}))
+                .await;
+        }
     }
 
     pub async fn close_all(&self) {
-        let ids: Vec<String> = self.owned.lock().await.drain().collect();
-        for id in ids {
-            let _ = self
-                .cdp
-                .call(None, "Target.closeTarget", json!({"targetId":id}))
-                .await;
+        let ids: Vec<_> = self.owned.lock().await.drain().collect();
+        for (id, context) in ids {
+            let (method, params) = match context {
+                Some(context) => (
+                    "Target.disposeBrowserContext",
+                    json!({"browserContextId":context}),
+                ),
+                None => ("Target.closeTarget", json!({"targetId":id})),
+            };
+            let _ = self.cdp.call(None, method, params).await;
         }
     }
 
@@ -351,6 +482,9 @@ impl Browser {
             .await
             .unwrap_or(Value::Bool(false));
         if out == Value::Bool(true) {
+            if t.context.is_some() {
+                return Err("story session was rejected or challenged by Facebook".into());
+            }
             self.session_ok
                 .store(false, std::sync::atomic::Ordering::SeqCst);
             self.stale_session
@@ -369,14 +503,10 @@ impl Browser {
                 json!({"expression":expr,"awaitPromise":true,"returnByValue":true}),
             )
             .await?;
-        if let Some(ex) = r.get("exceptionDetails") {
-            let msg = ex["exception"]["description"]
-                .as_str()
-                .or(ex["text"].as_str())
-                .unwrap_or("js exception");
-            return Err(format!("js: {msg}"));
-        }
-        Ok(r["result"].get("value").cloned().unwrap_or(Value::Null))
+        Ok(evaluation_result(&r)?
+            .get("value")
+            .cloned()
+            .unwrap_or(Value::Null))
     }
 
     pub async fn insert_text(&self, t: &Tab, text: &str) -> Res<()> {

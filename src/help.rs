@@ -23,7 +23,8 @@ ACT
   delete <post>                      your own posts only
 BROWSER (fallback; named tabs are separate from normal commands)
   page <name> open <url> | snapshot [filter]   bounded text + refs; max 6 pages
-  page <name> click <ref> | fill <ref> <text> | key <Ctrl+a|Enter|...> | scroll <dx> <dy>
+  page <name> stories [story-url]     experimental story page; blocks known seen requests, not a privacy guarantee
+  page <name> click <ref> | fill <ref> <text> | key <Ctrl+a|Enter|...> | scroll <dx> <dy> | record <file.webm> [seconds [offset]] --force
   page <name> upload <ref> <files>... | eval <js> | cdp <method> <json> | shot <file> | close
   Form/editor values are omitted; use eval for explicit value reads.
   Refs expire on snapshot/navigation/action. ok means input dispatched, not saved; read back to confirm.

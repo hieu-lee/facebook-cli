@@ -126,6 +126,37 @@ different names run independently, commands for one name serialize. Names live
 until close or daemon shutdown. Reopen after reconnect, account change, or an
 uncertain action failure. No action is automatically replayed.
 
+### Stories (experimental)
+
+```sh
+fb page stories stories                     # open the Facebook story tray
+fb page stories snapshot                    # find a story's control
+fb page stories click e...                  # use a ref from the snapshot
+fb page stories shot story.jpg              # view the current frame
+fb page stories record story.webm 15 0 --force  # record up to 30 seconds, starting at 0
+fb page stories close
+```
+
+Use `fb page stories stories https://www.facebook.com/stories/...` to open a
+specific story. For GraphQL, the page permits only a known story-bucket query ID.
+It blocks other POSTs and non-GET/HEAD methods, including the known story-seen
+mutation; GET/HEAD requests outside GraphQL remain allowed. Other queries are blocked,
+so the story tray or viewer may fail to load, especially if Facebook changes its
+query IDs. It disables workers and sockets and restricts actions that could
+disable those protections. **This is not a guarantee of anonymity:** Facebook
+can record views by other means or change its protocol. It has not been verified
+against a live story owner's viewer list. The blue unread border can
+change locally, so it is not proof that Facebook did or did not record a view.
+Each story page uses a temporary browser context with a copy of the Facebook
+cookies from the CLI's profile; Chrome removes it when the page closes or the
+CLI disconnects. Other browser storage is not copied.
+Omit the optional offset to record from the video's current position.
+The opening response is compact; `snapshot` returns the full bounded page view.
+WebM recordings contain the underlying video and audio only. Captions, stickers,
+and other page overlays are not included. Inspect a screenshot before recording:
+`--force` is required because it can record a hidden video. With multiple videos,
+the command selects the foremost one only when their order is clear.
+
 Snapshots contain bounded text and TSV-safe control labels. Native form values and text-editor
 contents are omitted (`[redacted]`) regardless of labels; use a targeted `eval` when
 an explicit value read is needed. URLs, labels and page text can still contain private data:
