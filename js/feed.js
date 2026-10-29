@@ -1,5 +1,5 @@
 (()=>{
- const {TIME,SPON,vtext,num,postCards,postText,canon,waitFor}=window.__fb;
+ const {TIME,SPON,vtext,num,postCards,postText,canon,waitFor,clean}=window.__fb;
  let seen=new WeakMap();let seq=0,current=null;
  const timeNode=(u,tt)=>{const w=document.createTreeWalker(u,NodeFilter.SHOW_TEXT);let n;while(n=w.nextNode()){const t=n.nodeValue;if(!t||t.includes('\u034f')||n.parentElement.closest('blockquote'))continue;if(t.replace(/[\u200b-\u200f\u2060\ufeff]/g,'').trim()===tt)return n;}return null;};
  const decode=a=>{
@@ -14,8 +14,17 @@
  const g=(u,r)=>u.querySelector('[data-ad-rendering-role='+r+']');
  const render=u=>[u.getAttribute('aria-posinset')||'',g(u,'profile_name')?.innerText||'',g(u,'profile_name')?.querySelector('a')?.getAttribute('href')||'',postText(g(u,'story_message')),timeLink(u)?.innerText||''].join('\0');
  const POST=/\/posts\/|pfbid|\/permalink|story_fbid|multi_permalinks|\/videos\/|\/reel\/|\/photo\/?\?fbid/;
- /* a card is remembered under every rendering it had, since revealing its link can change it */
- const mark=(u,...rs)=>{const s=seen.get(u)||new Set();rs.forEach(r=>s.add(r));seen.set(u,s);};
+ /* which post a card shows: author and text only, since its time and links fill in later and
+    would make the same post look new */
+ const key=u=>{const a=g(u,'profile_name')?.querySelector('a');let p='';try{p=a?new URL(a.getAttribute('href'),location.href).pathname:''}catch(e){}return p+'\0'+postText(g(u,'story_message'))};
+ /* a share or reel without a message of its own: its attachment title, else a photo description.
+    Attachment fields can hold scrambled single-word tokens instead of text, so require a space. */
+ const attached=u=>{
+  const t=['title','description'].map(r=>clean(g(u,r)?.innerText)).filter(s=>/\s/.test(s));
+  if(t.length)return t.join(' ');
+  const alt=[...u.querySelectorAll('img')].find(i=>i.width>=100&&i.alt&&!/^No photo description/i.test(i.alt))?.alt;
+  return alt?'Photo: '+clean(alt):'';
+ };
  window.__fbFeed={
   /* returns every new post that needs no hover, then at most one that does: the caller must
      hover that last one before the page scrolls again */
@@ -26,18 +35,16 @@
     if(!name)continue;
     /* skip read cards before any waiting: ads never reveal, so waiting on every mounted card
        each step made one page of posts take a minute */
-    const before=render(u);
-    if(seen.get(u)?.has(before))continue;
+    if(seen.get(u)===key(u))continue;
     /* Facebook leaves the timestamp link as ?__cft__ until it is hovered or focused; focus needs no
-       coordinates. It fills the href in asynchronously, so wait for it before keying the card,
-       or the revealed href makes the same card look like a new post on the next step. */
+       coordinates. It fills the href in asynchronously, so wait for it before reading the link. */
     const hidden=timeLink(u);
     if(hidden&&/^\?/.test(hidden.getAttribute('href'))){
      hidden.focus({preventScroll:true});
      await waitFor(()=>!/^\?/.test(hidden.getAttribute('href')||''),400,30);
      hidden.blur();
     }
-    mark(u,before,render(u));
+    seen.set(u,key(u));
     const real=hidden?.getAttribute('href')||'';
     const url=!/^\?/.test(real)&&POST.test(real)&&!/comment_id/.test(real)?canon(real):'';
     const pos=++seq;
@@ -46,15 +53,15 @@
     const dot=ch.indexOf('·');
     const head=ch.slice(0,ti>=0?ti:(dot>0?dot:1)).filter(c=>c!=='·'&&c.length>1);
     const msg=g(u,'story_message');
-    /* an unfilled card has no author or text yet; once rendered it no longer matches its mark */
-    if(!head.length&&!postText(msg))continue;
+    /* an unfilled card has no author or text yet: read it again once Facebook renders it */
+    if(!head.length&&!postText(msg)){seen.delete(u);continue}
     let hover=null,dt=null;
     const tlk=timeLink(u);
     if(tlk){if(!url)tlk.scrollIntoView({block:'center'});dt=decode(tlk);if(dt)hover=[dt.x,dt.y];}
     if(url)hover=null;
     else if(!hover){const tn=ti<0?null:timeNode(u,ch[ti]);if(tn){tn.parentElement.scrollIntoView({block:'center'});const rg=document.createRange();rg.selectNodeContents(tn);const r=rg.getBoundingClientRect();if(r.width>0)hover=[r.x+r.width/2,r.y+r.height/2];}}
     const alt=[...u.querySelectorAll('a[href]')].map(a=>a.getAttribute('href')).find(h=>POST.test(h)&&!/comment_id/.test(h));
-    out.push({pos,url,alt:alt?canon(alt):'',author:head.join(' / '),time:dt&&dt.text?dt.text:(ti<0?'':ch[ti]),text:postText(msg),
+    out.push({pos,url,alt:alt?canon(alt):'',author:head.join(' / '),time:dt&&dt.text?dt.text:(ti<0?'':ch[ti]),text:postText(msg)||attached(u),
       r:num(g(u,'like_button')),c:num(g(u,'comment_button')),s:num(g(u,'share_button')),
       ad:ch.slice(0,12).some(c=>SPON.test(c)),hover});
     if(url||!hover)continue;
@@ -68,7 +75,7 @@
    const a=e&&e.closest('a[href]');
    const pending=current&&current.pos===pos?current:null;current=null;const u=pending&&pending.u;
    if(!u||pending.render!==render(u)||pending.name!==g(u,'profile_name')||pending.msg!==g(u,'story_message')){if(u)seen.delete(u);return null}
-   mark(u,render(u));
+   seen.set(u,key(u));
    return a&&u&&u.contains(a)?canon(a.href):'';
   },
   expand(){
