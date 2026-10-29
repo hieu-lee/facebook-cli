@@ -38,7 +38,7 @@
    quiet=0;
    const root=confirm||d;
    const re=confirm?/^(Don't restore messages|Do not restore(?: messages)?|Không khôi phục tin nhắn|Ne pas restaurer(?: les messages)?|Continuer sans restaurer)$/i:/^(Close|Đóng|Fermer)$/i;
-   const b=[...root.querySelectorAll('button,[role=button]')].find(b=>re.test(clean(b.getAttribute('aria-label')||b.innerText)));
+   const b=[...root.querySelectorAll('button,[role=button]')].find(b=>visible(b)&&re.test(clean(b.getAttribute('aria-label')||b.innerText)));
    if(Date.now()>deadline)throw Error('Messenger history prompt blocked input; use `fb unlock` or inspect with `fb page`');
    if(b&&!clicked.has(b)){b.click();clicked.add(b);acted=true;}
    await sleep(60);
