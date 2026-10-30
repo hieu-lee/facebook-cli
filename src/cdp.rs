@@ -269,6 +269,45 @@ impl Cdp {
     }
 
     pub async fn call(&self, session: Option<&str>, method: &str, params: Value) -> Res<Value> {
+        self.send_frame(|id| {
+            serde_json::to_string(&Request {
+                id,
+                method,
+                params: &params,
+                session,
+            })
+            .map_err(|e| e.to_string())
+        })
+        .await
+    }
+
+    /// Like `call`, with `params` given as pieces of already-valid JSON whose concatenation is the
+    /// params object. For one huge string the caller has proven needs no escaping (base64): the
+    /// frame is assembled in a single allocation, without copying it into a `Value` or rescanning it.
+    pub async fn call_json(
+        &self,
+        session: Option<&str>,
+        method: &str,
+        params: &[&str],
+    ) -> Res<Value> {
+        let size = params.iter().map(|p| p.len()).sum::<usize>();
+        self.send_frame(|id| {
+            let mut frame = String::with_capacity(size + 256);
+            frame.push_str(&format!(
+                "{{\"id\":{id},\"method\":{},\"params\":",
+                serde_json::Value::from(method)
+            ));
+            params.iter().for_each(|p| frame.push_str(p));
+            if let Some(s) = session {
+                frame.push_str(&format!(",\"sessionId\":{}", serde_json::Value::from(s)));
+            }
+            frame.push('}');
+            Ok(frame)
+        })
+        .await
+    }
+
+    async fn send_frame(&self, frame: impl FnOnce(u64) -> Res<String>) -> Res<Value> {
         let id = self.next.fetch_add(1, Ordering::SeqCst);
         let (tx, rx) = oneshot::channel();
         {
@@ -283,14 +322,7 @@ impl Cdp {
             pending: self.pending.clone(),
             id,
         };
-        let msg = serde_json::to_string(&Request {
-            id,
-            method,
-            params: &params,
-            session,
-        })
-        .map_err(|e| e.to_string())?;
-        if self.out.send(Message::text(msg)).is_err() {
+        if self.out.send(Message::text(frame(id)?)).is_err() {
             return Err("chrome connection closed".into());
         }
         rx.await
@@ -390,6 +422,50 @@ mod tests {
             (e.method.as_str(), e.session.as_deref()),
             ("Page.loadEventFired", Some("S1"))
         );
+    }
+
+    #[tokio::test]
+    async fn call_json_assembles_the_same_frame_as_call() {
+        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (s, _) = l.accept().await.unwrap();
+            let ws = tokio_tungstenite::accept_async(s).await.unwrap();
+            let (mut tx, mut rx) = ws.split();
+            while let Some(Ok(Message::Text(t))) = rx.next().await {
+                let v: Value = serde_json::from_str(t.as_str()).unwrap();
+                let reply = json!({"id": v["id"], "result": {"frame": v}});
+                let _ = tx.send(Message::text(reply.to_string())).await;
+            }
+        });
+        let tcp = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        let cdp = Cdp::connect(tcp, &format!("ws://127.0.0.1:{port}/"))
+            .await
+            .unwrap();
+        let parts = [
+            "{\"expression\":\"f('",
+            "QUJD",
+            "')\",\"awaitPromise\":true}",
+        ];
+        let raw = cdp
+            .call_json(Some("S"), "Runtime.evaluate", &parts)
+            .await
+            .unwrap();
+        let params = json!({"expression": "f('QUJD')", "awaitPromise": true});
+        let typed = cdp
+            .call(Some("S"), "Runtime.evaluate", params)
+            .await
+            .unwrap();
+        let (raw, typed) = (&raw["frame"], &typed["frame"]);
+        assert_eq!(raw["params"], typed["params"]);
+        assert_eq!(raw["method"], typed["method"]);
+        assert_eq!(raw["sessionId"], "S");
+        assert_ne!(raw["id"], typed["id"]);
+        let bare = cdp.call_json(None, "Page.enable", &["{}"]).await.unwrap();
+        assert_eq!(bare["frame"]["params"], json!({}));
+        assert!(bare["frame"].get("sessionId").is_none());
     }
 
     #[tokio::test]

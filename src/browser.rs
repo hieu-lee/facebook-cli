@@ -547,6 +547,28 @@ impl Browser {
             .unwrap_or(Value::Null))
     }
 
+    /// `eval` for a large `expr` that needs no JSON escaping (no `"`, `\` or control characters),
+    /// e.g. a base64 literal: it goes into the request frame as is.
+    pub async fn eval_unescaped(&self, t: &Tab, expr: &str) -> Res<Value> {
+        debug_assert!(expr.bytes().all(|c| c >= 0x20 && c != b'"' && c != b'\\'));
+        let r = self
+            .cdp
+            .call_json(
+                Some(&t.session),
+                "Runtime.evaluate",
+                &[
+                    "{\"expression\":\"",
+                    expr,
+                    "\",\"awaitPromise\":true,\"returnByValue\":true}",
+                ],
+            )
+            .await?;
+        Ok(evaluation_result(&r)?
+            .get("value")
+            .cloned()
+            .unwrap_or(Value::Null))
+    }
+
     pub async fn insert_text(&self, t: &Tab, text: &str) -> Res<()> {
         self.cdp
             .call(Some(&t.session), "Input.insertText", json!({"text":text}))

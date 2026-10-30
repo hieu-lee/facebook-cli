@@ -96,12 +96,12 @@ fn ax_tree(nodes: usize) -> String {
     json!({"nodes": nodes}).to_string()
 }
 
-struct Sample {
-    ms: f64,
-    cpu_ms: f64,
-    allocs: usize,
-    bytes: usize,
-    peak: isize,
+pub(crate) struct Sample {
+    pub(crate) ms: f64,
+    pub(crate) cpu_ms: f64,
+    pub(crate) allocs: usize,
+    pub(crate) bytes: usize,
+    pub(crate) peak: isize,
 }
 
 /// User+system CPU of the whole process (the fake Chrome's thread included; it is the same in every variant).
@@ -113,7 +113,7 @@ fn process_cpu_ms() -> f64 {
 }
 
 /// Wall time, CPU time, allocation count/bytes and peak live bytes above the start for `f`.
-fn measure(f: impl FnOnce()) -> Sample {
+pub(crate) fn measure(f: impl FnOnce()) -> Sample {
     let (a0, b0, l0) = (
         ALLOCS.load(Relaxed),
         BYTES.load(Relaxed),
