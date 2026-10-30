@@ -13,11 +13,19 @@
  const timeLink=u=>[...u.querySelectorAll('a[href]')].find(a=>/^(\?|.*(?:\/posts\/|story_fbid|\/permalink))/.test(a.getAttribute('href')));
  const g=(u,r)=>u.querySelector('[data-ad-rendering-role='+r+']');
  const more=msg=>msg?[...msg.querySelectorAll('[role=button],button')].filter(b=>window.__fb.visible(b)&&/^(See more|Xem thêm|Voir plus|Afficher la suite)$/i.test(clean(b.innerText))):[];
- const render=u=>[u.getAttribute('aria-posinset')||'',g(u,'profile_name')?.innerText||'',g(u,'profile_name')?.querySelector('a')?.getAttribute('href')||'',postText(g(u,'story_message')),timeLink(u)?.innerText||''].join('\0');
+ const render=u=>[u.getAttribute('aria-posinset')||'',g(u,'profile_name')?.innerText||'',g(u,'profile_name')?.querySelector('a')?.getAttribute('href')||'',postText(g(u,'story_message')),attached(u),timeLink(u)?.innerText||''].join('\0');
  const POST=/\/posts\/|pfbid|\/permalink|story_fbid|multi_permalinks|\/videos\/|\/reel\/|\/photo\/?\?fbid/;
- /* which post a card shows: author and text only, since its time and links fill in later and
-    would make the same post look new */
- const key=u=>{const a=g(u,'profile_name')?.querySelector('a');let p='';try{p=a?new URL(a.getAttribute('href'),location.href).pathname:''}catch(e){}return p+'\0'+postText(g(u,'story_message'))};
+ /* which post a card shows: position, author and text; its time and links fill in later and would
+    make the same post look new, while the position tells a recycled card's new post from the old */
+ const key=u=>{const a=g(u,'profile_name')?.querySelector('a');let p='';try{const l=a&&new URL(a.getAttribute('href'),location.href);p=l?l.pathname+(l.searchParams.get('id')||''):''}catch(e){}return (u.getAttribute('aria-posinset')||'')+'\0'+p+'\0'+postText(g(u,'story_message'))};
+ /* the permalink a timestamp link has revealed, else '' */
+ const permalink=a=>{const h=a?.getAttribute('href')||'';return !/^\?/.test(h)&&POST.test(h)&&!/comment_id/.test(h)?canon(h):''};
+ /* a card is read again when its content changed or its revealed permalink became another one:
+    cards without a position (profiles, groups) can be recycled for another post with the same
+    author and caption. A link that was not revealed yet is no identity, and revealing one is not a change. */
+ const linkId=u=>permalink(timeLink(u));
+ const unread=u=>{const s=seen.get(u);if(!s)return true;const l=linkId(u);if(s.k!==key(u)||(s.l&&s.l!==l))return true;s.l=l;return false};
+ const mark=u=>seen.set(u,{k:key(u),l:linkId(u)});
  /* a share or reel without a message of its own: its attachment title, else a photo description.
     Attachment fields can hold scrambled single-word tokens instead of text, so require a space. */
  const attached=u=>{
@@ -38,18 +46,20 @@
     if(more(g(u,'story_message')).length)continue;
     /* skip read cards before any waiting: ads never reveal, so waiting on every mounted card
        each step made one page of posts take a minute */
-    if(seen.get(u)===key(u))continue;
+    if(!unread(u))continue;
     /* Facebook leaves the timestamp link as ?__cft__ until it is hovered or focused; focus needs no
        coordinates. It fills the href in asynchronously, so wait for it before reading the link. */
     const hidden=timeLink(u);
     if(hidden&&/^\?/.test(hidden.getAttribute('href'))){
+     const was=key(u)+'\0'+attached(u);
      hidden.focus({preventScroll:true});
      await waitFor(()=>!/^\?/.test(hidden.getAttribute('href')||''),400,30);
      hidden.blur();
+     /* the card may have been recycled for another post while we waited: read it again next step */
+     if(!u.contains(hidden)||key(u)+'\0'+attached(u)!==was)continue;
     }
-    seen.set(u,key(u));
-    const real=hidden?.getAttribute('href')||'';
-    const url=!/^\?/.test(real)&&POST.test(real)&&!/comment_id/.test(real)?canon(real):'';
+    const url=permalink(hidden);
+    mark(u);
     const pos=++seq;
     const ch=vtext(u);
     let ti=ch.findIndex((c,i)=>i<10&&TIME.test(c));
@@ -84,7 +94,7 @@
    const a=e&&e.closest('a[href]');
    const pending=current&&current.pos===pos?current:null;current=null;const u=pending&&pending.u;
    if(!u||pending.render!==render(u)||pending.name!==g(u,'profile_name')||pending.msg!==g(u,'story_message')){if(u)seen.delete(u);return null}
-   seen.set(u,key(u));
+   mark(u);
    return a&&u&&u.contains(a)?canon(a.href):'';
   },
   async expand(){

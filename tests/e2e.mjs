@@ -311,6 +311,13 @@ try{
    await evaluate('localStorage.removeItem("recycle");JSON.stringify(true)');
   }
  });
+ await check('recycled root with an identical caption is read by its new permalink',async()=>{
+  for(const mode of ['fallbackSame','fallbackHidden']){
+   await evaluate(`localStorage.recycle=JSON.stringify("${mode}");JSON.stringify(true)`);
+   const posts=await fb('posts','me','-n','2','--urls');assert.match(posts,/\/fixture\/posts\/200\t/);assert.equal(posts.match(/Existing profile post/g).length,2);
+   await evaluate('localStorage.removeItem("recycle");JSON.stringify(true)');
+  }
+ });
  await check('native editing commands cut and undo redo instead of silent no-op',async()=>{
   const mod=process.platform==='darwin'?'Meta':'Ctrl';await fb('page','edit','open','https://www.facebook.com/fixture');
   await fb('page','edit','eval',`document.body.insertAdjacentHTML('beforeend','<textarea id="edit">before</textarea>');const t=document.querySelector('#edit');t.focus();t.select()`);

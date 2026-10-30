@@ -75,6 +75,37 @@ async fn step(b: &Browser, t: &Tab) -> Res<Vec<Post>> {
     }
 }
 
+/// Drops what a reload shows again. Posts without a permalink are counted per author and text, so
+/// two different ones in a single load both pass while a replay of either does not.
+#[derive(Default)]
+struct Replays {
+    urls: std::collections::HashSet<String>,
+    /// (posts this load, posts over all loads), per author and text
+    urlless: std::collections::HashMap<(String, String), (usize, usize)>,
+}
+
+impl Replays {
+    fn fresh(&mut self, p: &Post) -> bool {
+        if !p.url.is_empty() {
+            return self.urls.insert(p.url.clone());
+        }
+        let (now, ever) = self
+            .urlless
+            .entry((p.author.clone(), p.text.clone()))
+            .or_default();
+        *now += 1;
+        let new = *now > *ever;
+        *ever = (*ever).max(*now);
+        new
+    }
+
+    fn reload(&mut self) {
+        for (now, _) in self.urlless.values_mut() {
+            *now = 0;
+        }
+    }
+}
+
 /// `None` when the hovered card changed under the pointer; the page script retries it next step.
 async fn resolve(b: &Browser, t: &Tab, p: &Value) -> Res<Option<Post>> {
     let mut url = p["url"].as_str().unwrap_or("").to_string();
@@ -227,7 +258,7 @@ impl FeedBuf {
             let mut last = Instant::now();
             let mut reloads = 0;
             let mut nudged = Instant::now();
-            let mut seen_urls = std::collections::HashSet::new();
+            let mut seen = Replays::default();
             loop {
                 let notified = self.wake.notified();
                 tokio::pin!(notified);
@@ -247,7 +278,7 @@ impl FeedBuf {
                 let posts: Vec<_> = bounded(45, step(b, &t))
                     .await?
                     .into_iter()
-                    .filter(|p| p.url.is_empty() || seen_urls.insert(p.url.clone()))
+                    .filter(|p| seen.fresh(p))
                     .collect();
                 if !posts.is_empty() {
                     last = Instant::now();
@@ -260,12 +291,13 @@ impl FeedBuf {
                     drop(g);
                     self.wake.notify_waiters();
                 } else if last.elapsed() > Duration::from_secs(12) {
-                    // Nudging did not help; a fresh load has more posts (seen_urls drops the repeats),
+                    // Nudging did not help; a fresh load has more posts (Replays drops the repeats),
                     // so only quit when reloading stops helping too.
                     if reloads == 2 {
                         return Err("feed stopped loading".into());
                     }
                     reloads += 1;
+                    seen.reload();
                     open().await?;
                     last = Instant::now();
                     continue;
@@ -374,4 +406,35 @@ pub async fn feed(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
         out.line(format_post(d, &p, urls));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn post(author: &str, text: &str, url: &str) -> Post {
+        Post {
+            author: author.into(),
+            time: "2h".into(),
+            stats: "0/0/0".into(),
+            text: text.into(),
+            url: url.into(),
+            ad: false,
+        }
+    }
+
+    #[test]
+    fn replays_after_a_reload_are_dropped_but_distinct_urlless_posts_pass() {
+        let mut seen = Replays::default();
+        let sale = post("Shop", "Sale", "");
+        assert!(seen.fresh(&sale));
+        assert!(seen.fresh(&sale), "a second identical post in one load is distinct");
+        assert!(seen.fresh(&post("x", "y", "/a/posts/1")));
+        seen.reload();
+        assert!(!seen.fresh(&post("x", "y", "/a/posts/1")));
+        assert!(!seen.fresh(&sale));
+        assert!(!seen.fresh(&sale));
+        assert!(seen.fresh(&sale), "a third copy after the reload is new");
+        assert!(seen.fresh(&post("Shop", "Other", "")));
+    }
 }

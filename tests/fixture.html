@@ -41,6 +41,6 @@ if(location.pathname.includes('/messages')){
 }else{
  main.innerHTML='<div role="region"><h2>Create post</h2></div>';
  main.querySelector('[role=region]').append(button("What is on your mind?",composer));
- const cover=button('Cover options',()=>{throw Error('Wrong cover action selected')},'Cover photo');cover.setAttribute('aria-haspopup','menu');main.prepend(cover);render();if(read('recycle'))window.scrollBy=()=>{const s=main.querySelector('section');s.dataset.post='200';s.querySelector('[data-ad-rendering-role=story_message]').textContent='Recycled DOM second post';s.querySelector('.time').href='/fixture/posts/200';s.querySelector('.time').onmouseover=e=>{e.currentTarget.href='/fixture/posts/200'};if(read('recycle')==='aria')s.setAttribute('aria-posinset','2')};
+ const cover=button('Cover options',()=>{throw Error('Wrong cover action selected')},'Cover photo');cover.setAttribute('aria-haspopup','menu');main.prepend(cover);render();if(read('recycle'))window.scrollBy=()=>{const s=main.querySelector('section');s.dataset.post='200';if(!/Same|Hidden/.test(read('recycle')))s.querySelector('[data-ad-rendering-role=story_message]').textContent='Recycled DOM second post';s.querySelector('.time').href='/fixture/posts/200';s.querySelector('.time').onmouseover=e=>{e.currentTarget.href='/fixture/posts/200'};if(read('recycle')==='fallbackHidden'){const t=s.querySelector('.time');t.href='?tracking=2';t.onfocus=()=>{t.href='/fixture/posts/200'}};if(read('recycle')==='aria')s.setAttribute('aria-posinset','2')};
 }
 </script>
