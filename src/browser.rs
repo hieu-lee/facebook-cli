@@ -33,6 +33,20 @@ pub struct Tab {
 }
 
 impl Tab {
+    #[cfg(all(test, target_os = "linux"))]
+    pub fn for_bench(session: &str) -> Tab {
+        Tab {
+            target: String::new(),
+            session: session.into(),
+            home: std::sync::Weak::new(),
+            armed: false,
+            gen_at: 0,
+            kind: String::new(),
+            permit: None,
+            context: None,
+        }
+    }
+
     pub fn story_connection(&self) -> Option<Arc<Cdp>> {
         self.context.as_ref().map(|context| context.cdp.clone())
     }
@@ -517,7 +531,7 @@ impl Browser {
     }
 
     pub async fn eval(&self, t: &Tab, expr: &str) -> Res<Value> {
-        let r = self
+        let mut r = self
             .cdp
             .call(
                 Some(&t.session),
@@ -525,9 +539,11 @@ impl Browser {
                 json!({"expression":expr,"awaitPromise":true,"returnByValue":true}),
             )
             .await?;
-        Ok(evaluation_result(&r)?
-            .get("value")
-            .cloned()
+        evaluation_result(&r)?;
+        // move the value out: it can be megabytes
+        Ok(r.get_mut("result")
+            .and_then(|result| result.get_mut("value"))
+            .map(Value::take)
             .unwrap_or(Value::Null))
     }
 

@@ -170,7 +170,7 @@ async fn handle(d: Arc<Daemon>, stream: crate::ipc::ServerStream) {
 }
 
 async fn handle_inner(d: &Arc<Daemon>, stream: crate::ipc::ServerStream) {
-    let (r, mut w) = tokio::io::split(stream);
+    let (r, w) = tokio::io::split(stream);
     let mut line = String::new();
     let mut reader = BufReader::new(r);
     if reader.read_line(&mut line).await.unwrap_or(0) == 0 {
@@ -186,15 +186,9 @@ async fn handle_inner(d: &Arc<Daemon>, stream: crate::ipc::ServerStream) {
             flag.store(true, std::sync::atomic::Ordering::SeqCst);
         });
     }
-    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
     let out = Out { tx, cancelled };
-    let writer = tokio::spawn(async move {
-        while let Some(f) = rx.recv().await {
-            if w.write_all(&f).await.is_err() {
-                break;
-            }
-        }
-    });
+    let writer = tokio::spawn(write_frames(rx, w));
     let req: serde_json::Value = serde_json::from_str(&line).unwrap_or_default();
     // Windows has no peer credentials: the request must carry the per-daemon secret
     if let Some(want) = &d.token
@@ -229,6 +223,33 @@ async fn handle_inner(d: &Arc<Daemon>, stream: crate::ipc::ServerStream) {
     let _ = writer.await;
     if d.stop_requested.load(std::sync::atomic::Ordering::SeqCst) {
         d.shutdown.notify_one();
+    }
+}
+
+/// Send queued frames to the client until every `Out` is gone or the client disconnects.
+pub(crate) async fn write_frames(
+    mut rx: mpsc::UnboundedReceiver<Vec<u8>>,
+    mut w: impl tokio::io::AsyncWrite + Unpin,
+) {
+    // frames already queued go out in one write
+    while let Some(mut buf) = rx.recv().await {
+        let mut next = None;
+        while buf.len() < 64 << 10 {
+            let Ok(more) = rx.try_recv() else { break };
+            if buf.len() + more.len() > 64 << 10 {
+                next = Some(more);
+                break;
+            }
+            buf.extend_from_slice(&more);
+        }
+        if w.write_all(&buf).await.is_err() {
+            break;
+        }
+        if let Some(big) = next
+            && w.write_all(&big).await.is_err()
+        {
+            break;
+        }
     }
 }
 
@@ -376,4 +397,54 @@ pub fn main() {
     crate::proto::private_dir(&dir);
     crate::ipc::daemon_stderr_to(&dir.join("daemon.log"));
     run();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct Writes(Vec<Vec<u8>>);
+
+    impl tokio::io::AsyncWrite for Writes {
+        fn poll_write(
+            mut self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+            b: &[u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            self.0.push(b.to_vec());
+            std::task::Poll::Ready(Ok(b.len()))
+        }
+        fn poll_flush(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn queued_frames_share_a_write_up_to_64k_and_order_is_kept() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let (a, b, big) = (
+            vec![b'a'; 40 << 10],
+            vec![b'b'; 40 << 10],
+            vec![b'c'; 100 << 10],
+        );
+        for f in [&b"x"[..], &a, &b, &big, b"y"] {
+            tx.send(f.to_vec()).unwrap();
+        }
+        drop(tx);
+        let mut w = Writes::default();
+        write_frames(rx, &mut w).await;
+        let sizes: Vec<usize> = w.0.iter().map(Vec::len).collect();
+        assert_eq!(sizes, [1 + (40 << 10), 40 << 10, 100 << 10, 1]);
+        assert_eq!(w.0.concat(), [&b"x"[..], &a, &b, &big, b"y"].concat());
+    }
 }

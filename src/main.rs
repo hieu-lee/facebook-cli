@@ -1,4 +1,6 @@
 mod act;
+#[cfg(all(test, target_os = "linux"))]
+mod bench;
 mod browser;
 mod cdp;
 mod client;

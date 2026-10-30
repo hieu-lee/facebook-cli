@@ -1,5 +1,6 @@
 use futures_util::{SinkExt, StreamExt};
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, Weak};
@@ -9,11 +10,53 @@ use tokio_tungstenite::tungstenite::Message;
 
 pub type Res<T> = Result<T, String>;
 
-#[derive(Clone)]
-pub struct Event {
+pub struct EventData {
     pub method: String,
     pub session: Option<String>,
-    pub params: Arc<Value>,
+    pub params: Value,
+}
+
+/// Shared by every subscriber: cloning it for a broadcast receiver copies no payload.
+#[derive(Clone)]
+pub struct Event(Arc<EventData>);
+
+impl std::ops::Deref for Event {
+    type Target = EventData;
+    fn deref(&self) -> &EventData {
+        &self.0
+    }
+}
+
+impl Event {
+    fn new(method: String, session: Option<String>, params: Value) -> Event {
+        Event(Arc::new(EventData {
+            method,
+            session,
+            params,
+        }))
+    }
+}
+
+#[derive(Serialize)]
+struct Request<'a> {
+    id: u64,
+    method: &'a str,
+    params: &'a Value,
+    #[serde(rename = "sessionId", skip_serializing_if = "Option::is_none")]
+    session: Option<&'a str>,
+}
+
+/// One incoming frame: a reply (`id`) or an event (`method`). Fields are parsed straight into
+/// their final owners, so a payload is never copied out of a parsed tree.
+#[derive(Deserialize)]
+struct Incoming {
+    id: Option<u64>,
+    method: Option<String>,
+    #[serde(rename = "sessionId")]
+    session: Option<String>,
+    params: Option<Value>,
+    result: Option<Value>,
+    error: Option<Value>,
 }
 
 type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Res<Value>>>>>;
@@ -80,11 +123,7 @@ fn fail_all(
         for watch in watched {
             watch.stop();
         }
-        let _ = events.send(Event {
-            method: "Cdp.connectionClosed".into(),
-            session: None,
-            params: Arc::new(Value::Null),
-        });
+        let _ = events.send(Event::new("Cdp.connectionClosed".into(), None, Value::Null));
     }
 }
 
@@ -161,27 +200,23 @@ impl Cdp {
         let reader = tokio::spawn(async move {
             while let Some(Ok(msg)) = source.next().await {
                 let Message::Text(t) = msg else { continue };
-                let Ok(mut v) = serde_json::from_str::<Value>(t.as_str()) else {
+                let Ok(frame) = serde_json::from_str::<Incoming>(t.as_str()) else {
                     continue;
                 };
-                if let Some(id) = v.get("id").and_then(Value::as_u64) {
+                if let Some(id) = frame.id {
                     if let Some(tx) = pending.lock().unwrap().remove(&id) {
-                        let r = match v.get("error") {
+                        let r = match frame.error {
                             Some(e) => Err(e
                                 .get("message")
                                 .and_then(Value::as_str)
                                 .unwrap_or("cdp error")
                                 .to_string()),
-                            None => Ok(v.get("result").cloned().unwrap_or(Value::Null)),
+                            None => Ok(frame.result.unwrap_or(Value::Null)),
                         };
                         let _ = tx.send(r);
                     }
-                } else if let Some(method) =
-                    v.get("method").and_then(Value::as_str).map(String::from)
-                {
-                    let session = v.get("sessionId").and_then(Value::as_str).map(String::from);
-                    let params =
-                        Arc::new(v.get_mut("params").map(Value::take).unwrap_or(Value::Null));
+                } else if let Some(method) = frame.method {
+                    let params = frame.params.unwrap_or(Value::Null);
                     if method == "Target.detachedFromTarget"
                         && let Some(session) = params["sessionId"].as_str()
                     {
@@ -194,11 +229,7 @@ impl Cdp {
                             watch.stop();
                         }
                     }
-                    let _ = events.send(Event {
-                        method,
-                        session,
-                        params,
-                    });
+                    let _ = events.send(Event::new(method, frame.session, params));
                 }
             }
             fail_all(&pending, &closed, &events, &reader_watches);
@@ -252,11 +283,14 @@ impl Cdp {
             pending: self.pending.clone(),
             id,
         };
-        let mut msg = json!({"id": id, "method": method, "params": params});
-        if let Some(s) = session {
-            msg["sessionId"] = json!(s);
-        }
-        if self.out.send(Message::text(msg.to_string())).is_err() {
+        let msg = serde_json::to_string(&Request {
+            id,
+            method,
+            params: &params,
+            session,
+        })
+        .map_err(|e| e.to_string())?;
+        if self.out.send(Message::text(msg)).is_err() {
             return Err("chrome connection closed".into());
         }
         rx.await
@@ -267,6 +301,7 @@ impl Cdp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use tokio::net::TcpListener;
 
     /// Fake Chrome: answers every command with {echo: method}, and emits one event after `ping`.
