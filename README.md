@@ -62,7 +62,7 @@ Cookies stay on your machine, in that profile, exactly like a browser session. A
 
 ## Commands
 
-Run `fb help` for the exact list. `<who>` is `me`, a name, `@vanity`, an id, a URL or a ref. `<chat>` is a name, ref, id or `@person`. `send` and `unsend` need the exact chat name (or a ref/id, or `--fuzzy`), because a partial name could match the wrong chat. `<post>` is a ref, a `/path` or a URL.
+Run `fb help` for the exact list. `<who>` is `me`, a name, `@vanity`, an id, a URL or a ref. `<chat>` is a Messenger nickname, exact Facebook friend name, chat/profile ref, thread id, `@handle` or profile/thread URL. Messenger nicknames can differ from Facebook names. If no chat name matches, an exact, unique friend name from a completed friend-list scan is used. Profile targets follow Facebook's own verified Open in Messenger link: encrypted thread IDs are not Facebook user IDs. Duplicate names or incomplete scans fail closed; use the profile ref or `@handle` to disambiguate. Existing chat-name matches take precedence; partial chat names still need a ref or `--fuzzy` for `send`/`unsend`. `<post>` is a ref, a `/path` or a URL.
 
 | Read | |
 |---|---|

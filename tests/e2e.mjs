@@ -43,7 +43,71 @@ try{
  env={...process.env,FB_STATE:path.join(temp,'state'),FB_CDP:'ws://127.0.0.1:'+port+wsPath,FB_TIMEOUT:'40'};delete env.FB_SOCK;
  assert.match(await fb('status'),/logged in as 12345/);
  const failures=[];
- async function check(name,fn){if(process.env.E2E_ONLY&&!name.includes(process.env.E2E_ONLY))return;try{await fn();report.push({check:name,pass:true})}catch(e){failures.push(name);report.push({check:name,pass:false,error:e.message})}}
+ async function check(name,fn){if(process.env.E2E_ONLY&&!name.includes(process.env.E2E_ONLY))return;try{await fn();report.push({check:name,pass:true})}catch(e){failures.push(name);report.push({check:name,pass:false,error:e.message})}finally{if(name.startsWith('recipient nickname'))await evaluate('for(const key of Object.keys(localStorage))if(key.startsWith("recipient"))localStorage.removeItem(key);JSON.stringify(true)')}}
+ await check('recipient nickname bridge: friend name, profile ref, handle and URL',async()=>{
+  await evaluate('localStorage.recipientMode="true";localStorage.restored="true";JSON.stringify(true)');
+  const text='recipient identity check';
+  assert.match(await fb('send','Alice Nguyễn',text),/^sent\tAlice Nguyễn$/);
+  assert.equal(await evaluate('JSON.stringify(localStorage.sentThread&&JSON.parse(localStorage.sentThread))'),'/messages/e2ee/t/900/');
+  assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.messages).filter(x=>x==="recipient identity check").length)'),1);
+  const row=(await fb('friends','me','-n','10')).split('\n').find(x=>x.startsWith('Alice Nguyễn\t')),ref=row.split('\t')[1];
+  const before=await evaluate('JSON.stringify(JSON.parse(localStorage.messages).length)');
+  for(const spec of [ref,'@friend-test','https://www.facebook.com/friend-test']){
+   const result=await fb('send',spec,'not sent','--dry');assert.match(result,/^dry: .*not sent/);
+  }
+  assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.messages).length)'),before);
+  assert.match(await fb('read','Alice Nguyễn','-n','1'),/me: recipient identity check/);
+  assert.match(await fb('send','Moon (Work)','nickname still works','--dry'),/^dry: .*nickname still works/);
+  await fb('page','recipient-proof','open','https://www.facebook.com/messages/e2ee/t/900/');
+  const snap=await fb('page','recipient-proof','snapshot');assert.match(snap,/Moon \(Work\)/);
+  await fb('page','recipient-proof','shot',path.join(out,'recipient-nickname.png'));await fb('page','recipient-proof','close');
+ });
+ await check('recipient nickname bridge: ambiguous or incomplete friends fail closed',async()=>{
+  await evaluate('localStorage.recipientMode="true";localStorage.restored="true";JSON.stringify(true)');
+  const before=await evaluate('JSON.stringify(JSON.parse(localStorage.messages||"[]"))');
+  await evaluate('localStorage.recipientFriends=JSON.stringify([{name:"Alice Nguyễn",path:"/friend-test"},{name:"Alice Nguyễn",path:"/other-friend"}]);JSON.stringify(true)');
+  await assert.rejects(()=>fb('send','Alice Nguyễn','must not send'),/ambiguous.*Alice Nguyễn/);
+  await evaluate('localStorage.recipientFriends=JSON.stringify([{name:"Alice Nguyễn",path:"/friend-test"},{name:"Alice Nguyễn",path:"/other-friend",mutual:false}]);JSON.stringify(true)');
+  await assert.rejects(()=>fb('send','Alice Nguyễn','must not send'),/ambiguous.*Alice Nguyễn/);
+  await evaluate('localStorage.recipientFriends=JSON.stringify([{name:"Alice Nguyễn",path:"/friend-test"},{name:"Alice Nguyễn",path:"/other-friend",unavailable:true}]);JSON.stringify(true)');
+  await assert.rejects(()=>fb('send','Alice Nguyễn','must not send'),/ambiguous.*Alice Nguyễn/);
+  await evaluate('localStorage.removeItem("recipientFriends");localStorage.recipientUnparsed="true";JSON.stringify(true)');
+  await assert.rejects(()=>fb('send','Alice Nguyễn','must not send'),/could not finish.*friend/);
+  await evaluate('localStorage.removeItem("recipientUnparsed");localStorage.recipientIncomplete="true";JSON.stringify(true)');
+  await assert.rejects(()=>fb('send','Alice Nguyễn','must not send'),/could not finish.*friend/);
+  await evaluate('localStorage.removeItem("recipientIncomplete");JSON.stringify(true)');
+  await assert.rejects(()=>fb('send','Alice','must not send'),/no chat.*exact friend/);
+  assert.deepEqual(await evaluate('JSON.stringify(JSON.parse(localStorage.messages||"[]"))'),before);
+ });
+ await check('recipient nickname bridge: unverified menu or foreign thread never sends',async()=>{
+  await evaluate('localStorage.recipientMode="true";localStorage.restored="true";JSON.stringify(true)');
+  const before=await evaluate('JSON.stringify(JSON.parse(localStorage.messages||"[]"))');
+  for(const flag of ['recipientWrongMenu','recipientForeignLink']){
+   await evaluate(`localStorage.${flag}="true";JSON.stringify(true)`);
+   try{await assert.rejects(()=>fb('send','@friend-test','must not send'),/could not resolve a verified Messenger thread from this profile/)}finally{await evaluate(`localStorage.removeItem("${flag}");JSON.stringify(true)`)}
+  }
+  for(const spec of ['@Alice Nguyễn','@..','https://www.facebook.com/fixture/posts/100'])await assert.rejects(()=>fb('send',spec,'must not send'),/profile|handle|person/);
+  assert.deepEqual(await evaluate('JSON.stringify(JSON.parse(localStorage.messages||"[]"))'),before);
+ });
+ await check('recipient nickname bridge: lazy grouped duplicate fails closed',async()=>{
+  await evaluate('localStorage.recipientMode="true";localStorage.recipientGrouped="true";localStorage.restored="true";JSON.stringify(true)');
+  const before=await evaluate('JSON.stringify(JSON.parse(localStorage.messages||"[]"))');
+  await assert.rejects(()=>fb('send','Alice Nguyễn','must not type into first row','--dry'),/ambiguous.*Alice Nguyễn/);
+  assert.deepEqual(await evaluate('JSON.stringify(JSON.parse(localStorage.messages||"[]"))'),before);
+ });
+ await check('recipient nickname bridge: incomplete chats never fall through to friends',async()=>{
+  await evaluate('localStorage.recipientMode="true";localStorage.recipientChatIncomplete="true";localStorage.restored="true";JSON.stringify(true)');
+  await fb('chats','-n','5000');
+  const before=await evaluate('JSON.stringify(JSON.parse(localStorage.messages||"[]"))');
+  await assert.rejects(()=>fb('send','Alice Nguyễn','must not fall through','--dry'),/could not finish scanning your chat list/);
+  assert.deepEqual(await evaluate('JSON.stringify(JSON.parse(localStorage.messages||"[]"))'),before);
+ });
+ await check('recipient nickname bridge: replaced friend section never certifies stale rows',async()=>{
+  await evaluate('localStorage.recipientMode="true";localStorage.recipientReplace="true";localStorage.restored="true";JSON.stringify(true)');
+  const before=await evaluate('JSON.stringify(JSON.parse(localStorage.messages||"[]"))');
+  await assert.rejects(()=>fb('send','Alice Nguyễn','stale section must not type','--dry'),/could not finish scanning your friend list|ambiguous/);
+  assert.deepEqual(await evaluate('JSON.stringify(JSON.parse(localStorage.messages||"[]"))'),before);
+ });
  await check('search arbitrary clues and limit',async()=>{
   const result=(await fb('search','Alice','--match',' paris ','--match','dai hoc','-n','1')).split('\n');
   assert.equal(result.length,1);assert.match(result[0],/^Alice One\tu[a-z0-9]+\t.*Paris.*Đại học NEOMA$/);

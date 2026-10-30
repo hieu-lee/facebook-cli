@@ -1,6 +1,6 @@
 pub const HELP: &str = "fb: Facebook + Messenger CLI for LLMs. Drives its own headless Chrome; run `fb login` once.
 Output: TSV, one record per line. Short refs (p3k9a post, c8x2f chat, u1abc profile) are accepted wherever that thing is expected.
-<who>: me | name | @vanity | id | url | ref    <chat>: name | ref | id | @person    <post>: ref | /path | url
+<who>: me | name | @vanity | id | url | ref    <chat>: nickname | exact friend name | chat/profile ref | thread id | @handle | URL    <post>: ref | /path | url
 
 READ
   feed [-n 10] [--refresh] [--full] [--urls]   next posts (scrolls on): ref, author, time, react/comment/share, text
@@ -17,7 +17,7 @@ READ
 MESSENGER
   chats [-n 20] [--unread] [name]    ref, flags(! unread, g group, e e2ee), time, name, preview
   read <chat> [-n 20]                `# date` lines, then `HH:MM sender: text` ([img] [file], {emoji} reactions)
-  send <chat> <text> [--file path]... [--dry]   file or image, 25MB max each, one message per file then the text. Options BEFORE `--`; after `--` is text. Name must match exactly (or use ref / --fuzzy)
+  send <chat> <text> [--file path]... [--dry]   file or image, 25MB max each, one message per file then the text. Options BEFORE `--`; after `--` is text. Exact nickname or unique friend name (or use profile ref / @handle; --fuzzy for partial chat names)
   unsend <chat> [--match text] [--dry]   remove your newest loaded message (containing text) for everyone
   unlock [-]                         once: restore end-to-end encrypted chats; PIN read from $FB_PIN or stdin
 ACT

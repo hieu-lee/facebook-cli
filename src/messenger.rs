@@ -323,23 +323,90 @@ fn is_thread_path(p: &str) -> bool {
     })
 }
 
-/// profile path (/vanity or /profile.php?id=N) -> messenger thread path
-fn thread_of_profile(p: &str) -> String {
-    if p.starts_with("/messages/") {
-        return p.to_string();
+/// Follow Facebook's profile-owned chat link: encrypted thread IDs are not user IDs.
+async fn profile_thread(b: &std::sync::Arc<Browser>, profile: &str) -> Res<Resolved> {
+    let path = crate::ops::fb_path(profile).ok_or("not a Facebook profile")?;
+    let url = reqwest::Url::parse(&format!("https://www.facebook.com{path}"))
+        .map_err(|_| "not a Facebook profile")?;
+    let segments: Vec<_> = url.path().trim_matches('/').split('/').collect();
+    let valid = match segments.as_slice() {
+        ["profile.php"] => {
+            url.query_pairs().filter(|(k, _)| k == "id").count() == 1
+                && url.query_pairs().any(|(k, v)| {
+                    k == "id" && !v.is_empty() && v.bytes().all(|c| c.is_ascii_digit())
+                })
+        }
+        ["people", _, id] => !id.is_empty() && id.bytes().all(|c| c.is_ascii_digit()),
+        [vanity] => {
+            !vanity.is_empty()
+                && !crate::ops::is_dot_segment(vanity)
+                && vanity
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'-' || c == b'_')
+        }
+        _ => false,
+    };
+    if !valid || crate::ops::is_post_path(&path) {
+        return Err("need a profile ref, @handle or profile URL, not a post".into());
     }
-    if let Some(id) = p.strip_prefix("/profile.php?id=") {
-        return format!("/messages/t/{}/", id.split('&').next().unwrap_or(id));
+    let t = b.acquire().await?;
+    let result = async {
+        b.goto(&t, url.as_str()).await?;
+        let info = b
+            .eval(
+                &t,
+                &format!("({})()", include_str!("../js/media-profile.js")),
+            )
+            .await?;
+        let owner = info["owner"]
+            .as_str()
+            .filter(|id| !id.is_empty() && id.len() <= 32 && id.bytes().all(|c| c.is_ascii_digit()))
+            .ok_or("profile identity unavailable; cannot resolve a verified Messenger thread")?;
+        let value = b
+            .eval(
+                &t,
+                &format!(
+                    "({})({})",
+                    include_str!("../js/profile-thread.js"),
+                    json!(owner)
+                ),
+            )
+            .await?;
+        let path = value.as_str().filter(|p| is_thread_path(p)).ok_or(
+            "could not resolve a verified Messenger thread from this profile; use a chat ref",
+        )?;
+        Resolved::path(path.to_string())
     }
-    // /people/Name-Slug/61512345678901/ -> the numeric id
-    if let Some(rest) = p.strip_prefix("/people/")
-        && let Some(id) = rest.trim_matches('/').rsplit('/').next()
-        && !id.is_empty()
-        && id.bytes().all(|c| c.is_ascii_digit())
-    {
-        return format!("/messages/t/{id}/");
-    }
-    format!("/messages/t/{}/", p.trim_matches('/'))
+    .await;
+    b.release(t).await;
+    result
+}
+
+/// Only an exact friend name from an exhausted list is safe to use as a recipient.
+async fn friend_thread(d: &Daemon, b: &std::sync::Arc<Browser>, spec: &str) -> Res<Resolved> {
+    let uid = crate::ops::uid(d, b).await?;
+    let t = b.acquire().await?;
+    let result = async {
+        b.goto(&t, &format!("https://www.facebook.com/profile.php?id={uid}&sk=friends_all")).await?;
+        let value = b.eval(&t, "window.__fb.friends(5000).then(JSON.stringify)").await?;
+        let value: Value = serde_json::from_str(value.as_str().unwrap_or("null")).map_err(|e| e.to_string())?;
+        if value["complete"] != Value::Bool(true) {
+            return Err("could not finish scanning your friend list; use a profile ref or @handle".into());
+        }
+        let q = spec.to_lowercase();
+        let hits: Vec<_> = value["rows"].as_array().into_iter().flatten()
+            .filter(|r| r[0].as_str().is_some_and(|name| name.to_lowercase() == q))
+            .collect();
+        match hits.as_slice() {
+            [] => Err(format!("no chat or exact friend matches '{spec}' (Messenger nicknames can differ; try `fb friends me` or use @handle)")),
+            [row] => row[1]["v"].as_str().map(String::from).ok_or("friend profile unavailable; use a different recipient".into()),
+            _ => Err(format!("ambiguous friend name '{spec}': {}", hits.iter().take(6).map(|r| r[1]["v"].as_str().map(|p| d.refs.put('u', p)).unwrap_or_else(|| "profile unavailable".into())).collect::<Vec<_>>().join(", "))),
+        }
+    }.await;
+    b.release(t).await;
+    let mut target = profile_thread(b, &result?).await?;
+    target.name = Some(spec.to_string());
+    Ok(target)
 }
 
 /// Messages go to people: a substring match may be the wrong chat (the chat list loads lazily, so
@@ -396,32 +463,32 @@ fn find_chats(list: &[Chat], q: &str, trustworthy: bool) -> Option<(Vec<Chat>, b
 
 pub async fn resolve(d: &Daemon, b: &std::sync::Arc<Browser>, spec: &str) -> Res<Resolved> {
     if let Some(p) = d.refs.get(spec) {
-        return Resolved::path(thread_of_profile(&p));
+        return if is_thread_path(&p) {
+            Resolved::path(p)
+        } else {
+            profile_thread(b, &p).await
+        };
     }
     if let Some(who) = spec.strip_prefix('@') {
-        let path = thread_of_profile(&crate::ops::profile_path(d, b, who).await?);
-        // `@.`/`@..` would normalize to the inbox: only a real thread path is a target
-        if !is_thread_path(&path) {
-            return Err(format!("not a valid person: @{who}"));
-        }
-        // `@vanity` / `@id` name exactly one account; `@First Last` is just the first search hit
-        let direct = !who.is_empty()
-            && who
+        if who.is_empty()
+            || !who
                 .bytes()
-                .all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'-');
-        return Ok(Resolved {
-            path,
-            name: Some(format!("@{who}")),
-            exact: direct,
-        });
+                .all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'-' || c == b'_')
+        {
+            return Err("use an @handle or profile ref, not a person's search name".into());
+        }
+        let profile = if who.bytes().all(|c| c.is_ascii_digit()) {
+            format!("/profile.php?id={who}")
+        } else {
+            format!("/{who}")
+        };
+        return profile_thread(b, &profile).await;
     }
     if spec.starts_with('/') || spec.starts_with("http") {
         let p = crate::ops::fb_path(spec).ok_or_else(|| format!("not a facebook url: {spec}"))?;
         // a profile or post page also has a comment box: never type a message into one
         if !is_thread_path(&p) {
-            return Err(format!(
-                "not a Messenger thread: {spec} (use a chat name, ref, id or @person)"
-            ));
+            return profile_thread(b, &p).await;
         }
         // navigate to the bare thread path (a query could change what opens)
         let bare = p.split(['?', '#']).next().unwrap_or("").to_string();
@@ -433,10 +500,12 @@ pub async fn resolve(d: &Daemon, b: &std::sync::Arc<Browser>, spec: &str) -> Res
     let q = spec.to_lowercase();
     // the deep list: an exact name may sit below a partial match ("Alice Work" vs "Alice")
     let (list1, complete1) = chat_list(d, b, RESOLVE_DEPTH, RESOLVE_TTL).await?;
+    let mut complete = complete1;
     let trustworthy1 = complete1;
     let mut found = find_chats(&list1, &q, trustworthy1);
     if matches!(&found, Some((hits, _)) if hits.is_empty()) || found.is_none() {
         let (list2, complete2) = chat_list(d, b, RESOLVE_DEPTH, Duration::ZERO).await?;
+        complete = complete2;
         let trustworthy2 = complete2;
         found = find_chats(&list2, &q, trustworthy2);
     }
@@ -445,7 +514,8 @@ pub async fn resolve(d: &Daemon, b: &std::sync::Arc<Browser>, spec: &str) -> Res
         format!("could not finish scanning your chat list to confirm '{spec}' is unique; try again, or use a ref/id")
     })?;
     match hits.len() {
-        0 => Err(format!("no chat matches '{spec}' (try `fb chats`)")),
+        0 if !complete => Err(format!("could not finish scanning your chat list before resolving '{spec}'; use a profile ref or @handle")),
+        0 => friend_thread(d, b, spec).await,
         1 => Ok(Resolved {
             path: hits[0].path.clone(),
             name: Some(hits[0].name.clone()),
@@ -1015,28 +1085,10 @@ mod tests {
         assert!(!is_thread_path("/messages/t/1/2"));
         assert!(!is_thread_path("/messages/t/111\\..\\222"));
         assert!(!is_thread_path("/messages/t/1\t/2"));
-        assert!(!is_thread_path(&thread_of_profile("/.")));
-        assert!(!is_thread_path(&thread_of_profile("/..")));
         assert!(is_thread_path("/messages/t/123/?ref=x"));
         assert!(!is_thread_path("/messages/"));
         assert!(!is_thread_path("/messages/e2ee/t/"));
         assert!(!is_thread_path("/profile.php?id=1"));
-    }
-
-    #[test]
-    fn thread_paths_from_profiles() {
-        assert_eq!(
-            thread_of_profile("/profile.php?id=123&sk=friends"),
-            "/messages/t/123/"
-        );
-        assert_eq!(
-            thread_of_profile("/some.vanity"),
-            "/messages/t/some.vanity/"
-        );
-        assert_eq!(
-            thread_of_profile("/messages/e2ee/t/9/"),
-            "/messages/e2ee/t/9/"
-        );
     }
 
     #[test]

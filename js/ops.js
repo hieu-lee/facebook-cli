@@ -94,26 +94,67 @@
  };
  F.friends=async(n)=>{
   const ok=await waitFor(()=>document.querySelector('[role=main] a[href*="friends_mutual"]')||document.querySelector('[role=main] [role=tablist]'),12000);
-  if(!ok)return {rows:[],note:'no friends visible'};
+  if(!ok)return {rows:[],complete:false,note:'no friends visible'};
   await sleep(600);
+  const more=/^(?:More options for|Lựa chọn khác cho|Plus d.options pour) (.+)$/i;
+  // Use the section's own heading, not a row/grid inferred from the number of cards.
+  const friendRoot=()=>{
+   const roots=new Set();
+   for(const a of document.querySelectorAll('[role=main] a[href]')){
+    if(!/\/friends\/?$/.test(new URL(a.href).pathname)||!/^(Friends|Bạn bè|Amis)$/i.test(clean(a.innerText)))continue;
+    for(let p=a.parentElement;p&&p!==main();p=p.parentElement){if(p.querySelector('a[href*="friends_mutual"]')){roots.add(p);break}}
+   }
+   const inner=[...roots].filter(r=>![...roots].some(other=>other!==r&&r.contains(other)));
+   return inner.length===1?inner[0]:null;
+  };
+  let bottomSince=null,lastSignature='',hasCards=false,listRoot=null;const unparsed=new Set();
   const rows=await gather(n,()=>{
+   listRoot||=friendRoot();const scope=listRoot||main();
    const out=[];
    /* the first two named links per target (m itself can be one of them): one pass instead of a scan per row */
    const named=new Map();
-   for(const a of document.querySelectorAll('[role=main] a[href]')){
+   for(const a of scope.querySelectorAll('a[href]')){
     const text=clean(a.innerText);if(!text)continue;
     const k=stripQ(a.href),l=named.get(k);
     if(!l)named.set(k,[{a,text}]);else if(l.length<2)l.push({a,text});
    }
-   for(const m of document.querySelectorAll('[role=main] a[href*="friends_mutual"]')){
+   for(const m of scope.querySelectorAll('a[href*="friends_mutual"]')){
     const base=stripQ(m.href.replace(/\/friends_mutual.*/,''));
     const link=named.get(base)?.find(x=>x.a!==m);
     if(!link)continue;
     out.push({k:base,v:[link.text,{r:'u',v:base},clean(m.innerText)]});
    }
+   const have=new Set(out.map(r=>r.k));
+   // Mutual-friend links are absent on some cards; their own options control still identifies them.
+   for(const b of (listRoot||main()).querySelectorAll('[role=button][aria-label],button[aria-label]')){
+    const match=more.exec(clean(b.getAttribute('aria-label')||''));if(!match)continue;
+    const name=match[1];let found=false;
+    for(let p=b.parentElement;p&&p!==main();p=p.parentElement){
+     const navigation=[...p.querySelectorAll('a[href]')];
+     if(navigation.length&&navigation.every(a=>/\/friends\/?$/.test(new URL(a.href).pathname))){found=true;break}
+     if([...p.querySelectorAll('[aria-label]')].filter(e=>more.test(e.getAttribute('aria-label')||'')).length>1)break;
+     if(!p.querySelector('a[href]')&&clean(p.innerText)===name){
+      const k='unavailable:'+name;if(!have.has(k)){have.add(k);out.push({k,v:[name,null,'profile unavailable']})}
+      hasCards=true;found=true;break;
+     }
+     const links=[...p.querySelectorAll('a[href]')].filter(a=>clean(a.innerText)===name),paths=new Set(links.map(a=>stripQ(a.href)));
+     if(paths.size!==1)continue;
+     const k=[...paths][0];
+     if(!/\/friends(?:_all)?\/?$/.test(k.split('?')[0])){
+      hasCards=true;if(!have.has(k)){have.add(k);out.push({k,v:[name,{r:'u',v:k},'']})}
+     }
+     found=true;break;
+    }
+    if(found)unparsed.delete(b);else unparsed.add(b);
+   }
+   if(listRoot)for(const b of unparsed)if(!listRoot.contains(b))unparsed.delete(b);
+   const el=document.scrollingElement,signature=out.map(r=>r.k).join('\n')+'|'+(listRoot?.scrollHeight||el?.scrollHeight);
+   const bottom=listRoot?listRoot.getBoundingClientRect().bottom<=innerHeight+2:el&&el.scrollTop+el.clientHeight>=el.scrollHeight-2;
+   if(bottom&&signature===lastSignature)bottomSince??=Date.now();else bottomSince=null;
+   lastSignature=signature;
    return out;
   });
-  return {rows:rows.map(r=>r.v)};
+  return {rows:rows.map(r=>r.v),complete:!!listRoot&&listRoot.isConnected&&main()?.contains(listRoot)&&friendRoot()===listRoot&&hasCards&&!unparsed.size&&rows.length<n&&bottomSince!==null&&Date.now()-bottomSince>=2500&&!(listRoot||main())?.querySelector('[aria-busy="true"],[role=progressbar]')};
  };
  F.groups=async(n)=>{
   const ok=await waitFor(()=>document.querySelector('[role=main] a[href*="/groups/"]'),12000);

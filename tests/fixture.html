@@ -4,7 +4,7 @@
 <main role="main"></main>
 <script>
 const main=document.querySelector('main');
-if(location.pathname==='/profile.php')history.replaceState(null,'','/fixture/');
+if(location.pathname==='/profile.php'&&!location.search.includes('sk=friends_all'))history.replaceState(null,'','/fixture/');
 const read=k=>JSON.parse(localStorage.getItem(k)||'null');
 const save=(k,v)=>localStorage.setItem(k,JSON.stringify(v));
 let posts=read('posts')||[{id:'100',text:'Existing profile post',aud:'me'}];
@@ -162,6 +162,25 @@ if(location.pathname==='/search/people/'){
  video.src=location.pathname.endsWith('cross-origin')?'https://example.test/fixture/cross-origin.webm':'/fixture/story.webm';
  video.onloadeddata=()=>main.append('Video ready');main.append(video);
  if(location.pathname.endsWith('seekable')){const side=document.createElement('div');side.role='dialog';side.style='position:fixed;inset:auto;right:0;top:0;width:60px;height:40px';side.textContent='Unrelated';document.body.append(side)}
+}else if(location.pathname.endsWith('/friends_all')||location.search.includes('sk=friends_all')){
+ main.innerHTML='<div role="tablist">Friends</div>';const section=document.createElement('section'),title=document.createElement('a');title.href='/fixture/friends';title.textContent='Friends';const heading=document.createElement('div');heading.append(title,button('',()=>{},'More options for friend list'));section.append(heading);main.append(section);
+ const cards=document.createElement('div');cards.dataset.recipientCards='true';section.append(cards);
+ const friends=read('recipientFriends')||[{name:'Alice Nguyễn',path:'/friend-test'},{name:'Other Friend',path:'/other-friend'}];
+ const count=document.createElement('a');count.href='/profile.php?id=12345&sk=friends_all';count.textContent=(friends.length+(read('recipientIncomplete')?1:0))+' friends';main.prepend(count);
+ for(const f of friends){const card=document.createElement('div'),a=document.createElement('a'),mutual=document.createElement('a');a.href=f.path;a.textContent=f.name;mutual.href=f.path+'/friends_mutual';mutual.textContent='36 mutual friends';if(f.unavailable)card.append(Object.assign(document.createElement('span'),{textContent:f.name}));else{card.append(a);if(f.mutual!==false)card.append(mutual)}card.append(button('',()=>{},'More options for '+f.name));cards.append(card)}
+ if(read('recipientGrouped')){const row=document.createElement('div');while(cards.firstChild)row.append(cards.firstChild);cards.append(row);setTimeout(()=>{const later=document.createElement('div');later.innerHTML='<a href="/friend-duplicate">Alice Nguyễn</a>';later.append(button('',()=>{},'More options for Alice Nguyễn'));cards.append(later)},1200)}
+ if(read('recipientReplace'))setTimeout(()=>{const replacement=section.cloneNode(true),later=document.createElement('div');later.innerHTML='<a href="/friend-duplicate">Alice Nguyễn</a>';later.append(button('',()=>{},'More options for Alice Nguyễn'));replacement.querySelector('[data-recipient-cards]').append(later);section.replaceWith(replacement)},800);
+ if(read('recipientUnparsed'))cards.append(button('',()=>{},'More options for Unknown Friend'));
+ if(read('recipientIncomplete')){const spacer=document.createElement('div');spacer.style.height='100000px';cards.append(spacer);window.scrollBy=()=>{}}
+ const footer=document.createElement('div');footer.style.height='20000px';footer.textContent='Unrelated profile sections';footer.append(button('',()=>{},'More options for this photo'));main.append(footer);
+}else if(location.pathname==='/friend-test'||location.pathname==='/other-friend'){
+ const owner=location.pathname==='/friend-test'?'777':'888';
+ const script=document.createElement('script');script.type='application/json';script.textContent=JSON.stringify({data:{user:{id:owner,profile_header_renderer:{user:{id:owner,url:location.href,header_top_row:{profile_user:{id:owner}}}}}}});document.head.append(script);
+ main.append(Object.assign(document.createElement('h1'),{textContent:'Alice Nguyễn'}),button('Message',()=>{
+  const popup=document.createElement('aside'),profile=document.createElement('a');profile.href='/'+owner+'/';profile.setAttribute('aria-label','Alice Nguyễn');popup.append(profile);
+  popup.append(button('Moon (Work)',()=>{const menu=document.createElement('div');menu.role='menu';const profile=document.createElement('a');profile.role='menuitem';profile.href='/'+(read('recipientWrongMenu')?'888':owner)+'/';profile.textContent='View profile';const open=document.createElement('a');open.role='menuitem';open.href=read('recipientForeignLink')?'https://example.test/messages/e2ee/t/900/':'/messages/e2ee/t/900/';open.textContent='Open in Messenger';menu.append(profile,open);document.body.append(menu)},'Chat settings'));
+  const tb=document.createElement('div');tb.role='textbox';tb.contentEditable='true';tb.setAttribute('aria-label','Message Alice Nguyễn');popup.append(tb);document.body.append(popup);
+ },'Message'));
 }else if(location.pathname.includes('/messages')){
  let blocked=!read('restored');
  const locale=read('locale')||'en';const words={en:['Enter your PIN to restore your chat history','Close',"Don't restore messages",'Continue without restoring?'],vi:['Nhập mã PIN để khôi phục đoạn chat của bạn','Đóng','Không khôi phục tin nhắn','Tiếp tục mà không khôi phục?'],fr:['Saisissez votre PIN pour restaurer vos messages','Fermer','Ne pas restaurer les messages','Continuer sans restaurer ?']}[locale];
@@ -169,7 +188,7 @@ if(location.pathname==='/search/people/'){
  const log=main.querySelector('[role=log]'),tb=main.querySelector('[role=textbox]');
  let messages=read('messages')||['Earlier message'];
  function msgs(){log.innerHTML='';messages.forEach((text,i)=>{const a=document.createElement('div');a.role='article';const bubble=document.createElement('span');bubble.dir='auto';bubble.dataset.messageId='m'+i;bubble.setAttribute('aria-label','At 10:00, You: '+text);bubble.textContent=text;a.append(bubble);log.append(a)});log.scrollTop=log.scrollHeight}
- msgs();tb.oninput=()=>{if(read('truncateDraft')){tb.innerText=tb.innerText.slice(0,5);save('truncateDraft',false)}};tb.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();if(blocked)return;messages.push(tb.innerText.trim());save('messages',messages);tb.innerText='';msgs()}};
+ msgs();if(read('recipientMode')){const grid=main.querySelector('[role=grid]');grid.innerHTML='<div role="row"><a href="/messages/e2ee/t/900/"><span>Moon (Work)</span><span>hello</span><span>·</span><span>now</span></a></div>';main.querySelector('h2').textContent='Moon (Work)';tb.setAttribute('aria-label','Message Moon (Work)')}if(read('recipientChatIncomplete')){const grid=main.querySelector('[role=grid]');grid.style='height:60px;overflow:auto';const spacer=document.createElement('div');spacer.style.height='6000px';grid.append(spacer);Object.defineProperty(grid,'scrollTop',{get:()=>0,set:()=>{}})}tb.oninput=()=>{if(read('truncateDraft')){tb.innerText=tb.innerText.slice(0,5);save('truncateDraft',false)}};tb.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();if(blocked)return;messages.push(tb.innerText.trim());save('sentThread',location.pathname);save('messages',messages);tb.innerText='';msgs()}};
  const restore=()=>{const d=dialog();d.innerHTML='<h2>'+words[0]+'</h2>';if(read('pinStyle')==='segmented'){const boxes=[];for(let i=0;i<4;i++){const b=document.createElement('input');b.maxLength=1;b.setAttribute('aria-label','PIN digit '+(i+1));b.oninput=()=>{if(b.value&&boxes[i+1])boxes[i+1].focus()};boxes.push(b);d.append(b)}const alert=document.createElement('div');alert.setAttribute('role','alert');const go=button('Continue',()=>{if(boxes.map(b=>b.value).join('')==='1234'){save('unlocked',true);d.remove()}else alert.textContent='Incorrect PIN. Please try again.'});go.disabled=true;boxes.forEach(b=>b.addEventListener('input',()=>{go.disabled=boxes.some(x=>!x.value)}));d.append(go,alert);}else{const input=document.createElement('input');input.setAttribute('aria-label','PIN');d.append(input);if(read('pinAutofocus'))input.focus();input.oninput=()=>{if(input.value==='1234'){save('unlocked',true);d.remove()}}}d.append(button(words[1],()=>{const confirm=dialog();confirm.append(words[3],button(words[2],()=>{blocked=false;save('restored',true);d.remove();confirm.remove()}))},words[1]))};
  if(blocked)setTimeout(restore,100);else if(!read('unlocked'))main.append(button({en:'Enter PIN',vi:'Nhập mã PIN',fr:'Saisir le code PIN'}[locale],restore));
 }else if(location.pathname==='/groups/joins'){

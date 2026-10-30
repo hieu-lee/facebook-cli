@@ -174,3 +174,25 @@ account/cancellation check. Final publication must not hover again. Revalidate t
 unique semantic target between synthetic pointer/mouse events, not only before the sequence.
 Hover/down/up handlers that hide, disable, rename, detach, or replace the target must never
 publish. Shared synthetic presses must also reject changed state/identity before dispatch.
+
+Messenger recipient identity (nickname regression):
+- A Facebook friend name can differ from the Messenger nickname, and their user
+  ID can differ from the encrypted thread ID. Follow the profile's own Message
+  control and its verified Open in Messenger link; never construct a vanity thread.
+- Only exact, unique friend names from a completed scan may resolve automatically.
+  Duplicate names, partial names, capped/stalled scans and unavailable lists must
+  fail before typing. No public-search first-hit fallback.
+- Profile refs, @handles and profile URLs follow the same identity bridge. Reject
+  post refs, unrelated popup menus, foreign links and missing profile proof.
+- Nickname/chat-ref sends remain unchanged. Dry runs leave no draft or message.
+  read/send/unsend share resolution. Save CLI transcript and a browser screenshot.
+
+Reviewer-discovered recipient regressions: an incomplete chat scan must never
+fall through to a friend name (an unseen nickname can take precedence). A grouped
+row is not the entire friend list: a lazily added, no-mutual duplicate in a later
+sibling row must stop sending. Scope completion to the friend-list section's own
+heading, never to the first ancestor containing two cards.
+
+A captured friend-list section can be replaced by React during the scan. Never
+certify detached or no-longer-current rows, even when their bounding box becomes
+zero. Early section replacement with a new duplicate must stop before typing.
