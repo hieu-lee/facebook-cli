@@ -18,13 +18,8 @@ pub struct Post {
     pub ad: bool,
 }
 
-fn format_post(d: &Daemon, p: &Post, full: bool, urls: bool) -> String {
+fn format_post(d: &Daemon, p: &Post, urls: bool) -> String {
     let text = one_line(&p.text);
-    let text = if full {
-        text
-    } else {
-        crate::messenger::trunc(&text, 280)
-    };
     let id = if p.url.is_empty() {
         "-".to_string()
     } else if urls {
@@ -59,55 +54,99 @@ async fn wait_main(b: &Browser, t: &Tab) -> Res<()> {
     Ok(())
 }
 
-/// Posts that newly appeared on screen, each resolved to a permalink via a trusted hover
-/// (the page script hands out one post at a time so its hover coordinates stay valid).
+/// Posts that newly appeared on screen. Most arrive with the permalink focus revealed; the rest
+/// resolve via a trusted hover (the page script ends a batch with at most one of those, so its
+/// hover coordinates stay valid).
 async fn step(b: &Browser, t: &Tab) -> Res<Vec<Post>> {
     let mut out = Vec::new();
     loop {
         let raw = b.eval(t, "window.__fbFeed.step()").await?;
-        let Some(p) = raw.as_array().and_then(|a| a.first()).cloned() else {
+        let batch = raw.as_array().cloned().unwrap_or_default();
+        if batch.is_empty() {
             return Ok(out);
-        };
-        let mut url = String::new();
-        if let Some(h) = p["hover"].as_array()
-            && let (Some(x), Some(y)) = (h[0].as_f64(), h[1].as_f64())
-        {
-            b.hover(t, x, y).await?;
-            tokio::time::sleep(Duration::from_millis(30)).await;
-            let r = b
-                .eval(t, &format!("window.__fbFeed.href({x},{y},{})", p["pos"]))
-                .await?;
-            if r.is_null() {
+        }
+        for p in batch {
+            if let Some(post) = resolve(b, t, &p).await? {
+                out.push(post);
+            } else {
                 return Ok(out);
             }
-            url = r.as_str().unwrap_or("").to_string();
         }
-        if !crate::ops::is_post_path(&url) {
-            url = p["alt"].as_str().unwrap_or("").to_string();
-        }
-        if !crate::ops::is_post_path(&url) {
-            url.clear();
-        }
-        let s = |k: &str| p[k].as_str().unwrap_or("").to_string();
-        out.push(Post {
-            author: s("author"),
-            time: s("time"),
-            stats: format!(
-                "{}/{}/{}",
-                p["r"].as_str().unwrap_or("0"),
-                p["c"].as_str().unwrap_or("0"),
-                p["s"].as_str().unwrap_or("0")
-            ),
-            text: s("text"),
-            url,
-            ad: p["ad"] == Value::Bool(true),
-        });
     }
+}
+
+/// Drops what a reload shows again. Posts without a permalink are counted per author and text, so
+/// two different ones in a single load both pass while a replay of either does not.
+#[derive(Default)]
+struct Replays {
+    urls: std::collections::HashSet<String>,
+    /// (posts this load, posts over all loads), per author and text
+    urlless: std::collections::HashMap<(String, String), (usize, usize)>,
+}
+
+impl Replays {
+    fn fresh(&mut self, p: &Post) -> bool {
+        if !p.url.is_empty() {
+            return self.urls.insert(p.url.clone());
+        }
+        let (now, ever) = self
+            .urlless
+            .entry((p.author.clone(), p.text.clone()))
+            .or_default();
+        *now += 1;
+        let new = *now > *ever;
+        *ever = (*ever).max(*now);
+        new
+    }
+
+    fn reload(&mut self) {
+        for (now, _) in self.urlless.values_mut() {
+            *now = 0;
+        }
+    }
+}
+
+/// `None` when the hovered card changed under the pointer; the page script retries it next step.
+async fn resolve(b: &Browser, t: &Tab, p: &Value) -> Res<Option<Post>> {
+    let mut url = p["url"].as_str().unwrap_or("").to_string();
+    if let Some(h) = p["hover"].as_array()
+        && let (Some(x), Some(y)) = (h[0].as_f64(), h[1].as_f64())
+    {
+        b.hover(t, x, y).await?;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let r = b
+            .eval(t, &format!("window.__fbFeed.href({x},{y},{})", p["pos"]))
+            .await?;
+        if r.is_null() {
+            return Ok(None);
+        }
+        url = r.as_str().unwrap_or("").to_string();
+    }
+    if !crate::ops::is_post_path(&url) {
+        url = p["alt"].as_str().unwrap_or("").to_string();
+    }
+    if !crate::ops::is_post_path(&url) {
+        url.clear();
+    }
+    let s = |k: &str| p[k].as_str().unwrap_or("").to_string();
+    Ok(Some(Post {
+        author: s("author"),
+        time: s("time"),
+        stats: format!(
+            "{}/{}/{}",
+            p["r"].as_str().unwrap_or("0"),
+            p["c"].as_str().unwrap_or("0"),
+            p["s"].as_str().unwrap_or("0")
+        ),
+        text: s("text"),
+        url,
+        ad: p["ad"] == Value::Bool(true),
+    }))
 }
 
 /// One-shot scroll of any page whose posts use the feed layout (profiles, pages, groups).
 async fn collect(d: &Daemon, b: &Browser, t: &Tab, url: &str, args: &Args, out: &Out) -> Res<()> {
-    let (n, full, urls) = (args.n.unwrap_or(10), args.flag("full"), args.flag("urls"));
+    let (n, urls) = (args.n.unwrap_or(10), args.flag("urls"));
     b.goto(t, url).await?;
     wait_main(b, t).await?;
     let t0 = Instant::now();
@@ -128,7 +167,7 @@ async fn collect(d: &Daemon, b: &Browser, t: &Tab, url: &str, args: &Args, out: 
             .take(n - count)
         {
             count += 1;
-            out.line(format_post(d, &p, full, urls));
+            out.line(format_post(d, &p, urls));
         }
         b.eval(t, "window.__fbFeed.scroll()").await?;
         tokio::time::sleep(Duration::from_millis(150)).await;
@@ -174,7 +213,7 @@ struct Inner {
     error: Option<String>,
 }
 
-const AHEAD: usize = 25;
+const AHEAD: usize = 60;
 const STALE: Duration = Duration::from_secs(20 * 60);
 
 impl FeedBuf {
@@ -208,14 +247,18 @@ impl FeedBuf {
             return Ok(());
         }
         let t = bounded(60, b.new_tab(None)).await?;
-        let r = async {
+        let open = || {
             bounded(60, async {
                 b.goto(&t, "https://www.facebook.com/").await?;
                 wait_main(b, &t).await
             })
-            .await?;
+        };
+        let r = async {
+            open().await?;
             let mut last = Instant::now();
-            let mut seen_urls = std::collections::HashSet::new();
+            let mut reloads = 0;
+            let mut nudged = Instant::now();
+            let mut seen = Replays::default();
             loop {
                 let notified = self.wake.notified();
                 tokio::pin!(notified);
@@ -235,10 +278,11 @@ impl FeedBuf {
                 let posts: Vec<_> = bounded(45, step(b, &t))
                     .await?
                     .into_iter()
-                    .filter(|p| p.url.is_empty() || seen_urls.insert(p.url.clone()))
+                    .filter(|p| seen.fresh(p))
                     .collect();
                 if !posts.is_empty() {
                     last = Instant::now();
+                    reloads = 0;
                     let mut g = self.inner.lock().await;
                     if g.epoch != epoch {
                         return Ok(());
@@ -246,8 +290,23 @@ impl FeedBuf {
                     g.posts.extend(posts);
                     drop(g);
                     self.wake.notify_waiters();
-                } else if last.elapsed() > Duration::from_secs(25) {
-                    return Err("feed stopped loading".into());
+                } else if last.elapsed() > Duration::from_secs(12) {
+                    // Nudging did not help; a fresh load has more posts (Replays drops the repeats),
+                    // so only quit when reloading stops helping too.
+                    if reloads == 2 {
+                        return Err("feed stopped loading".into());
+                    }
+                    reloads += 1;
+                    seen.reload();
+                    open().await?;
+                    last = Instant::now();
+                    continue;
+                } else if last.elapsed() > Duration::from_secs(3)
+                    && nudged.elapsed() > Duration::from_secs(3)
+                {
+                    // Facebook sometimes stops adding posts at the bottom of the page
+                    bounded(10, b.eval(&t, "window.__fbFeed.nudge()")).await?;
+                    nudged = Instant::now();
                 }
                 bounded(10, b.eval(&t, "window.__fbFeed.scroll()")).await?;
                 tokio::time::sleep(Duration::from_millis(150)).await;
@@ -342,9 +401,40 @@ pub async fn feed(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     let a = crate::ops::parse(args, &[], &["refresh", "full", "urls"])?;
     let b = d.browser(out).await?;
     d.feed.start(&b, a.flag("refresh")).await;
-    let (full, urls) = (a.flag("full"), a.flag("urls"));
+    let urls = a.flag("urls");
     for p in d.feed.take(a.n.unwrap_or(10)).await? {
-        out.line(format_post(d, &p, full, urls));
+        out.line(format_post(d, &p, urls));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn post(author: &str, text: &str, url: &str) -> Post {
+        Post {
+            author: author.into(),
+            time: "2h".into(),
+            stats: "0/0/0".into(),
+            text: text.into(),
+            url: url.into(),
+            ad: false,
+        }
+    }
+
+    #[test]
+    fn replays_after_a_reload_are_dropped_but_distinct_urlless_posts_pass() {
+        let mut seen = Replays::default();
+        let sale = post("Shop", "Sale", "");
+        assert!(seen.fresh(&sale));
+        assert!(seen.fresh(&sale), "a second identical post in one load is distinct");
+        assert!(seen.fresh(&post("x", "y", "/a/posts/1")));
+        seen.reload();
+        assert!(!seen.fresh(&post("x", "y", "/a/posts/1")));
+        assert!(!seen.fresh(&sale));
+        assert!(!seen.fresh(&sale));
+        assert!(seen.fresh(&sale), "a third copy after the reload is new");
+        assert!(seen.fresh(&post("Shop", "Other", "")));
+    }
 }

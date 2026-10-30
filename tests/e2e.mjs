@@ -336,6 +336,48 @@ try{
   }finally{daemon.kill('SIGKILL');await exited;if(relay)await relay.close();env=original}
  });
  await check('profile extraction and obfuscated timestamp',async()=>{const posts=await fb('posts','me','-n','1');assert.match(posts,/^p\w+\t.*Existing profile post/m)});
+ await check('feed authors include shared sources before reactions',async()=>{
+  await fb('page','authors','open','https://www.facebook.com/fixture');
+  try{
+   await fb('page','authors','eval',`(()=>{const card=document.querySelector('section'),time=card.querySelector('.time'),likes=card.querySelector('[data-ad-rendering-role=like_button]');card.setAttribute('aria-posinset','1');time.href='/fixture/posts/100';card.querySelector('h3').insertAdjacentHTML('beforebegin','<b>Fixture Group</b>');likes.insertAdjacentHTML('beforebegin','<h3 data-ad-rendering-role="profile_name">Doughnut Love</h3><h3 data-ad-rendering-role="profile_name">Doughnut Love</h3><h3 style="display:none" data-ad-rendering-role="profile_name">Hidden template</h3><blockquote><h3 data-ad-rendering-role="profile_name">Quoted commenter</h3></blockquote>');likes.insertAdjacentHTML('afterend','<h3 data-ad-rendering-role="profile_name">Comment author</h3>');})()`);
+   const posts=JSON.parse(await fb('page','authors','eval','window.__fbFeed.step().then(JSON.stringify)'));
+   assert.equal(posts[0].author,'Fixture Group / Fixture User / Doughnut Love');
+   assert.equal(posts[0].url,'/fixture/posts/100');
+   assert.equal(posts[0].text,'Existing profile post');
+  }finally{await fb('page','authors','close')}
+ });
+ await check('post text omits only actual trailing collapse controls',async()=>{
+  await fb('page','posttext','open','https://www.facebook.com/fixture');
+  for(const label of ['See less','Thu gọn','Afficher moins','Réduire']){
+   const text=await fb('page','posttext','eval',`(()=>{const msg=document.createElement('div');msg.style.whiteSpace='pre-wrap';msg.textContent='First paragraph\\n\\nFinal paragraph ';const b=document.createElement('span');b.role='button';b.textContent=${JSON.stringify(label)};msg.append(b);document.body.append(msg);return window.__fb.postText(msg)})()`);
+   assert.equal(text,'First paragraph\n\nFinal paragraph');
+  }
+  for(const html of ['Real prose ending See less','Real prose ending Thu gọn','Real prose ending Afficher moins','Real prose ending Réduire','Collapsed… <span role="button">See more</span>','Full story <button>Translate</button>','<button>See less</button> Real prose ending See less']){
+   const result=JSON.parse(await fb('page','posttext','eval',`(()=>{const msg=document.createElement('div');msg.innerHTML=${JSON.stringify(html)};document.body.append(msg);return JSON.stringify({actual:window.__fb.postText(msg),expected:window.__fb.clean(msg.innerText)})})()`));
+   assert.equal(result.actual,result.expected,'preserve prose, other actions, and unresolved collapsed text');
+  }
+  await fb('page','posttext','close');
+ });
+ await check('feed and post lists expand full text before deduplication',async()=>{
+  const saved=await evaluate('JSON.stringify(JSON.parse(localStorage.posts||"null"))');
+  const stories=Array.from({length:3},(_,i)=>({id:String(900+i),text:('Full story '+i+' ').repeat(60)+'END '+i,aud:'me'}));
+  try{
+   await evaluate(`localStorage.posts=JSON.stringify(${JSON.stringify(stories)});localStorage.collapsedBody="true";localStorage.expandDelay="120";JSON.stringify(true)`);
+   for(const label of ['See more','Xem thêm','Voir plus','Afficher la suite']){
+    await evaluate(`localStorage.expandLabel=JSON.stringify(${JSON.stringify(label)});JSON.stringify(true)`);
+    const output=await fb('posts','me','-n','3');
+    for(const story of stories)assert(output.includes(story.text),'complete post text including ending');
+    assert(!output.includes(label),'expansion control is not post text');
+   }
+   const output=await fb('feed','--refresh','-n','3');for(const story of stories)assert(output.includes(story.text),'home feed keeps full text');
+   await fb('page','expanded','open','https://www.facebook.com/fixture');
+   await fb('page','expanded','eval',`for(const a of document.querySelectorAll('.time'))a.href='/fixture/posts/'+a.closest('section').dataset.post`);
+   const first=JSON.parse(await fb('page','expanded','eval','window.__fbFeed.step().then(JSON.stringify)'));
+   assert.equal(first.length,3);for(let i=0;i<3;i++)assert.equal(first[i].text,stories[i].text);
+   assert.deepEqual(JSON.parse(await fb('page','expanded','eval','window.__fbFeed.step().then(JSON.stringify)')),[],'async expansion cannot emit duplicate cards');
+   await fb('page','expanded','close');
+  }finally{await evaluate(`localStorage.posts=JSON.stringify(${JSON.stringify(saved)});for(const k of ['collapsedBody','expandDelay','expandLabel'])localStorage.removeItem(k);JSON.stringify(true)`)}
+ });
  await check('PIN modal send is single and confirmed in three locales',async()=>{for(const locale of ['en','vi','fr']){
   await evaluate(`localStorage.restored="false";localStorage.locale=JSON.stringify("${locale}");JSON.stringify(true)`);
   assert.match(await fb('send','42','fixture send '+locale),/^sent/);
@@ -568,6 +610,13 @@ try{
   for(const mode of ['aria','fallback']){
    await evaluate(`localStorage.recycle=JSON.stringify("${mode}");JSON.stringify(true)`);
    const posts=await fb('posts','me','-n','2');assert.match(posts,/Existing profile post/);assert.match(posts,/Recycled DOM second post/);
+   await evaluate('localStorage.removeItem("recycle");JSON.stringify(true)');
+  }
+ });
+ await check('recycled root with an identical caption is read by its new permalink',async()=>{
+  for(const mode of ['fallbackSame','fallbackHidden']){
+   await evaluate(`localStorage.recycle=JSON.stringify("${mode}");JSON.stringify(true)`);
+   const posts=await fb('posts','me','-n','2','--urls');assert.match(posts,/\/fixture\/posts\/200\t/);assert.equal(posts.match(/Existing profile post/g).length,2);
    await evaluate('localStorage.removeItem("recycle");JSON.stringify(true)');
   }
  });

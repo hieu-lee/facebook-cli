@@ -27,7 +27,7 @@ sent
 - **One daemon, many tabs.** The first `fb` call starts a daemon that owns one Chrome connection. Every later call is a ~1 ms client that talks to it over a unix socket. Each command runs in its own tab, so commands run in parallel. Post twice while chatting with a friend by running the commands at the same time, or use `fb batch "post ..." "post ..." "send ana hi"`.
 - **Warm pages.** Messenger tabs stay open and switch chats in place. The feed is read ahead in the background, so the second `fb feed` returns in about a second. Chat names resolve from a cached list.
 - **Headless Chrome, no windows.** Your session is copied once into a dedicated profile. Nothing appears on screen and nothing steals focus.
-- **Token-lean output.** TSV records, no headers, no JSON envelopes. Posts, chats and profiles get 5-character refs (`p3k9a`, `c8x2f`, `u1abc`) that every command accepts back. Long text is truncated unless you pass `--full`. `fb help` is about 450 tokens.
+- **Token-lean output.** TSV records, no headers, no JSON envelopes. Posts, chats and profiles get 5-character refs (`p3k9a`, `c8x2f`, `u1abc`) that every command accepts back. Post lists expand and include full text; `--full` remains accepted for compatibility. `fb help` is about 450 tokens.
 - **Structural selectors, localized actions.** Reading mostly uses structure (`role`, `data-ad-rendering-role`, layout geometry). Publish, audience, delete and PIN actions recognize English, Vietnamese and French labels; use the browser primitives for other UI languages or controls.
 
 ## Install (for people and for AI agents)
