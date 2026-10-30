@@ -66,7 +66,7 @@ Run `fb help` for the exact list. `<who>` is `me`, a name, `@vanity`, an id, a U
 
 | Read | |
 |---|---|
-| `feed [-n 10] [--refresh] [--full] [--urls]` | next posts, ref, author, time, react/comment/share, text. A background tab reads ahead, so repeated calls keep scrolling and answer from memory; `--refresh` starts over |
+| `feed [-n 10] [--refresh] [--full] [--urls]` | next posts, ref, author, time, react/comment/share, text. A background tab reads ahead, so repeated calls keep scrolling and answer from memory; `--refresh` starts over. A shared post shows the sharer and the original author as `A / B`; a share without a caption shows its attachment text |
 | `posts [who] [-n]` | the same for a profile, page or group |
 | `view <post> [-n 10]` | post body and comments |
 | `profile [who]` | key/value lines |
