@@ -69,6 +69,7 @@
  };
  const canon=h=>{try{const u=new URL(h,location.href);const KEEP=['fbid','story_fbid','id','v','set','idorvanity','q'];const mp=u.searchParams.get('multi_permalinks');if(mp&&/^\/groups\/\d+\/?$/.test(u.pathname))return u.pathname.replace(/\/?$/,'/posts/'+mp);for(const p of [...u.searchParams.keys()])if(!KEEP.includes(p))u.searchParams.delete(p);return u.pathname+u.search;}catch(e){return ''}};
  const groupPath=h=>{try{const u=new URL(h,location.href);const m=u.pathname.match(/^\/groups\/([^/]+)\/?$/);if(!m)return null;if(/^(feed|discover|joins|create|search)$/.test(m[1]))return null;return '/groups/'+m[1];}catch(e){return null}};
+ const profilePath=h=>{try{const u=new URL(h,location.href);if(u.pathname==='/profile.php'){const id=u.searchParams.get('id');return id?'/profile.php?id='+id:null;}const m=u.pathname.match(/^\/([A-Za-z0-9.]{3,})\/?$/);if(!m)return null;if(/^(groups|watch|reels?|videos|events|pages|search|friends|notifications|messages|marketplace|gaming|bookmarks|settings|help|login|photo|photo\.php|permalink\.php|story\.php|share|media|albums|notes|offers|jobs|fundraisers|saved|memories|news|local|people|home|menu|privacy|terms|about|developers|careers)$/i.test(m[1]))return null;return '/'+m[1];}catch(e){return null}};
  /* a group's name is the first line of its first link; the other lines of all its links are details */
  const addGroup=(m,p,lines)=>{const cur=m.get(p);if(!cur){m.set(p,{name:lines[0],info:lines.slice(1)});return}for(const l of lines)if(l!==cur.name&&!cur.info.includes(l))cur.info.push(l)};
  const TIME=/^(\d+\s*(giây|phút|giờ|ngày|tuần|tháng|năm)(\s*trước)?|Hôm qua.*|Vừa xong|Yesterday.*|Just now|\d+\s*(s|m|h|d|w|y|hr|hrs|min|mins)|\d+\s+(seconds?|minutes?|hours?|days?|weeks?|months?|years?)(\s+ago)?|\d{1,2}\s+tháng\s+\d{1,2}.*|(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2}.*|il y a .*|hier.*|\d{1,2} (janv|févr|mars|avr|mai|juin|juil|août|sept|oct|nov|déc).*)$/i;
@@ -134,5 +135,5 @@
   const comma=before.lastIndexOf(', ');
   return {t:tm?tm[0]:'',sender:comma>=0?before.slice(comma+2).trim():'',text:colon>=0?clean(lab.slice(colon+2)):''};
  };
- window.__fb={parseLabel,mergeChunks,press,sleep,clean,vtext,waitFor,visible,enabled,dismissRestore,postCards,postText,canon,groupPath,addGroup,TIME,SPON,ACT,trunc,scrollerOf,num};
+ window.__fb={parseLabel,mergeChunks,press,sleep,clean,vtext,waitFor,visible,enabled,dismissRestore,postCards,postText,canon,groupPath,profilePath,addGroup,TIME,SPON,ACT,trunc,scrollerOf,num};
 })();
