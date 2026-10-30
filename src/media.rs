@@ -991,11 +991,17 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let body: Vec<u8> = (0..1_500_000).map(|i| (i % 251) as u8).collect();
-        let served = body.clone();
+        let served = Arc::new(body.clone());
+        // Something else on the machine may probe a fresh loopback port with plain HTTP (observed
+        // under WSL). Each connection is served in its own task, and only a completed TLS client
+        // counts as one of the 7 requests, so a probe can neither take its place nor block the others.
         let server = tokio::spawn(async move {
-            for _ in 0..7 {
-                let (socket, _) = listener.accept().await.unwrap();
-                let mut socket = acceptor.accept(socket).await.unwrap();
+            let serve = |acceptor: tokio_rustls::TlsAcceptor,
+                         served: Arc<Vec<u8>>,
+                         socket: tokio::net::TcpStream| async move {
+                let Ok(mut socket) = acceptor.accept(socket).await else {
+                    return false;
+                };
                 let mut request = [0; 2048];
                 let n = socket.read(&mut request).await.unwrap();
                 let slow = request[..n].starts_with(b"GET /slow ");
@@ -1007,7 +1013,7 @@ mod tests {
                 if stall_headers {
                     let _ = tokio::time::timeout(Duration::from_secs(3), socket.read(&mut request))
                         .await;
-                    continue;
+                    return true;
                 }
                 socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",served.len()).as_bytes()).await.unwrap();
                 if stall_body {
@@ -1025,8 +1031,24 @@ mod tests {
                     let _ = socket.write_all(&served).await;
                 }
                 let _ = socket.shutdown().await;
+                true
+            };
+            let mut tasks = tokio::task::JoinSet::new();
+            let mut handled = 0;
+            while handled < 7 {
+                tokio::select! {
+                    accepted = listener.accept() => {
+                        let (socket, _) = accepted.unwrap();
+                        tasks.spawn(serve(acceptor.clone(), served.clone(), socket));
+                    }
+                    Some(done) = tasks.join_next() => handled += usize::from(done.unwrap()),
+                }
             }
         });
+        // stray clients that are not TLS: one speaks plain HTTP, one connects and stays silent
+        let mut plain = tokio::net::TcpStream::connect(address).await.unwrap();
+        plain.write_all(b"GET / HTTP/1.1\r\n\r\n").await.unwrap();
+        let _silent = tokio::net::TcpStream::connect(address).await.unwrap();
         let client = client_builder()
             .no_proxy()
             .read_timeout(Duration::from_millis(800))
