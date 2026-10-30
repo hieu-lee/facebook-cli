@@ -267,6 +267,7 @@ impl FeedBuf {
             let mut reloads = 0;
             let mut nudged = Instant::now();
             let mut seen = Replays::default();
+            let mut frozen = false;
             loop {
                 let notified = self.wake.notified();
                 tokio::pin!(notified);
@@ -278,10 +279,22 @@ impl FeedBuf {
                     }
                     if g.posts.len() - g.cursor >= AHEAD.max(g.want) {
                         drop(g);
+                        // Parked at the read-ahead limit: freeze the page so
+                        // the buffered tab costs no CPU while it waits. The
+                        // wake below is Rust-side and still fires; stepping
+                        // unfreezes first, so a refill is never slowed.
+                        if !frozen {
+                            b.set_lifecycle(&t, true).await;
+                            frozen = true;
+                        }
                         let _ = tokio::time::timeout(Duration::from_secs(30), notified).await;
                         last = Instant::now();
                         continue;
                     }
+                }
+                if frozen {
+                    b.set_lifecycle(&t, false).await;
+                    frozen = false;
                 }
                 let posts: Vec<_> = bounded(45, step(b, &t))
                     .await?
