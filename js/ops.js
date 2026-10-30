@@ -1,6 +1,6 @@
 (()=>{
  const F=window.__fb;
- const {sleep,clean,vtext,waitFor,canon,groupPath,addGroup,TIME,SPON,ACT,trunc,scrollerOf,num}=F;
+ const {sleep,clean,vtext,waitFor,canon,groupPath,profilePath,addGroup,TIME,SPON,ACT,trunc,scrollerOf,num}=F;
  const main=()=>document.querySelector('[role=main]');
  const tab=s=>String(s==null?'':s).replace(/[\t\r\n]+/g,' ');
  const abs=h=>{try{const u=new URL(h,location.href);return u.pathname+u.search}catch(e){return h}};
@@ -204,9 +204,10 @@
    const body=c.slice(ti<0?1:ti+1,end<0?c.length:end).filter(x=>!/^(của tác giả|Author|Auteur|Top fan|Người hâm mộ.*)$/i.test(x)).join(' ');
    const lab=a.getAttribute('aria-label')||'';
    const nested=!!a.parentElement.closest('[role=article][aria-label]');
-   return {k:lab+body,v:[(nested?'  ↳':'')+c[0],ti>=0?c[ti]:'',trunc(body,300)]};
+   const ref=[...a.querySelectorAll('a[href]')].map(x=>profilePath(x.getAttribute('href'))).find(Boolean)||'';
+   return {k:lab+body,ref,v:[(nested?'  ↳':'')+c[0],ti>=0?c[ti]:'',trunc(body,300)]};
   }),20000,scEl);
-  for(const c of com)lines.push('c\t'+c.v.map(tab).join('\t'));
+  for(const c of com){if(c.ref)lines.push('cu\t'+tab(c.ref));lines.push('c\t'+c.v.map(tab).join('\t'));}
   return {lines};
  };
 })();

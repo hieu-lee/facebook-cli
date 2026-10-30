@@ -26,6 +26,13 @@ assert.strictEqual(F.groupPath('/groups/hikers.uk?__cft__[0]=x'), '/groups/hiker
 assert.strictEqual(F.groupPath('https://www.facebook.com/groups/123/posts/456'), null);
 assert.strictEqual(F.groupPath('https://www.facebook.com/groups/feed/'), null);
 assert.strictEqual(F.groupPath('https://www.facebook.com/groups/joins'), null);
+assert.strictEqual(F.profilePath('https://www.facebook.com/some.user'), '/some.user');
+assert.strictEqual(F.profilePath('/profile.php?id=123&sk=about'), '/profile.php?id=123');
+assert.strictEqual(F.profilePath('https://www.facebook.com/groups/123456'), null);
+assert.strictEqual(F.profilePath('https://www.facebook.com/some.user/posts/456'), null);
+assert.strictEqual(F.profilePath('https://www.facebook.com/watch?v=1'), null);
+assert.strictEqual(F.profilePath('https://www.facebook.com/photo.php?fbid=1'), null);
+console.log('js profilePath ok');
 assert.strictEqual(F.groupPath('https://www.facebook.com/somepage'), null);
 {const m=new Map();
  F.addGroup(m,'/groups/1',['Paris Hikers','Public group · 2K members']);
