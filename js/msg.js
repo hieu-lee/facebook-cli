@@ -102,7 +102,10 @@
     const ch=vtext(row);
     const dot=ch.lastIndexOf('·');
     const time=dot>=0?ch[dot+1]||'':'';
-    const body=ch.slice(0,dot>=0?dot:ch.length);
+    // presence text ("Active now", "Active 5m ago") renders as its own chunk
+    // ahead of the title on some rows; it is not part of the chat's name
+    const PRES=/^Active (now|\d+\s*[smhd]\s*ago|today|yesterday)$/i;
+    const body=ch.slice(0,dot>=0?dot:ch.length).filter(c=>!PRES.test(c));
     const bold=+getComputedStyle(row.querySelector('span')||row).fontWeight>=600;
     seen.set(href,{href,name:body[0]||'',preview:body.slice(1).join(' '),time,unread:bold,group:/\/t\/\d+\/?$/.test(href)&&!!a.getAttribute('aria-label')&&/:/.test(a.getAttribute('aria-label'))});
    }
