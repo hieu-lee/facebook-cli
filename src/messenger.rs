@@ -827,11 +827,12 @@ fn read_attachment(path: &str) -> Res<Vec<u8>> {
     Ok(bytes)
 }
 
-async fn attach(b: &std::sync::Arc<Browser>, t: &Tab, name: &str, bytes: &[u8]) -> Res<()> {
+/// Hands `bytes` to the page as base64 chunks (`window.__fbUp`), one CDP call each. Each call carries
+/// CHUNK base64 characters (3 raw bytes encode to 4), encoded into one reused buffer; base64 and a
+/// single-quoted literal need no JSON escaping.
+pub(crate) async fn upload(b: &Browser, t: &Tab, bytes: &[u8]) -> Res<()> {
     use base64::Engine;
     b.eval(t, "window.__fb.upBegin()").await?;
-    // each call carries CHUNK base64 characters (3 raw bytes encode to 4), encoded into one reused
-    // buffer; base64 and a single-quoted literal need no JSON escaping
     let mut js = String::with_capacity(CHUNK + 32);
     for raw in bytes.chunks(CHUNK / 4 * 3) {
         js.clear();
@@ -840,6 +841,11 @@ async fn attach(b: &std::sync::Arc<Browser>, t: &Tab, name: &str, bytes: &[u8]) 
         js.push_str("')");
         b.eval_unescaped(t, &js).await?;
     }
+    Ok(())
+}
+
+async fn attach(b: &std::sync::Arc<Browser>, t: &Tab, name: &str, bytes: &[u8]) -> Res<()> {
+    upload(b, t, bytes).await?;
     let js = format!(
         "window.__fb.attach({},{})",
         json!(name),

@@ -41,8 +41,7 @@ pub fn mime_of(name: &str) -> &'static str {
     }
 }
 
-pub fn file_arg(path: &str, cwd: &str) -> Res<(String, &'static str, String)> {
-    use base64::Engine;
+pub fn file_arg(path: &str, cwd: &str) -> Res<(String, &'static str, Vec<u8>)> {
     let full = crate::proto::resolve_path(cwd, path);
     let bytes = std::fs::read(&full).map_err(|e| format!("{full}: {e}"))?;
     let name = std::path::Path::new(&full)
@@ -51,11 +50,28 @@ pub fn file_arg(path: &str, cwd: &str) -> Res<(String, &'static str, String)> {
         .unwrap_or("file")
         .to_string();
     let mime = mime_of(&name);
-    Ok((
-        name,
-        mime,
-        base64::engine::general_purpose::STANDARD.encode(bytes),
-    ))
+    Ok((name, mime, bytes))
+}
+
+pub(crate) async fn attach_files(
+    b: &Browser,
+    t: &Tab,
+    files: &[(String, &'static str, Vec<u8>)],
+) -> Res<()> {
+    for (name, mime, bytes) in files {
+        crate::messenger::upload(b, t, bytes).await?;
+        ok(&b
+            .eval(
+                t,
+                &format!(
+                    "window.__fb.composeAttach({},{})",
+                    json!(name),
+                    json!(mime)
+                ),
+            )
+            .await?)?;
+    }
+    Ok(())
 }
 
 async fn type_into(b: &Browser, t: &Tab, text: &str) -> Res<()> {
@@ -101,19 +117,7 @@ pub async fn post(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> 
         if !text.is_empty() {
             type_into(&b, &t, &text).await?;
         }
-        for (name, mime, b64) in &files {
-            ok(&b
-                .eval(
-                    &t,
-                    &format!(
-                        "window.__fb.composeAttach({},{},{})",
-                        json!(name),
-                        json!(mime),
-                        json!(b64)
-                    ),
-                )
-                .await?)?;
-        }
+        attach_files(&b, &t, &files).await?;
         if let Some(aud) = &audience {
             ok(&b
                 .eval(&t, &format!("window.__fb.composeAudience({})", json!(aud)))

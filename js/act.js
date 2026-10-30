@@ -22,11 +22,14 @@
  };
  F.composeDialog=()=>dialogs().find(d=>d.querySelector('[role=textbox]'));
  F.composeFocus=()=>{const d=F.composeDialog();const tb=d&&d.querySelector('[role=textbox]');if(!tb)return false;tb.focus();return true;};
- F.composeAttach=async(name,mime,b64)=>{
+ // the bytes arrive beforehand as base64 chunks (upBegin/upChunk in msg.js), one CDP call each
+ F.composeAttach=async(name,mime)=>{
+  const parts=window.__fbUp;window.__fbUp=null;
   const d=F.composeDialog();const inp=d&&d.querySelector('input[type=file]');
   if(!inp)return 'no file input';
-  const bin=atob(b64);const u8=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u8[i]=bin.charCodeAt(i);
-  const dt=new DataTransfer();dt.items.add(new File([u8],name,{type:mime}));
+  if(!parts)return 'no data';
+  const bytes=parts.map(p=>{const bin=atob(p);const u8=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)u8[i]=bin.charCodeAt(i);return u8;});
+  const dt=new DataTransfer();dt.items.add(new File(bytes,name,{type:mime}));
   const before=d.querySelectorAll('img[src^="blob:"],video').length;
   inp.files=dt.files;inp.dispatchEvent(new Event('change',{bubbles:true}));
   const ok=await waitFor(()=>d.querySelectorAll('img[src^="blob:"],video').length>before||d.querySelectorAll('img[src^="data:"]').length>0,15000,150);
