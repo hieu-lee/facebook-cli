@@ -453,6 +453,16 @@ try{
   assert.match(await fb('unlock','1234'),/^unlocked/);
   assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.unlocked))'),true);
  });
+ await check('unlock types a segmented PIN and presses Continue',async()=>{
+  await evaluate('localStorage.restored="false";localStorage.pinStyle=JSON.stringify("segmented");localStorage.removeItem("unlocked");JSON.stringify(true)');
+  assert.match(await fb('unlock','1234'),/^unlocked/);
+  assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.unlocked))'),true);
+ });
+ await check('a wrong segmented PIN reports what Facebook said',async()=>{
+  await evaluate('localStorage.restored="false";localStorage.removeItem("unlocked");JSON.stringify(true)');
+  await assert.rejects(()=>fb('unlock','9999'),/PIN was not accepted/);
+  await evaluate('localStorage.removeItem("pinStyle");localStorage.restored="true";JSON.stringify(true)');
+ });
  await check('HTTP named page initializes outside a secure context',async()=>{
   assert.match(await fb('page','http','open','http://example.test/'),/^url\thttp:\/\/example.test\//);
   await fb('page','http','close');

@@ -874,7 +874,15 @@ pub async fn unlock(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
             Value::String(s) => return Err(s),
             _ => return Err("unexpected".into()),
         }
-        b.insert_text(&t, pin).await?;
+        // Type the PIN as real keystrokes, one digit at a time. A single
+        // Input.insertText lands in only the first box of the surfaces that
+        // give each digit its own field, and their per-box handlers advance
+        // on key events insertText never sends — the PIN never arrived whole.
+        for c in pin.chars() {
+            let d = c as u32 - '0' as u32;
+            b.key(&t, &c.to_string(), &format!("Digit{c}"), 48 + d, 0)
+                .await?;
+        }
         match b.eval(&t, "window.__fb.pinDone()").await? {
             Value::Bool(true) => {}
             Value::String(s) => return Err(s),
