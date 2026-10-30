@@ -85,6 +85,7 @@ async fn run_inner(d: &Daemon, argv: &[String], _cwd: &str, out: &Out) -> Res<()
         "delete" => crate::act::delete(d, &argv[1..], out).await,
         "comment" => crate::act::comment(d, &argv[1..], out).await,
         "react" => crate::act::react(d, &argv[1..], out).await,
+        "friend-add" => crate::act::friend_add(d, &argv[1..], out).await,
         "unsend" => crate::messenger::unsend(d, &argv[1..], out).await,
         "unlock" => crate::messenger::unlock(d, &argv[1..], out).await,
         "feed" => crate::feed::feed(d, &argv[1..], out).await,
