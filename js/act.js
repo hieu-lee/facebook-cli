@@ -55,6 +55,12 @@
   const current=await waitFor(()=>{const b=audienceButton();return b&&AUD[kind].test(first(b.innerText))},3000);
   return current?true:'audience change not confirmed; nothing was posted';
  };
+ const FRIEND_ADD=/^(Add friend|Thêm bạn bè|Ajouter un ami|Ajouter)$/i;
+ const FRIEND_SENT=/^(Friend request sent|Cancel request|Đã gửi lời mời kết bạn|Demande envoyée|Annuler la demande)$/i;
+ const FRIEND_IS=/^(Friends|Bạn bè|Amis)$/i;
+ const friendButton=()=>{const m=main();if(!m)return null;return [...m.querySelectorAll('[role=button]')].find(x=>{const t=btnText(x).split('\n')[0].trim();return FRIEND_ADD.test(t)||FRIEND_SENT.test(t)||FRIEND_IS.test(t);})||null;};
+ F.friendState=()=>{const b=friendButton();if(!b)return 'no-button';const t=btnText(b).split('\n')[0].trim();if(FRIEND_IS.test(t))return 'friends';if(FRIEND_SENT.test(t))return 'requested';if(FRIEND_ADD.test(t))return 'can-add';return 'no-button';};
+ F.friendAdd=async()=>{const st=F.friendState();if(st!=='can-add')return st;const b=friendButton();if(!b)return 'no-button';b.click();const ok=await waitFor(()=>{const s=F.friendState();return s==='requested'||s==='friends'?s:null;},8000,200);return ok||'unconfirmed';};
  const postButton=()=>{const d=F.composeDialog();const bs=d?[...d.querySelectorAll('[role=button]')].filter(b=>F.visible(b)&&/^(Post|Đăng|Publier)$/i.test(clean(b.getAttribute('aria-label')||btnText(b)))):[];return bs.length===1?bs[0]:null;};
  // Retained audience panes can put Done after Post; order is not action identity.
  F.composePrepare=async()=>{

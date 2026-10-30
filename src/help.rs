@@ -25,6 +25,7 @@ ACT
   comment <post> <text>
   react <post> [like|love|care|haha|wow|sad|angry|none]
   delete <post>                      your own posts only
+  friend-add <who>                   send a friend request (reports existing friends / pending requests)
 BROWSER (fallback; named tabs are separate from normal commands)
   page <name> open <url> | snapshot [filter]   bounded text + refs; max 6 pages
   page <name> stories [story-url]     experimental story page; blocks known seen requests, not a privacy guarantee
