@@ -620,6 +620,9 @@ try{
    await evaluate('localStorage.removeItem("recycle");JSON.stringify(true)');
   }
  });
+ await check('groups lists visible joined groups once with details',async()=>{
+  assert.equal(await fb('groups','--urls'),'Paris Hikers\thttps://www.facebook.com/groups/1\tPrivate group · 2K members\nSolo\thttps://www.facebook.com/groups/2');
+ });
  await check('native editing commands cut and undo redo instead of silent no-op',async()=>{
   const mod=process.platform==='darwin'?'Meta':'Ctrl';await fb('page','edit','open','https://www.facebook.com/fixture');
   await fb('page','edit','eval',`document.body.insertAdjacentHTML('beforeend','<textarea id="edit">before</textarea>');const t=document.querySelector('#edit');t.focus();t.select()`);

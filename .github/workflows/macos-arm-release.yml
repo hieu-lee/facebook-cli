@@ -1,0 +1,34 @@
+name: macOS ARM release build
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build
+        required: true
+        default: v0.1.5
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-15-intel
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Check tag matches package version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: test "$RELEASE_TAG" = "v$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)"
+      - run: cargo build --release --locked --target aarch64-apple-darwin
+      - run: tar -czf fb-aarch64-darwin.tar.gz -C target/aarch64-apple-darwin/release fb -C "$GITHUB_WORKSPACE" LICENSE LICENSE-APACHE-2.0 THIRD_PARTY_NOTICES
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fb-aarch64-darwin
+          path: fb-aarch64-darwin.tar.gz
+          if-no-files-found: error

@@ -8,6 +8,7 @@ READ
   view <post> [-n 10]                by, stats, text, then c<TAB>author<TAB>time<TAB>text per comment
   profile [who]                      key<TAB>value lines
   friends [who] [-n 30]              name, ref, mutual friends
+  groups [-n 100] [--urls]           groups you have joined: name, ref, privacy and size
   search <q> [--type people|pages|groups|posts|events] [--match text]... [-n 10]   match visible clues
   stories <who> [--out dir] [-n N]  protected downloads, all visible stories by default
   photos <who> [--out dir] [-n 10 | --all]  protected profile-photo downloads
