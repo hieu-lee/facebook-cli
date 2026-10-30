@@ -1,6 +1,6 @@
 (()=>{
  const F=window.__fb;
- const {sleep,clean,vtext,waitFor,canon,groupPath,TIME,SPON,ACT,trunc,scrollerOf,num}=F;
+ const {sleep,clean,vtext,waitFor,canon,groupPath,addGroup,TIME,SPON,ACT,trunc,scrollerOf,num}=F;
  const main=()=>document.querySelector('[role=main]');
  const tab=s=>String(s==null?'':s).replace(/[\t\r\n]+/g,' ');
  const abs=h=>{try{const u=new URL(h,location.href);return u.pathname+u.search}catch(e){return h}};
@@ -112,19 +112,22 @@
   const ok=await waitFor(()=>document.querySelector('[role=main] a[href*="/groups/"]'),12000);
   if(!ok)return {rows:[],note:'no groups visible'};
   await sleep(600);
-  const rows=await gather(n,()=>{
-   const byPath=new Map();
+  /* details can render on a later scroll pass than the name, so merge every pass into one entry per group */
+  const acc=new Map();
+  const shown=a=>{const s=getComputedStyle(a);return s.visibility==='visible'&&(a.getClientRects().length>0||s.display==='contents'&&!!clean(a.innerText))};
+  const scan=()=>{
    for(const a of document.querySelectorAll('[role=main] a[href]')){
-    const p=groupPath(a.getAttribute('href'));if(!p)continue;
-    const chunks=vtext(a).map(clean).filter(Boolean);
-    if(!chunks.length)continue;
-    const cur=byPath.get(p)||{name:chunks[0],info:[]};
-    for(const c of chunks.slice(1))if(c!==cur.name&&!cur.info.includes(c))cur.info.push(c);
-    byPath.set(p,cur);
+    const p=groupPath(a.getAttribute('href'));if(!p||!shown(a))continue;
+    let lines=(a.innerText||'').split('\n').map(clean).filter(Boolean);
+    if(!lines.length)lines=[clean(a.getAttribute('aria-label')||a.querySelector('img[alt]')?.alt||'')].filter(Boolean);
+    if(lines.length)addGroup(acc,p,lines);
    }
-   return [...byPath.entries()].map(([p,g])=>({k:p,v:[g.name,p,trunc(g.info.join(' · '),120)]}));
-  });
-  return {rows:rows.map(r=>r.v)};
+   return [...acc.keys()].map(k=>({k}));
+  };
+  await gather(n,scan);
+  /* the limit can be reached before the last link of a group renders: let it settle once */
+  await sleep(300);scan();
+  return {rows:[...acc].slice(0,n).map(([k,g])=>[g.name,k,trunc(g.info.join(' · '),120)])};
  };
  F.notifs=async(n)=>{
   const ok=await waitFor(()=>document.querySelector('[role=main] [role=list] [role=listitem] a[href]')||document.querySelector('[role=list] [role=listitem] a[href]'),12000);

@@ -27,6 +27,12 @@ assert.strictEqual(F.groupPath('https://www.facebook.com/groups/123/posts/456'),
 assert.strictEqual(F.groupPath('https://www.facebook.com/groups/feed/'), null);
 assert.strictEqual(F.groupPath('https://www.facebook.com/groups/joins'), null);
 assert.strictEqual(F.groupPath('https://www.facebook.com/somepage'), null);
+{const m=new Map();
+ F.addGroup(m,'/groups/1',['Paris Hikers','Public group · 2K members']);
+ F.addGroup(m,'/groups/1',['Paris Hikers']);
+ F.addGroup(m,'/groups/1',['Private group','2K members']);
+ F.addGroup(m,'/groups/2',['Solo']);
+ assert.deepStrictEqual([...m],[['/groups/1',{name:'Paris Hikers',info:['Public group · 2K members','Private group','2K members']}],['/groups/2',{name:'Solo',info:[]}]]);}
 console.log('js groupPath ok');
 assert.strictEqual(F.trunc('abcdef', 3), 'abc…');
 assert(F.ACT.test('Thích') && F.ACT.test('Reply') && !F.ACT.test('Hello'));

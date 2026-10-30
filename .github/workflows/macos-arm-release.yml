@@ -5,7 +5,7 @@ on:
       tag:
         description: Existing release tag to build
         required: true
-        default: v0.1.5-blindfb.1
+        default: v0.1.5
 permissions:
   contents: read
 jobs:
@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: refs/tags/${{ inputs.tag }}
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin

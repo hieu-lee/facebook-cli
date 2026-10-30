@@ -171,6 +171,8 @@ if(location.pathname==='/search/people/'){
  msgs();tb.oninput=()=>{if(read('truncateDraft')){tb.innerText=tb.innerText.slice(0,5);save('truncateDraft',false)}};tb.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();if(blocked)return;messages.push(tb.innerText.trim());save('messages',messages);tb.innerText='';msgs()}};
  const restore=()=>{const d=dialog();d.innerHTML='<h2>'+words[0]+'</h2><input aria-label="PIN">';const input=d.querySelector('input');if(read('pinAutofocus'))input.focus();input.oninput=()=>{if(input.value==='1234'){save('unlocked',true);d.remove()}};d.append(button(words[1],()=>{const confirm=dialog();confirm.append(words[3],button(words[2],()=>{blocked=false;save('restored',true);d.remove();confirm.remove()}))},words[1]))};
  if(blocked)setTimeout(restore,100);else if(!read('unlocked'))main.append(button({en:'Enter PIN',vi:'Nhập mã PIN',fr:'Saisir le code PIN'}[locale],restore));
+}else if(location.pathname==='/groups/joins'){
+ main.innerHTML='<a href="/groups/9" style="display:none">Hidden Group</a><a href="/groups/feed/">Your feed</a><a href="/groups/1"><span>Paris</span><span> Hikers</span></a><a href="/groups/1"><div>Private group · 2K members</div></a><a href="/groups/2" aria-label="Solo"><img alt="Solo" width="40" height="40" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="></a>';
 }else{
  main.innerHTML='<div role="region"><h2>Create post</h2></div>';
  main.querySelector('[role=region]').append(button("What is on your mind?",composer));
