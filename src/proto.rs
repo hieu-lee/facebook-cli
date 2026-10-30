@@ -54,10 +54,16 @@ pub fn resolve_path(cwd: &str, p: &str) -> String {
 }
 
 pub fn encode(tag: u8, data: &[u8]) -> Vec<u8> {
-    let mut v = Vec::with_capacity(5 + data.len());
+    encode_parts(tag, data, b"")
+}
+
+/// A frame whose body is `data` followed by `tail`, built without joining them first.
+pub fn encode_parts(tag: u8, data: &[u8], tail: &[u8]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(5 + data.len() + tail.len());
     v.push(tag);
-    v.extend_from_slice(&(data.len() as u32).to_be_bytes());
+    v.extend_from_slice(&((data.len() + tail.len()) as u32).to_be_bytes());
     v.extend_from_slice(data);
+    v.extend_from_slice(tail);
     v
 }
 
@@ -157,6 +163,12 @@ mod tests {
             resolve_path(&cwd, "b.png"),
             std::path::Path::new(&*cwd).join("b.png").to_string_lossy()
         );
+    }
+
+    #[test]
+    fn a_frame_with_a_tail_equals_the_joined_frame() {
+        assert_eq!(encode_parts(OUT, b"row", b"\n"), encode(OUT, b"row\n"));
+        assert_eq!(encode_parts(ERR, b"", b""), encode(ERR, b""));
     }
 
     #[test]

@@ -197,7 +197,19 @@ async fn chat_list(
 
 /// One TSV field: tabs and newlines would split a record.
 pub fn one_line(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
+    let mut o = String::with_capacity(s.len());
+    push_one_line(&mut o, s);
+    o
+}
+
+/// `one_line`, appended to `out`.
+pub fn push_one_line(out: &mut String, s: &str) {
+    for (i, w) in s.split_whitespace().enumerate() {
+        if i > 0 {
+            out.push(' ');
+        }
+        out.push_str(w);
+    }
 }
 
 pub fn trunc(s: &str, n: usize) -> String {

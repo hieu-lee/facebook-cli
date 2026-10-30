@@ -5,8 +5,16 @@ use std::sync::Mutex;
 
 /// Short, stable handles (e.g. `c4k2z`) for long ids/urls so LLM output stays small.
 pub struct Refs {
-    map: Mutex<HashMap<String, String>>,
+    state: Mutex<State>,
     file: PathBuf,
+}
+
+struct State {
+    map: HashMap<String, String>,
+    /// refs.tsv, opened for appending on the first new ref and kept open
+    log: Option<std::fs::File>,
+    /// scratch for one refs.tsv line (written with a single call)
+    line: String,
 }
 
 fn fnv(s: &str) -> u64 {
@@ -18,15 +26,19 @@ fn fnv(s: &str) -> u64 {
     h
 }
 
-fn b36(mut n: u64, len: usize) -> String {
+/// The 12 lowest base-36 digits of `n`, least significant first; a ref of length `len` uses the first `len`.
+fn b36(mut n: u64) -> [u8; MAX_LEN] {
     const D: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
-    let mut v = Vec::new();
-    for _ in 0..len {
-        v.push(D[(n % 36) as usize]);
+    let mut v = [0; MAX_LEN];
+    for d in &mut v {
+        *d = D[(n % 36) as usize];
         n /= 36;
     }
-    String::from_utf8(v).unwrap()
+    v
 }
+
+const MIN_LEN: usize = 4;
+const MAX_LEN: usize = 12;
 
 impl Refs {
     pub fn load(file: PathBuf) -> Refs {
@@ -39,37 +51,62 @@ impl Refs {
             }
         }
         Refs {
-            map: Mutex::new(map),
+            state: Mutex::new(State {
+                map,
+                log: None,
+                line: String::new(),
+            }),
             file,
         }
     }
 
     pub fn put(&self, kind: char, full: &str) -> String {
-        let h = fnv(full);
-        let mut m = self.map.lock().unwrap();
-        for len in 4..=12 {
-            let s = format!("{kind}{}", b36(h, len));
-            match m.get(&s) {
-                Some(v) if v == full => return s,
+        let mut s = String::new();
+        self.put_into(kind, full, &mut s);
+        s
+    }
+
+    /// `put`, appending the ref to `out` (a known ref allocates nothing).
+    pub fn put_into(&self, kind: char, full: &str, out: &mut String) {
+        let digits = b36(fnv(full));
+        let mut buf = [0u8; 4 + MAX_LEN];
+        let k = kind.encode_utf8(&mut buf).len();
+        let mut st = self.state.lock().unwrap();
+        let State { map, log, line } = &mut *st;
+        for len in MIN_LEN..=MAX_LEN {
+            buf[k..k + len].copy_from_slice(&digits[..len]);
+            let key =
+                std::str::from_utf8(&buf[..k + len]).expect("a char followed by base-36 digits");
+            match map.get(key) {
+                Some(v) if v == full => {}
                 Some(_) => continue,
                 None => {
-                    m.insert(s.clone(), full.to_string());
-                    if let Ok(mut f) = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&self.file)
-                    {
-                        let _ = writeln!(f, "{s}\t{full}");
+                    if log.is_none() {
+                        *log = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&self.file)
+                            .ok();
                     }
-                    return s;
+                    if let Some(f) = log {
+                        line.clear();
+                        line.push_str(key);
+                        line.push('\t');
+                        line.push_str(full);
+                        line.push('\n');
+                        let _ = f.write_all(line.as_bytes());
+                    }
+                    map.insert(key.to_string(), full.to_string());
                 }
             }
+            out.push_str(key);
+            return;
         }
-        full.to_string()
+        out.push_str(full);
     }
 
     pub fn get(&self, token: &str) -> Option<String> {
-        self.map.lock().unwrap().get(token).cloned()
+        self.state.lock().unwrap().map.get(token).cloned()
     }
 }
 
@@ -94,6 +131,41 @@ mod tests {
         let again = Refs::load(f.clone());
         assert_eq!(again.get(&a).as_deref(), Some("/page/posts/pfbid0abc"));
         assert_eq!(again.get("pzzzzz"), None);
+        let _ = std::fs::remove_file(f);
+    }
+
+    /// The encoding as it was before `b36` returned all digits at once.
+    fn original_ref(kind: char, full: &str, len: usize) -> String {
+        const D: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+        let mut n = fnv(full);
+        let mut s = String::from(kind);
+        for _ in 0..len {
+            s.push(D[(n % 36) as usize] as char);
+            n /= 36;
+        }
+        s
+    }
+
+    #[test]
+    fn refs_keep_the_original_encoding_and_file_format() {
+        let f = tmp("c");
+        let r = Refs::load(f.clone());
+        let urls: Vec<String> = (0..50)
+            .map(|i| format!("/user.{i}/posts/pfbid0{i}"))
+            .collect();
+        for u in &urls {
+            assert_eq!(r.put('p', u), original_ref('p', u, 4), "{u}");
+        }
+        assert_eq!(r.put('é', "/x"), original_ref('é', "/x", 4));
+        let mut want = String::new();
+        for u in &urls {
+            want += &format!("{}\t{u}\n", original_ref('p', u, 4));
+        }
+        want += &format!("{}\t/x\n", original_ref('é', "/x", 4));
+        assert_eq!(std::fs::read_to_string(&f).unwrap(), want);
+        let mut out = String::from(">");
+        r.put_into('p', &urls[0], &mut out);
+        assert_eq!(out, format!(">{}", original_ref('p', &urls[0], 4)));
         let _ = std::fs::remove_file(f);
     }
 

@@ -1,7 +1,7 @@
 use crate::browser::{Browser, Tab};
 use crate::cdp::Res;
 use crate::daemon::{Daemon, Out};
-use crate::messenger::one_line;
+use crate::messenger::push_one_line;
 use crate::ops::Args;
 use serde_json::Value;
 use std::sync::Arc;
@@ -18,22 +18,27 @@ pub struct Post {
     pub ad: bool,
 }
 
-fn format_post(d: &Daemon, p: &Post, urls: bool) -> String {
-    let text = one_line(&p.text);
-    let id = if p.url.is_empty() {
-        "-".to_string()
+pub(crate) fn format_post(refs: &crate::refs::Refs, p: &Post, urls: bool) -> String {
+    let mut line = String::with_capacity(p.url.len() + p.author.len() + p.text.len() + 32);
+    if p.url.is_empty() {
+        line.push('-');
     } else if urls {
-        p.url.clone()
+        line.push_str(&p.url);
     } else {
-        d.refs.put('p', &p.url)
-    };
-    let ad = if p.ad { " [ad]" } else { "" };
-    format!(
-        "{id}\t{}{ad}\t{}\t{}\t{text}",
-        one_line(&p.author),
-        one_line(&p.time),
-        p.stats
-    )
+        refs.put_into('p', &p.url, &mut line);
+    }
+    line.push('\t');
+    push_one_line(&mut line, &p.author);
+    if p.ad {
+        line.push_str(" [ad]");
+    }
+    line.push('\t');
+    push_one_line(&mut line, &p.time);
+    line.push('\t');
+    line.push_str(&p.stats);
+    line.push('\t');
+    push_one_line(&mut line, &p.text);
+    line
 }
 
 /// A wedged Chrome call must end the pump (so the next `fb feed` can start a new one), not hang it.
@@ -61,7 +66,10 @@ async fn step(b: &Browser, t: &Tab) -> Res<Vec<Post>> {
     let mut out = Vec::new();
     loop {
         let raw = b.eval(t, "window.__fbFeed.step()").await?;
-        let batch = raw.as_array().cloned().unwrap_or_default();
+        let batch = match raw {
+            Value::Array(a) => a,
+            _ => Vec::new(),
+        };
         if batch.is_empty() {
             return Ok(out);
         }
@@ -167,7 +175,7 @@ async fn collect(d: &Daemon, b: &Browser, t: &Tab, url: &str, args: &Args, out: 
             .take(n - count)
         {
             count += 1;
-            out.line(format_post(d, &p, urls));
+            out.line(format_post(&d.refs, &p, urls));
         }
         b.eval(t, "window.__fbFeed.scroll()").await?;
         tokio::time::sleep(Duration::from_millis(150)).await;
@@ -403,7 +411,7 @@ pub async fn feed(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     d.feed.start(&b, a.flag("refresh")).await;
     let urls = a.flag("urls");
     for p in d.feed.take(a.n.unwrap_or(10)).await? {
-        out.line(format_post(d, &p, urls));
+        out.line(format_post(&d.refs, &p, urls));
     }
     Ok(())
 }
@@ -424,11 +432,44 @@ mod tests {
     }
 
     #[test]
+    fn post_lines_flatten_whitespace_and_use_refs_or_urls() {
+        let refs = crate::refs::Refs::load(
+            std::env::temp_dir().join(format!("fb-feed-refs-{}", std::process::id())),
+        );
+        let mut p = post(
+            " Page \n One ",
+            "line one\n\n  line\ttwo ",
+            "/a/posts/pfbid0X",
+        );
+        p.time = "2 h".into();
+        p.stats = "1/2/3".into();
+        p.ad = true;
+        let short = refs.put('p', "/a/posts/pfbid0X");
+        assert_eq!(
+            format_post(&refs, &p, false),
+            format!("{short}\tPage One [ad]\t2 h\t1/2/3\tline one line two")
+        );
+        assert_eq!(
+            format_post(&refs, &p, true),
+            "/a/posts/pfbid0X\tPage One [ad]\t2 h\t1/2/3\tline one line two"
+        );
+        p.url.clear();
+        p.ad = false;
+        assert_eq!(
+            format_post(&refs, &p, false),
+            "-\tPage One\t2 h\t1/2/3\tline one line two"
+        );
+    }
+
+    #[test]
     fn replays_after_a_reload_are_dropped_but_distinct_urlless_posts_pass() {
         let mut seen = Replays::default();
         let sale = post("Shop", "Sale", "");
         assert!(seen.fresh(&sale));
-        assert!(seen.fresh(&sale), "a second identical post in one load is distinct");
+        assert!(
+            seen.fresh(&sale),
+            "a second identical post in one load is distinct"
+        );
         assert!(seen.fresh(&post("x", "y", "/a/posts/1")));
         seen.reload();
         assert!(!seen.fresh(&post("x", "y", "/a/posts/1")));

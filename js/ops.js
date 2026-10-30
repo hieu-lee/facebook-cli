@@ -98,11 +98,18 @@
   await sleep(600);
   const rows=await gather(n,()=>{
    const out=[];
+   /* the first two named links per target (m itself can be one of them): one pass instead of a scan per row */
+   const named=new Map();
+   for(const a of document.querySelectorAll('[role=main] a[href]')){
+    const text=clean(a.innerText);if(!text)continue;
+    const k=stripQ(a.href),l=named.get(k);
+    if(!l)named.set(k,[{a,text}]);else if(l.length<2)l.push({a,text});
+   }
    for(const m of document.querySelectorAll('[role=main] a[href*="friends_mutual"]')){
     const base=stripQ(m.href.replace(/\/friends_mutual.*/,''));
-    const link=[...document.querySelectorAll('[role=main] a[href]')].find(a=>a!==m&&clean(a.innerText)&&stripQ(a.href)===base);
+    const link=named.get(base)?.find(x=>x.a!==m);
     if(!link)continue;
-    out.push({k:base,v:[clean(link.innerText),{r:'u',v:base},clean(m.innerText)]});
+    out.push({k:base,v:[link.text,{r:'u',v:base},clean(m.innerText)]});
    }
    return out;
   });

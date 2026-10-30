@@ -24,15 +24,25 @@ impl Out {
         let _ = self.tx.send(proto::encode(OUT, s.as_ref().as_bytes()));
     }
     pub fn line(&self, s: impl AsRef<str>) {
-        let mut v = s.as_ref().to_string();
-        v.push('\n');
-        self.out(v);
+        let _ = self
+            .tx
+            .send(proto::encode_parts(OUT, s.as_ref().as_bytes(), b"\n"));
     }
     pub fn err(&self, s: impl AsRef<str>) {
         let _ = self.tx.send(proto::encode(ERR, s.as_ref().as_bytes()));
     }
     fn exit(&self, code: u8) {
         let _ = self.tx.send(proto::encode(EXIT, &[code]));
+    }
+}
+
+#[cfg(test)]
+impl Out {
+    /// An `Out` whose frames land in the returned receiver.
+    pub fn channel() -> (Out, mpsc::UnboundedReceiver<Vec<u8>>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let cancelled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        (Out { tx, cancelled }, rx)
     }
 }
 

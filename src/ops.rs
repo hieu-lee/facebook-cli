@@ -96,9 +96,17 @@ impl Args {
     }
 }
 
-fn cell(d: &Daemon, c: &Value) -> String {
+/// Appends one TSV cell: text with tabs/newlines flattened, or the short ref of an `{r, v}` object.
+fn push_cell(refs: &crate::refs::Refs, c: &Value, line: &mut String) {
     match c {
-        Value::String(s) => s.replace(['\t', '\n'], " "),
+        Value::String(s) => {
+            for (i, part) in s.split(['\t', '\n']).enumerate() {
+                if i > 0 {
+                    line.push(' ');
+                }
+                line.push_str(part);
+            }
+        }
         Value::Object(o) => {
             let kind = o
                 .get("r")
@@ -107,10 +115,12 @@ fn cell(d: &Daemon, c: &Value) -> String {
                 .chars()
                 .next()
                 .unwrap_or('p');
-            d.refs
-                .put(kind, o.get("v").and_then(Value::as_str).unwrap_or(""))
+            refs.put_into(kind, o.get("v").and_then(Value::as_str).unwrap_or(""), line);
         }
-        other => other.to_string(),
+        other => {
+            use std::fmt::Write;
+            let _ = write!(line, "{other}");
+        }
     }
 }
 
@@ -149,24 +159,33 @@ async fn run_expression(
         if let Some(e) = v["err"].as_str() {
             return Err(e.to_string());
         }
-        for row in v["rows"].as_array().cloned().unwrap_or_default() {
-            let cells: Vec<String> = row
-                .as_array()
-                .map(|r| r.iter().map(|c| cell(d, c)).collect())
-                .unwrap_or_default();
-            out.line(cells.join("\t"));
-        }
-        for l in v["lines"].as_array().cloned().unwrap_or_default() {
-            out.line(l.as_str().unwrap_or(""));
-        }
-        if let Some(note) = v["note"].as_str() {
-            out.err(format!("{note}\n"));
-        }
+        print_result(&d.refs, &v, out);
         Ok(())
     }
     .await;
     b.release(t).await;
     r
+}
+
+/// A page script's `{rows, lines, note}` as TSV lines (ref cells become short refs) plus the note on stderr.
+fn print_result(refs: &crate::refs::Refs, v: &Value, out: &Out) {
+    let mut line = String::new();
+    for row in v["rows"].as_array().into_iter().flatten() {
+        line.clear();
+        for (i, c) in row.as_array().into_iter().flatten().enumerate() {
+            if i > 0 {
+                line.push('\t');
+            }
+            push_cell(refs, c, &mut line);
+        }
+        out.line(&line);
+    }
+    for l in v["lines"].as_array().into_iter().flatten() {
+        out.line(l.as_str().unwrap_or(""));
+    }
+    if let Some(note) = v["note"].as_str() {
+        out.err(format!("{note}\n"));
+    }
 }
 
 /// Facebook path from a url or a `/path`. Rejects every other host, including userinfo tricks
@@ -375,9 +394,8 @@ pub async fn groups(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
         if let Some(e) = v["err"].as_str() {
             return Err(e.to_string());
         }
-        for row in v["rows"].as_array().cloned().unwrap_or_default() {
-            let cells: Vec<Value> = row.as_array().cloned().unwrap_or_default();
-            let get = |i: usize| cells.get(i).and_then(Value::as_str).unwrap_or("");
+        for row in v["rows"].as_array().into_iter().flatten() {
+            let get = |i: usize| row.get(i).and_then(Value::as_str).unwrap_or("");
             let path = get(1);
             let id = if a.flag("urls") {
                 format!("https://www.facebook.com{path}")
@@ -631,6 +649,43 @@ mod tests {
         ] {
             assert_eq!(fb_path(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn script_results_print_as_tsv_with_short_refs() {
+        let f = std::env::temp_dir().join(format!("fb-ops-refs-{}", std::process::id()));
+        let _ = std::fs::remove_file(&f);
+        let refs = crate::refs::Refs::load(f.clone());
+        let (out, mut rx) = Out::channel();
+        let v = serde_json::json!({
+            "rows": [
+                ["a\tb\nc", {"r": "u", "v": "/x"}, 7, null, true, {"v": "/y"}],
+                "not a row",
+                [],
+            ],
+            "lines": ["l1", "l2\tkept"],
+            "note": "n",
+        });
+        print_result(&refs, &v, &out);
+        drop(out);
+        let mut frames = Vec::new();
+        while let Ok(f) = rx.try_recv() {
+            frames.push((f[0], String::from_utf8(f[5..].to_vec()).unwrap()));
+        }
+        let (u, p) = (refs.put('u', "/x"), refs.put('p', "/y"));
+        let line = |s: &str| (crate::proto::OUT, s.to_string());
+        assert_eq!(
+            frames,
+            [
+                line(&format!("a b c\t{u}\t7\tnull\ttrue\t{p}\n")),
+                line("\n"),
+                line("\n"),
+                line("l1\n"),
+                line("l2\tkept\n"),
+                (crate::proto::ERR, "n\n".to_string()),
+            ]
+        );
+        let _ = std::fs::remove_file(f);
     }
 
     #[test]
