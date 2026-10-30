@@ -225,6 +225,8 @@
 ;(()=>{
  const F=window.__fb;
  const pinDialog=()=>[...document.querySelectorAll('[role=dialog]')].find(d=>d.querySelector('input,[role=textbox]')&&/PIN/i.test((d.innerText||'')+[...d.querySelectorAll('[aria-label]')].map(e=>e.getAttribute('aria-label')).join(' ')));
+ // The PIN is one field on some surfaces and one box per digit on others.
+ const pinInputs=d=>[...d.querySelectorAll('input:not([type=hidden]),[role=textbox]')].filter(i=>!['checkbox','radio','search','file'].includes(i.type));
  F.pinFocus=async()=>{
   let d=pinDialog();
   if(!d){
@@ -233,14 +235,29 @@
    d=await F.waitFor(pinDialog,5000);
   }
   if(!d)return 'PIN restore dialog not found; open Messenger history restoration with `fb page`';
-  const inp=d.querySelector('input:not([type=hidden]),[role=textbox]');
+  const inp=pinInputs(d)[0];
   if(!inp)return 'no PIN input';
   inp.focus();return true;
  };
  F.pinDone=async()=>{
-  const gone=await F.waitFor(()=>!pinDialog(),15000,150);
-  if(!gone)return 'PIN rejected or dialog still open';
-  return true;
+  // Typing alone does not submit every surface: some wait for a Continue /
+  // Restore button once the PIN is complete, and a wrong PIN is reported in
+  // the dialog instead of closing it. Watch for all three outcomes.
+  const SUBMIT=/^(Continue|Restore|Restore messages|Next|Submit|Done|Tiếp tục|Khôi phục|Tiếp theo|Continuer|Restaurer|Suivant)$/i;
+  const BAD=/incorrect|wrong PIN|invalid PIN|try again|không đúng|sai mã|erroné/i;
+  const clicked=new WeakSet();
+  const end=Date.now()+20000;
+  while(Date.now()<end){
+   const d=pinDialog();
+   if(!d)return true;
+   const err=[...d.querySelectorAll('[role=alert],div,span')].map(e=>F.clean(e.innerText)).find(t=>t&&t.length<200&&BAD.test(t));
+   if(err)return 'Facebook says the PIN was not accepted: '+err;
+   const filled=pinInputs(d).reduce((n,i)=>{const v=(i.value==null?i.innerText:i.value)||'';return n+v.replace(/\D/g,'').length},0);
+   const btn=[...d.querySelectorAll('button,[role=button]')].find(b=>F.visible(b)&&F.enabled(b)&&SUBMIT.test(F.clean(b.innerText||b.getAttribute('aria-label'))));
+   if(btn&&filled>=4&&!clicked.has(btn)){clicked.add(btn);F.press(btn);}
+   await F.sleep(150);
+  }
+  return 'PIN rejected or dialog still open';
  };
 })();
 
