@@ -9,6 +9,7 @@ READ
   profile [who]                      key<TAB>value lines
   friends [who] [-n 30]              name, ref, mutual friends
   groups [-n 100] [--urls]           groups you have joined: name, ref, privacy and size
+  members <group> [-n 200] [--urls]  people in a group: name, ref, role or join info
   search <q> [--type people|pages|groups|posts|events] [--match text]... [-n 10]   match visible clues
   stories <who> [--out dir] [-n N]  protected downloads, all visible stories by default
   photos <who> [--out dir] [-n 10 | --all]  protected profile-photo downloads
