@@ -2,7 +2,7 @@
 
 Facebook and Messenger for LLM agents, as a single fast Rust CLI.
 
-`fb` drives a dedicated Chrome profile that stays logged in to your Facebook account. It reads the feed, profiles, friends and search. It reads and sends Messenger messages and images. It posts, comments, reacts and deletes. Output is built for models: one record per line, tab separated, short refs instead of long URLs, no decoration.
+`fb` drives a dedicated Chrome profile that stays logged in to your Facebook account. It reads the feed, profiles, friends, joined groups and search. It reads and sends Messenger messages and images. It posts, comments, reacts and deletes. Output is built for models: one record per line, tab separated, short refs instead of long URLs, no decoration.
 
 ```
 $ fb feed -n 3
@@ -71,6 +71,7 @@ Run `fb help` for the exact list. `<who>` is `me`, a name, `@vanity`, an id, a U
 | `view <post> [-n 10]` | post body and comments |
 | `profile [who]` | key/value lines |
 | `friends [who] [-n 30]` | name, ref, mutual friends |
+| `groups [-n 100] [--urls]` | groups you have joined: name, ref (or URL with `--urls`), privacy and size |
 | `search <q> [--type people\|pages\|groups\|posts\|events] [--match text]... [-n 10]` | name, ref, visible info |
 | `stories <who> [--out dir] [-n N]` | download visible stories in a protected session |
 | `photos <who> [--out dir] [-n 10 \| --all]` | download visible profile photos in a protected session |
