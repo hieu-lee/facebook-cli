@@ -708,7 +708,7 @@ async fn submit(
 }
 
 pub async fn send(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> {
-    let a = crate::ops::parse(args, &["file", "img"], &["dry", "fuzzy"])?;
+    let a = crate::ops::parse(args, &["file", "img", "match"], &["dry", "fuzzy"])?;
     let dry = a.flag("dry");
     // `--img` is the older name of `--file`; both attach any file, in the order given. Only the
     // metadata is checked here; each file is read when its turn comes (memory stays bounded).
@@ -756,6 +756,18 @@ pub async fn send(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> 
             b.eval(&t, "window.__fb.clearDraft()").await?;
             return Ok(());
         }
+        // `fb reply` is send with --match: quote the matched message above
+        // the composer first; everything after is the ordinary send path.
+        let mut replied = String::new();
+        if let Some(m) = a.opt("match") {
+            let info = b
+                .eval(&t, &format!("window.__fb.msgReplyOpen({})", json!(m)))
+                .await?;
+            match &info {
+                Value::String(e) => return Err(e.clone()),
+                v => replied = v["text"].as_str().unwrap_or("").to_string(),
+            }
+        }
         // One message per file, then the text: every step must show up as exactly its own new outgoing
         // message, so a missing attachment can never be confirmed by another message.
         for (k, (name, path)) in files.iter().enumerate() {
@@ -784,6 +796,9 @@ pub async fn send(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> 
                     format!("{e} (the files were already sent)")
                 }
             })?;
+        }
+        if !replied.is_empty() {
+            out.line(format!("replied\t{}", one_line(&replied)));
         }
         match &target.name {
             Some(n) => out.line(format!("sent\t{n}")),
@@ -1021,6 +1036,72 @@ pub async fn unsend(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     }
     .await;
     // the page may be left mid-dialog on failure or dry run: never reuse it
+    if matches!(r, Ok(true)) {
+        b.release_as(t, "messages").await;
+    } else {
+        b.close(t).await;
+    }
+    r.map(|_| ())
+}
+
+/// React to one message in a chat (the newest, or the newest containing
+/// --match text). Mirrors unsend's shape: resolve, open, one JS step that
+/// finds the message's toolbar and picks the emoji, verify by re-reading
+/// the message's reactions inside that same step.
+pub async fn msgreact(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
+    let a = crate::ops::parse(args, &["match"], &["fuzzy"])?;
+    let (spec, reaction) = match a.pos.split_first() {
+        Some((s, rest)) if rest.len() == 1 => (s.as_str(), rest[0].as_str()),
+        _ => {
+            return Err(
+                "usage: msgreact <chat> <like|love|care|haha|wow|sad|angry> [--match text]"
+                    .into(),
+            )
+        }
+    };
+    if !matches!(
+        reaction,
+        "like" | "love" | "care" | "haha" | "wow" | "sad" | "angry"
+    ) {
+        return Err(format!("unknown reaction: {reaction}"));
+    }
+    let b = d.browser(out).await?;
+    let gen0 = b.generation.load(std::sync::atomic::Ordering::SeqCst);
+    let _account = d.account.read().await;
+    if b.generation.load(std::sync::atomic::Ordering::SeqCst) != gen0 {
+        return Err(
+            "the account changed while this command waited; nothing was done, try again".into(),
+        );
+    }
+    let target = resolve(d, &b, spec).await?;
+    require_exact(d, &target, spec, a.flag("fuzzy"))?;
+    let t = b.acquire_kind("messages").await?;
+    if b.generation.load(std::sync::atomic::Ordering::SeqCst) != gen0 {
+        return Err(
+            "the account changed while this command waited; nothing was done, try again".into(),
+        );
+    }
+    let r = async {
+        open_thread(&b, &t, &target.path).await?;
+        let m = a.opt("match").unwrap_or("");
+        let info = b
+            .eval(
+                &t,
+                &format!(
+                    "window.__fb.msgReact({}, {})",
+                    json!(m),
+                    json!(reaction)
+                ),
+            )
+            .await?;
+        let text = match &info {
+            Value::String(e) => return Err(e.clone()),
+            v => v["text"].as_str().unwrap_or("").to_string(),
+        };
+        out.line(format!("reacted\t{}", one_line(&text)));
+        Ok(true)
+    }
+    .await;
     if matches!(r, Ok(true)) {
         b.release_as(t, "messages").await;
     } else {

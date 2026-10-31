@@ -211,6 +211,9 @@ impl Browser {
             };
             // armed while probing: if this future is cancelled, the tab is closed instead of leaked
             t.armed = true;
+            // pooled tabs are frozen (see release_as): wake this one before
+            // probing, or the probe itself would stall on a frozen page
+            self.set_lifecycle(&t, false).await;
             let alive = self
                 .cdp
                 .call(
@@ -434,9 +437,22 @@ impl Browser {
             return;
         }
         t.kind = kind.to_string();
-        let mut idle = self.idle.lock().await;
+        let idle = self.idle.lock().await;
         if idle.len() < MAX_IDLE {
-            idle.push(t);
+            // Freeze the parked page: Facebook tabs run heavy timers, and
+            // the browser is launched with background throttling disabled,
+            // so an unfrozen pooled tab burns CPU the whole time it waits.
+            // acquire_kind unfreezes before use; a frozen tab that Chrome
+            // discards meanwhile is caught by the probe there.
+            drop(idle);
+            self.set_lifecycle(&t, true).await;
+            let mut idle = self.idle.lock().await;
+            if idle.len() < MAX_IDLE {
+                idle.push(t);
+                return;
+            }
+            drop(idle);
+            self.close(t).await;
             return;
         }
         drop(idle);
@@ -574,6 +590,20 @@ impl Browser {
             .call(Some(&t.session), "Input.insertText", json!({"text":text}))
             .await
             .map(|_| ())
+    }
+
+    /// Freeze or unfreeze a tab's page: a frozen page runs no timers and
+    /// renders nothing, so a parked background tab costs no CPU. Best
+    /// effort — a browser that refuses leaves the page exactly as it was.
+    pub async fn set_lifecycle(&self, t: &Tab, frozen: bool) {
+        let _ = self
+            .cdp
+            .call(
+                Some(&t.session),
+                "Page.setWebLifecycleState",
+                json!({"state": if frozen { "frozen" } else { "active" }}),
+            )
+            .await;
     }
 
     pub async fn key(&self, t: &Tab, key: &str, code: &str, vk: u32, modifiers: u32) -> Res<()> {
