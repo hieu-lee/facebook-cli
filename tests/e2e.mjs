@@ -36,7 +36,7 @@ try{
   if(m.method==='Target.detachedFromTarget'){detached.add(m.params.sessionId);cancelCalls(m.params.sessionId)}
   if(m.method==='Target.attachedToTarget'){const s=m.params.sessionId;targetSessions.set(m.params.targetInfo.targetId,s);report.push({attachedTarget:{type:m.params.targetInfo.type,url:m.params.targetInfo.url,waitingForDebugger:m.params.waitingForDebugger}});await call('Fetch.enable',{patterns:[{urlPattern:'*',requestStage:'Request'}]},s);if(m.params.waitingForDebugger)await call('Runtime.runIfWaitingForDebugger',{},s)}
   if(m.method==='Fetch.requestPaused'){const u=new URL(m.params.request.url);if(u.pathname==='/media-stall')mediaStallRequests++;if(u.pathname==='/photo.php'&&u.searchParams.has('fbid'))photoDetailRequests++;if(u.pathname==='/fixture/story.webm'||u.pathname==='/fixture/cross-origin.webm'){const range=Object.entries(m.params.request.headers).find(([k])=>k.toLowerCase()==='range')?.[1]?.match(/^bytes=(\d+)-(\d*)$/);const start=range?Number(range[1]):0,end=range?.[2]?Math.min(Number(range[2]),storyVideo.length-1):storyVideo.length-1;const headers=[{name:'Content-Type',value:'video/webm'},{name:'Accept-Ranges',value:'bytes'}];if(range)headers.push({name:'Content-Range',value:`bytes ${start}-${end}/${storyVideo.length}`});await call('Fetch.fulfillRequest',{requestId:m.params.requestId,responseCode:range?206:200,responseHeaders:headers,body:storyVideo.subarray(start,end+1).toString('base64')},m.sessionId);return}if(u.pathname==='/fixture/redirect-away'||u.pathname==='/stories/login'){await call('Fetch.fulfillRequest',{requestId:m.params.requestId,responseCode:302,responseHeaders:[{name:'Location',value:u.pathname==='/stories/login'?'https://www.facebook.com/login':'https://example.test/login'}]},m.sessionId);return}if(u.pathname==='/fixture/cancel-start')cancelHoverStarted=true;const page=u.pathname.startsWith('/stories/fixture')?fixture.replace('const main=',`window.__serverStorySeen=${storySeenRequests>0};const main=`):fixture;let body=Buffer.from(['www.facebook.com','example.test'].includes(u.hostname)?page:'').toString('base64');if(u.pathname==='/api/graphql/'){const form=m.params.request.method==='GET'?u.searchParams:new URLSearchParams(m.params.request.postData);const docId=u.searchParams.get('doc_id')||form.get('doc_id');if(form.get('__crn')==='duplicate-b')await new Promise(resolve=>setTimeout(resolve,800));if(docId==='111')storySeenRequests++;if(docId==='27028962643386672')photoQueryRequests++;const p=JSON.parse(form.get('variables'));const mode=p?.receiptMode;body=Buffer.from(docId==='27028962643386672'?JSON.stringify({padding:form.get('__crn')==='large'?'x'.repeat(8*1024*1024+1):'',data:{node:{id:'collection',pageItems:{edges:[{node:{__typename:'TimelineAppCollectionItem',node:{__typename:'Photo',id:['ranked','missing-page','three'].includes(form.get('__crn'))?'1':form.get('__crn')==='extra-b'?'3':'2',viewer_image:{uri:form.get('__crn')==='empty'?'':form.get('__crn')==='rehydrate'?'https://fixture.fbcdn.net/media':form.get('__crn')==='ranked'?'https://top.fbcdn.net/media':form.get('__crn')==='expired'?'https://fresh.fbcdn.net/media':form.get('__crn')==='missing-page'?'https://late.fbcdn.net/media':form.get('__crn')==='invalid-later'?'https://allowed.fbcdn.net/media':form.get('__crn')==='three'?'https://third.fbcdn.net/media':'https://invalid.example/2.jpg'}}}},...(form.get('__crn')==='duplicate-a'?[{node:{__typename:'TimelineAppCollectionItem',node:{__typename:'Photo',id:'3',viewer_image:{uri:'https://invalid.example/3.jpg'}}}}]:[])],page_info:form.get('__crn')==='oversize'?{end_cursor:'x'.repeat(4097),has_next_page:true}:{end_cursor:'cursor2',has_next_page:false}}}}}):mode==='malformed'?'not json':JSON.stringify(p?{data:{story_create:{story:{url:mode==='external'?'https://example.test/fixture/posts/'+p.id:'https://www.facebook.com/fixture/posts/'+p.id,default_actor:{id:mode==='wrongActor'?'999':'12345'}}}}}:{errors:[{message:'fixture publish failed'}]})).toString('base64')}await call('Fetch.fulfillRequest',{requestId:m.params.requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'text/html; charset=utf-8'}],body},m.sessionId)}
- }catch(e){if(!(e instanceof TargetClosed)&&!e.message.includes('Session with given id not found'))report.push({harnessError:e.message,event:m.method,sessionId:m.sessionId||m.params.sessionId})}};
+ }catch(e){if(!(e instanceof TargetClosed)&&!e.message.includes('Session with given id not found')&&!e.message.includes('Invalid InterceptionId'))report.push({harnessError:e.message,event:m.method,sessionId:m.sessionId||m.params.sessionId})}};
  report.push({runtime:{node:process.version,platform:process.platform,browser:await call('Browser.getVersion')}});
  await call('Target.setAutoAttach',{autoAttach:true,waitForDebuggerOnStart:true,flatten:true});
  await call('Storage.setCookies',{cookies:[{name:'c_user',value:'12345',domain:'.facebook.com',path:'/'},{name:'story_fixture',value:'primary',domain:'.facebook.com',path:'/',secure:true},{name:'story_fixture',value:'partitioned',domain:'.facebook.com',path:'/',secure:true,sameSite:'None',partitionKey:{topLevelSite:'https://example.test',hasCrossSiteAncestor:true}}]});
@@ -528,6 +528,23 @@ try{
   assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.unlocked))'),true);
   await evaluate('localStorage.pinStyle=JSON.stringify("segmented");localStorage.restored="true";JSON.stringify(true)');
  });
+ await check('unlock opens restore from a plain link entry',async()=>{
+  await evaluate('localStorage.restored="false";localStorage.pinStyle=JSON.stringify("link");localStorage.removeItem("unlocked");JSON.stringify(true)');
+  assert.match(await fb('unlock','1234'),/^unlocked/);
+  assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.unlocked))'),true);
+ });
+ await check('unlock opens restore from a long banner button',async()=>{
+  await evaluate('localStorage.restored="false";localStorage.pinStyle=JSON.stringify("banner");localStorage.removeItem("unlocked");JSON.stringify(true)');
+  assert.match(await fb('unlock','1234'),/^unlocked/);
+  assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.unlocked))'),true);
+  await evaluate('localStorage.pinStyle=JSON.stringify("segmented");localStorage.restored="true";JSON.stringify(true)');
+ });
+ await check('unlock uses the secure-storage page when the chat list offers no entry',async()=>{
+  await evaluate('localStorage.restored="false";localStorage.pinStyle=JSON.stringify("none");localStorage.removeItem("unlocked");JSON.stringify(true)');
+  assert.match(await fb('unlock','1234'),/^unlocked/);
+  assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.unlocked))'),true);
+  await evaluate('localStorage.pinStyle=JSON.stringify("segmented");localStorage.restored="true";JSON.stringify(true)');
+ });
  await check('a wrong segmented PIN reports what Facebook said',async()=>{
   await evaluate('localStorage.restored="false";localStorage.removeItem("unlocked");JSON.stringify(true)');
   await assert.rejects(()=>fb('unlock','9999'),/PIN was not accepted/);
@@ -796,6 +813,15 @@ try{
   assert.equal(await fb('page','a','eval','window.__fb.dismissRestore().then(()=>!!document.querySelector("#unrelated"))'),'true');
   await fb('page','a','key','Escape');await fb('page','a','scroll','0','100');await fb('page','a','close');await fb('page','b','close');await assert.rejects(()=>fb('page','a','snapshot'));
   await fb('page','restart','open','https://www.facebook.com/fixture');await fb('stop');await assert.rejects(()=>fb('page','restart','snapshot'));
+ });
+ await check('verified badge reads as Verified, not the tooltip sentence',async()=>{
+  const saved=await evaluate('JSON.stringify(localStorage.posts||null)');
+  await evaluate('localStorage.posts=JSON.stringify([{id:"100",text:"Badge post",aud:"me",badge:true}]);JSON.stringify(true)');
+  try{
+   const feed=await fb('feed');
+   assert.ok(feed.includes('Verified'),'badge shortened to Verified');
+   assert.ok(!feed.includes('Accounts with a verified badge'),'tooltip sentence gone');
+  }finally{await evaluate(saved==='null'?'localStorage.removeItem("posts");JSON.stringify(true)':'localStorage.posts='+saved+';JSON.stringify(true)');}
  });
  await check('timeout drops uncertain page and close frees its name',async()=>{
   const original=env;env={...env,FB_STATE:path.join(temp,'timeout-state'),FB_TIMEOUT:'1'};

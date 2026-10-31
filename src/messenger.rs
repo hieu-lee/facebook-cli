@@ -939,10 +939,17 @@ pub async fn unlock(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     let t = b.acquire().await?;
     let r = async {
         b.goto(&t, "https://www.facebook.com/messages/t/").await?;
-        match b.eval(&t, "window.__fb.pinFocus()").await? {
-            Value::Bool(true) => {}
-            Value::String(s) => return Err(s),
-            _ => return Err("unexpected".into()),
+        if b.eval(&t, "window.__fb.pinFocus(6000)").await? != Value::Bool(true) {
+            // The chat list only offers the restore on a brand-new profile;
+            // once that prompt is spent there is no entry there at all. The
+            // standing door is Facebook's secure-storage page, whose PIN
+            // surface other Messenger tooling drives the same way.
+            b.goto(&t, "https://www.facebook.com/secure-storage").await?;
+            match b.eval(&t, "window.__fb.pinFocus(30000)").await? {
+                Value::Bool(true) => {}
+                Value::String(s) => return Err(s),
+                _ => return Err("unexpected".into()),
+            }
         }
         // Type the PIN as real keystrokes, one digit at a time. A single
         // Input.insertText lands in only the first box of the surfaces that
