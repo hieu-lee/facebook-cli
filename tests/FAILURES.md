@@ -196,3 +196,10 @@ heading, never to the first ancestor containing two cards.
 A captured friend-list section can be replaced by React during the scan. Never
 certify detached or no-longer-current rows, even when their bounding box becomes
 zero. Early section replacement with a new duplicate must stop before typing.
+
+Live-account variant (2026-10-30): on a real account the restore flow opens
+staged — an explanation stage and a restore-method choice come before any PIN
+field exists — so unlock must walk those stages (choose the PIN method, press
+what advances) instead of requiring a PIN input up front. A not-found error
+must name the dialogs and buttons actually on screen, never just report the
+dialog missing.
