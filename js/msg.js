@@ -249,7 +249,12 @@
  };
  const pinRoot=()=>{const d=pinDialog();if(d)return d;const r=pagePinRoot();if(r)return r;const rd=restoreDialog();return rd&&pinInputs(rd).length?rd:null;};
  const label=e=>F.clean(e.innerText||e.getAttribute('aria-label')||'');
+ // Clickable elements whose whole label matches: buttons and links, plus
+ // the plain divs Facebook uses for actions like Continue on the
+ // secure-storage surface (no role, just a pointer cursor).
+ const pressable=(root,re)=>[...root.querySelectorAll('button,[role=button],a[href],[role=link],div,span')].find(e=>F.visible(e)&&F.enabled(e)&&re.test(label(e))&&(e.tagName==='BUTTON'||e.tagName==='A'||(e.getAttribute&&e.getAttribute('role'))||getComputedStyle(e).cursor==='pointer'));
  const ADVANCE=/^(continue|next|restore|restore messages|restore chat history|restore history|get started|start|submit|done|tiếp tục|tiếp theo|khôi phục|continuer|suivant|restaurer|commencer)$/i;
+ const STAGE=/^(privacy\s*&\s*safety|privacy and safety|end-to-end encrypted chats|message storage|secure storage)$/i;
  const OPEN=/enter (your |a )?pin|use (your )?pin|restore( messages| chat history| history)?|restore now|sync now|nhập mã pin|saisir (?:le |votre )?code pin|saisissez (?:le |votre )?code pin/i;
  // What Facebook actually put on screen, so a not-found error names the real
  // stage instead of sending the user to restore in the wrong place. Dialog
@@ -257,17 +262,18 @@
  const seenRestore=()=>{
   const parts=[];
   for(const d of document.querySelectorAll('[role=dialog]')){const t=F.clean(d.innerText).slice(0,120);if(t)parts.push('dialog: '+t);}
-  const btns=[...document.querySelectorAll('button,[role=button],a[href],[role=link]')].filter(b=>F.visible(b)).map(label).filter(Boolean).slice(0,30);
+  const inDlg=[...document.querySelectorAll('[role=dialog] button,[role=dialog] [role=button],[role=dialog] a[href],[role=dialog] [role=link]')].filter(b=>F.visible(b)).map(label).filter(Boolean);
+  const btns=[...inDlg,...[...document.querySelectorAll('button,[role=button],a[href],[role=link]')].filter(b=>F.visible(b)).map(label).filter(Boolean)].slice(0,30);
   if(btns.length)parts.push('buttons: '+btns.join(' | '));
   const hints=new Set();
   for(const e of document.querySelectorAll('div,span,a,p')){if(hints.size>=6)break;if(!F.visible(e)||e.children.length>3)continue;const t=F.clean(e.innerText||'');if(t&&t.length<=160&&/restore|secure storage|chat history|end-to-end/i.test(t))hints.add(e.tagName.toLowerCase()+': '+t.slice(0,120));}
   if(hints.size)parts.push('restore text: '+[...hints].join(' | '));
   return parts.length?(' On screen: '+parts.join(' ;; ').slice(0,900)):'';
  };
- F.pinFocus=async()=>{
+ F.pinFocus=async(budget)=>{
   const pressed=new WeakSet();
   let lastHint=0;
-  const end=Date.now()+45000;
+  const end=Date.now()+(budget||45000);
   while(Date.now()<end){
    const root=pinRoot();
    if(root){const inp=pinInputs(root).filter(i=>F.visible(i))[0]||pinInputs(root)[0];if(inp){inp.focus();return true;}}
@@ -277,7 +283,7 @@
    if(d){
     const opt=[...d.querySelectorAll('[role=radio],[role=option],[role=listitem],label,button,[role=button]')].find(e=>F.visible(e)&&F.enabled(e)&&/pin/i.test(label(e))&&!/forgot|reset/i.test(label(e)));
     if(opt&&!pressed.has(opt)){pressed.add(opt);try{F.press(opt);}catch(e){}await F.sleep(300);continue;}
-    const btn=[...d.querySelectorAll('button,[role=button]')].find(b=>F.visible(b)&&F.enabled(b)&&ADVANCE.test(label(b)));
+    const btn=pressable(d,ADVANCE);
     if(btn&&!pressed.has(btn)){pressed.add(btn);try{F.press(btn);}catch(e){}await F.sleep(300);continue;}
    }
    // No dialog: the restore offer may be a banner or link in the chat pane.
@@ -285,6 +291,11 @@
    // banner button's label is the whole sentence, well past 60 chars.
    const open=[...document.querySelectorAll('button,[role=button],a[href],[role=link],[role=menuitem],[role=tab]')].find(b=>F.visible(b)&&F.enabled(b)&&label(b).length<=140&&OPEN.test(label(b)));
    if(open&&!pressed.has(open)){pressed.add(open);try{F.press(open);}catch(e){}await F.sleep(300);continue;}
+   // Settings surfaces lead to the same restore entry one level at a
+   // time (Privacy & safety, then End-to-end encrypted chats, then
+   // Message storage); advance whichever step is on screen.
+   const stage=[...document.querySelectorAll('button,[role=button],a[href],[role=link],[role=menuitem],[role=tab],[role=option],[role=listitem]')].find(b=>F.visible(b)&&F.enabled(b)&&STAGE.test(label(b)));
+   if(stage&&!pressed.has(stage)){pressed.add(stage);try{F.press(stage);}catch(e){}await F.sleep(300);continue;}
    // Last resort, throttled: a bare text element that reads like a restore
    // entry and is clickable (pointer cursor or inside a clickable ancestor).
    if(Date.now()-lastHint>1500){
@@ -318,7 +329,7 @@
     if(!sealed)sealed=Date.now();else if(Date.now()-sealed>3000)return true;
    }else sealed=0;
    const filled=inputs.reduce((n,i)=>{const v=(i.value==null?i.innerText:i.value)||'';return n+v.replace(/\D/g,'').length},0);
-   const btn=[...d.querySelectorAll('button,[role=button]')].find(b=>F.visible(b)&&F.enabled(b)&&SUBMIT.test(F.clean(b.innerText||b.getAttribute('aria-label'))));
+   const btn=pressable(d,SUBMIT);
    if(btn&&filled>=4&&!clicked.has(btn)){clicked.add(btn);F.press(btn);}
    await F.sleep(150);
   }
