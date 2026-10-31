@@ -550,6 +550,16 @@ try{
   await assert.rejects(()=>fb('unlock','654321'),/PIN was not accepted/);
   await evaluate('localStorage.pinStyle=JSON.stringify("segmented");localStorage.restored="true";JSON.stringify(true)');
  });
+ await check('a blocked read never declines the restore',async()=>{
+  await evaluate('localStorage.restored="false";localStorage.removeItem("pinStyle");localStorage.removeItem("unlocked");JSON.stringify(true)');
+  await assert.rejects(()=>fb('read','42','-n','1'),/did not load|history prompt blocked/);
+  // Declining would have flipped restored to true and dropped the prompt:
+  // the fixture only sets restored on the "Don't restore messages" path.
+  assert.equal(await evaluate('localStorage.getItem("restored")'),'false');
+  assert.match(await fb('unlock','1234'),/^unlocked/);
+  assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.unlocked))'),true);
+  await evaluate('localStorage.pinStyle=JSON.stringify("segmented");localStorage.restored="true";JSON.stringify(true)');
+ });
  await check('a wrong segmented PIN reports what Facebook said',async()=>{
   await evaluate('localStorage.restored="false";localStorage.removeItem("unlocked");JSON.stringify(true)');
   await assert.rejects(()=>fb('unlock','9999'),/PIN was not accepted/);

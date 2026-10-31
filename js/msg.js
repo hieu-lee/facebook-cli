@@ -324,32 +324,41 @@
   }
   return 'PIN restore dialog not found; open Messenger history restoration with `fb page`.'+seenRestore();
  };
- F.pinDone=async()=>{
+ F.pinDone=async(budget)=>{
   // Typing alone does not submit every surface: some wait for a Continue /
   // Restore button once the PIN is complete, and a wrong PIN is reported in
-  // the dialog instead of closing it. Watch for all three outcomes.
+  // the dialog instead of closing it. And on the real surface the PIN
+  // auto-submits into a "Verifying your PIN" state that can run for
+  // minutes: a sealed field with the surface still up is Facebook still
+  // restoring, NOT success and NOT failure. The restore runs in this page,
+  // so the caller keeps the tab alive and unfrozen until the surface has
+  // actually cleared (sustained, not a remount blip) or the budget ends;
+  // a budget that ends on a sealed surface reports 'VERIFYING' so the
+  // caller leaves the tab running instead of freezing the restore dead.
   const SUBMIT=/^(Continue|Restore|Restore messages|Next|Submit|Done|Tiếp tục|Khôi phục|Tiếp theo|Continuer|Restaurer|Suivant)$/i;
   const BAD=/incorrect|wrong PIN|invalid PIN|PIN (was )?not accepted|không đúng|sai mã|erroné/i;
   const clicked=new WeakSet();
-  const end=Date.now()+20000;
-  let sealed=0;
+  const end=Date.now()+(budget||240000);
+  let gone=0;
   while(Date.now()<end){
    const d=pinRoot();
-   if(!d)return true;
+   if(!d){
+    if(!gone)gone=Date.now();else if(Date.now()-gone>1000)return true;
+    await F.sleep(250);continue;
+   }
+   gone=0;
    const err=[...d.querySelectorAll('[role=alert],div,span')].map(e=>F.clean(e.innerText)).find(t=>t&&t.length<200&&BAD.test(t));
    if(err)return 'Facebook says the PIN was not accepted: '+err;
-   // The field sealing shut (disabled/hidden) with no rejection showing is
-   // Facebook taking the PIN away to restore: that is a submission, not a
-   // dialog that is still waiting for one.
    const inputs=pinInputs(d);
-   if(inputs.length&&!inputs.some(i=>F.visible(i)&&F.enabled(i))){
-    if(!sealed)sealed=Date.now();else if(Date.now()-sealed>3000)return true;
-   }else sealed=0;
    const filled=inputs.reduce((n,i)=>{const v=(i.value==null?i.innerText:i.value)||'';return n+v.replace(/\D/g,'').length},0);
    const btn=pressable(d,SUBMIT);
    if(btn&&filled>=4&&!clicked.has(btn)){clicked.add(btn);F.press(btn);}
-   await F.sleep(150);
+   await F.sleep(250);
   }
+  const d=pinRoot();
+  if(!d)return true;
+  const inputs=pinInputs(d);
+  if(inputs.length&&!inputs.some(i=>F.visible(i)&&F.enabled(i)))return 'VERIFYING';
   return 'PIN rejected or dialog still open';
  };
 })();
