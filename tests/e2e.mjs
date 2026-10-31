@@ -687,6 +687,14 @@ try{
   const text='multiline first\nsecond line';const receipt=await fb('post',text,'--to','me');assert.match(receipt,/^posted\tp[a-z0-9]+\t/);assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.posts)[0].text)'),text);await fb('delete',receipt.split('\t')[1]);
   assert.match(await fb('send','42',text),/^sent/);assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.messages).filter(x=>x==="multiline first\\nsecond line").length)'),1);
  });
+ await check('message react and reply work through the message toolbar',async()=>{
+  await evaluate('localStorage.restored="true";JSON.stringify(true)');
+  assert.match(await fb('msgreact','42','love','--match','fixture send en'),/^reacted/);
+  assert.match(await fb('read','42','-n','6'),/❤️/);
+  assert.match(await fb('reply','42','fixture reply text','--match','Earlier message'),/^replied/);
+  assert.match(await fb('read','42','-n','6'),/fixture reply text/);
+  assert.equal(await evaluate('JSON.parse(localStorage.lastReplyTo)'),'Earlier message');
+ });
  await check('snapshot Unicode boundaries remain valid and bounded',async()=>{
   await fb('page','unicode','open','https://www.facebook.com/fixture');
   await fb('page','unicode','eval',`document.body.replaceChildren();const t=document.createElement('div');t.textContent='x'.repeat(1799)+'😀';const b=document.createElement('button');b.setAttribute('aria-label','x'.repeat(159)+'😀');const input=document.createElement('input');input.value='x'.repeat(119)+'😀';document.body.append(t,b,input);true`);

@@ -401,4 +401,79 @@
   await sleep(600);
   return gone?true:'not confirmed by messenger';
  };
+ // Find one message in the open thread: the newest whose text contains
+ // `match` (any sender), or the newest message at all. Same discipline as
+ // unsendOpen: start from the newest rows, never pick among half-rendered
+ // ones, never act on a row with no readable text or attachment.
+ F.msgTarget=async match=>{
+  const log=document.querySelector('[role=log]');
+  if(!log)return null;
+  const sc=F.scroller(log);
+  if(sc)sc.scrollTop=sc.scrollHeight;else window.scrollTo(0,document.body.scrollHeight);
+  await sleep(250);
+  const ready=await waitFor(()=>[...log.querySelectorAll('[role=article]')].slice(-4).every(a=>a.querySelector('[aria-label]')),5000,100);
+  if(!ready)return null;
+  if(!await F.settleBottom(log,3,300))return null;
+  for(const a of [...log.querySelectorAll('[role=article]')].reverse()){
+   const m=F.parseMessage(a,log);
+   if(match&&!(m.text||'').toLowerCase().includes(match.toLowerCase()))continue;
+   if(!m.text&&!m.att)continue;
+   return{a,m};
+  }
+  return null;
+ };
+ // Focus a message and find one of its hover toolbar's buttons by label.
+ F.msgToolbarBtn=async(a,re)=>{
+  a.scrollIntoView({block:'center'});
+  const focusable=a.querySelector('[tabindex="0"]');
+  if(!focusable)return null;
+  focusable.focus();
+  return await waitFor(()=>{
+   const b=[...a.querySelectorAll('[role=toolbar] [role=button],[role=toolbar] [aria-label]')].filter(e=>e.getBoundingClientRect().width>0);
+   return b.find(e=>re.test((e.getAttribute('aria-label')||'')+' '+(e.title||'')))||null;
+  },4000,100);
+ };
+ const REACT_EMOJI={like:'👍',love:'❤️',care:'🥰',haha:'😆',wow:'😮',sad:'😢',angry:'😡'};
+ // React to one message: its toolbar reaction button opens an emoji
+ // picker; pick ours and verify it landed on the message.
+ F.msgReact=async(match,name)=>{
+  const emoji=REACT_EMOJI[name];
+  if(!emoji)return 'unknown reaction: '+name;
+  const t=await F.msgTarget(match);
+  if(!t)return match?'no message contains that text':'no message found in this chat';
+  const btn=await F.msgToolbarBtn(t.a,/react|emoji|cảm xúc|réagir/i);
+  if(!btn)return 'no react button on that message';
+  F.press(btn);
+  const pick=await waitFor(()=>{
+   const pops=[...document.querySelectorAll('[role=dialog],[role=menu]')].filter(e=>e.getBoundingClientRect().width>0&&!e.querySelector('[role=log]'));
+   for(const p of pops.reverse()){
+    const b=[...p.querySelectorAll('[role=button],button')].find(e=>(e.textContent||'').includes(emoji)||(e.getAttribute('aria-label')||'').toLowerCase()===name);
+    if(b)return b;
+   }
+   return null;
+  },4000,100);
+  if(!pick)return 'the reaction picker did not open';
+  F.press(pick);
+  const log=document.querySelector('[role=log]');
+  // the message row itself may be re-rendered by the reaction: re-find it
+  const ok=await waitFor(()=>{
+   const again=[...log.querySelectorAll('[role=article]')].reverse().find(x=>{const mm=F.parseMessage(x,log);return mm.text===t.m.text&&mm.sender===t.m.sender});
+   return !!again&&F.parseMessage(again,log).reactions.includes(emoji);
+  },3000,150);
+  if(!ok)return 'the reaction did not land on the message';
+  return{text:'reacted '+emoji+' to '+(t.m.sender||'a message')+': '+(t.m.text||'['+(t.m.att||'attachment')+']')};
+ };
+ // Arm a reply: the message's toolbar Reply button makes Messenger quote
+ // it above the composer; the caller then sends the reply text normally.
+ F.msgReplyOpen=async match=>{
+  const t=await F.msgTarget(match);
+  if(!t)return match?'no message contains that text':'no message found in this chat';
+  const btn=await F.msgToolbarBtn(t.a,/^reply|reply|trả lời|répondre/i);
+  if(!btn)return 'no reply button on that message';
+  F.press(btn);
+  const log=document.querySelector('[role=log]');
+  const banner=await waitFor(()=>[...document.querySelectorAll('div,span')].find(e=>!log.contains(e)&&e.children.length<4&&/replying to|đang trả lời|vous répondez/i.test(e.textContent||'')&&e.getBoundingClientRect().width>0)||null,4000,150);
+  if(!banner)return 'the reply quote did not appear above the message box';
+  return{text:'replying to '+(t.m.sender||'a message')+': '+(t.m.text||'['+(t.m.att||'attachment')+']')};
+ };
 })();

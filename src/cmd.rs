@@ -11,7 +11,7 @@ pub async fn run(d: &Daemon, argv: &[String], cwd: &str, out: &Out) -> Res<()> {
             .and_then(|v| v.parse().ok())
             .unwrap_or(150);
         // every attachment is uploaded and confirmed on its own (up to 120s each)
-        let files = if argv.first().map(String::as_str) == Some("send") {
+        let files = if matches!(argv.first().map(String::as_str), Some("send" | "reply")) {
             argv.iter()
                 .filter(|a| matches!(a.split('=').next(), Some("--file" | "--img")))
                 .count() as u64
@@ -86,6 +86,8 @@ async fn run_inner(d: &Daemon, argv: &[String], _cwd: &str, out: &Out) -> Res<()
         "comment" => crate::act::comment(d, &argv[1..], out).await,
         "react" => crate::act::react(d, &argv[1..], out).await,
         "unsend" => crate::messenger::unsend(d, &argv[1..], out).await,
+        "msgreact" => crate::messenger::msgreact(d, &argv[1..], out).await,
+        "reply" => crate::messenger::send(d, &argv[1..], _cwd, out).await,
         "unlock" => crate::messenger::unlock(d, &argv[1..], out).await,
         "feed" => crate::feed::feed(d, &argv[1..], out).await,
         "posts" => crate::feed::posts(d, &argv[1..], out).await,
