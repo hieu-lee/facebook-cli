@@ -939,13 +939,15 @@ pub async fn unlock(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     let t = b.acquire().await?;
     let r = async {
         b.goto(&t, "https://www.facebook.com/messages/t/").await?;
-        if b.eval(&t, "window.__fb.pinFocus(6000)").await? != Value::Bool(true) {
-            // The chat list only offers the restore on a brand-new profile;
-            // once that prompt is spent there is no entry there at all. The
-            // standing door is Facebook's secure-storage page, whose PIN
-            // surface other Messenger tooling drives the same way.
-            b.goto(&t, "https://www.facebook.com/secure-storage").await?;
-            match b.eval(&t, "window.__fb.pinFocus(30000)").await? {
+        if b.eval(&t, "window.__fb.pinFocus(20000)").await? != Value::Bool(true) {
+            // The restore prompt is summoned by the messages page itself
+            // (verified on the user's account, 2026-10-31: it reappears on
+            // a fresh load even after being closed). One reload re-summons
+            // it when the first load raced or the prompt was mid-dismissal.
+            // facebook.com/secure-storage is NOT a fallback: on a real
+            // account it redirects to an unrelated business Page.
+            b.goto(&t, "https://www.facebook.com/messages/t/").await?;
+            match b.eval(&t, "window.__fb.pinFocus(20000)").await? {
                 Value::Bool(true) => {}
                 Value::String(s) => return Err(s),
                 _ => return Err("unexpected".into()),

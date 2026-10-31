@@ -539,10 +539,15 @@ try{
   assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.unlocked))'),true);
   await evaluate('localStorage.pinStyle=JSON.stringify("segmented");localStorage.restored="true";JSON.stringify(true)');
  });
- await check('unlock uses the secure-storage page when the chat list offers no entry',async()=>{
-  await evaluate('localStorage.restored="false";localStorage.pinStyle=JSON.stringify("none");localStorage.removeItem("unlocked");JSON.stringify(true)');
-  assert.match(await fb('unlock','1234'),/^unlocked/);
+ await check('unlock finds the single PIN field in the real restore prompt',async()=>{
+  await evaluate('localStorage.restored="false";localStorage.pinStyle=JSON.stringify("real");localStorage.removeItem("unlocked");JSON.stringify(true)');
+  assert.match(await fb('unlock','123456'),/^unlocked/);
   assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.unlocked))'),true);
+  await evaluate('localStorage.pinStyle=JSON.stringify("segmented");localStorage.restored="true";JSON.stringify(true)');
+ });
+ await check('a wrong PIN in the real restore prompt reports what Facebook said',async()=>{
+  await evaluate('localStorage.restored="false";localStorage.pinStyle=JSON.stringify("real");localStorage.removeItem("unlocked");JSON.stringify(true)');
+  await assert.rejects(()=>fb('unlock','654321'),/PIN was not accepted/);
   await evaluate('localStorage.pinStyle=JSON.stringify("segmented");localStorage.restored="true";JSON.stringify(true)');
  });
  await check('a wrong segmented PIN reports what Facebook said',async()=>{

@@ -247,11 +247,28 @@
   for(let p=cand;p&&p!==document.body;p=p.parentElement)if(HINT.test(p.innerText||''))return p;
   return null;
  };
- const pinRoot=()=>{const d=pinDialog();if(d)return d;const r=pagePinRoot();if(r)return r;const rd=restoreDialog();return rd&&pinInputs(rd).length?rd:null;};
+ // The surface Brandon's account actually shows (verified live on his
+ // account, 2026-10-31): a prompt with NO role=dialog wrapper and NO
+ // submit button — the heading "Enter your PIN to restore your chats",
+ // ONE text field whose label is a separate element (aria-labelledby or
+ // a <label>, never aria-label/placeholder), and entry auto-submits when
+ // the PIN is complete. Role- and attribute-based finders walk straight
+ // past it; find it by its heading and take the field in the same
+ // container. (The often-cited facebook.com/secure-storage URL is NOT a
+ // door: on his account it redirects to an unrelated business Page.)
+ const headingRoot=()=>{
+  const h=[...document.querySelectorAll('h1,h2,h3,[role=heading]')].find(e=>F.visible(e)&&/enter your pin to restore/i.test(F.clean(e.innerText||'')));
+  if(!h)return null;
+  for(let p=h.parentElement;p&&p!==document.body;p=p.parentElement){
+   if(pinInputs(p).some(i=>F.visible(i)))return p;
+  }
+  return null;
+ };
+ const pinRoot=()=>{const d=pinDialog();if(d)return d;const hr=headingRoot();if(hr)return hr;const r=pagePinRoot();if(r)return r;const rd=restoreDialog();return rd&&pinInputs(rd).length?rd:null;};
  const label=e=>F.clean(e.innerText||e.getAttribute('aria-label')||'');
  // Clickable elements whose whole label matches: buttons and links, plus
- // the plain divs Facebook uses for actions like Continue on the
- // secure-storage surface (no role, just a pointer cursor).
+ // the plain divs Facebook uses for some actions (no role, just a
+ // pointer cursor).
  const pressable=(root,re)=>[...root.querySelectorAll('button,[role=button],a[href],[role=link],div,span')].find(e=>F.visible(e)&&F.enabled(e)&&re.test(label(e))&&(e.tagName==='BUTTON'||e.tagName==='A'||(e.getAttribute&&e.getAttribute('role'))||getComputedStyle(e).cursor==='pointer'));
  const ADVANCE=/^(continue|next|restore|restore messages|restore chat history|restore history|get started|start|submit|done|tiếp tục|tiếp theo|khôi phục|continuer|suivant|restaurer|commencer)$/i;
  const STAGE=/^(privacy\s*&\s*safety|privacy and safety|end-to-end encrypted chats|message storage|secure storage)$/i;
@@ -276,7 +293,7 @@
   const end=Date.now()+(budget||45000);
   while(Date.now()<end){
    const root=pinRoot();
-   if(root){const inp=pinInputs(root).filter(i=>F.visible(i))[0]||pinInputs(root)[0];if(inp){inp.focus();return true;}}
+   if(root){const inp=pinInputs(root).filter(i=>F.visible(i))[0]||pinInputs(root)[0];if(inp){try{inp.click();}catch(e){}inp.focus();return true;}}
    // A restore stage with no PIN field yet: choose the PIN method when one
    // is offered (never the forgot/reset path), then press what advances it.
    const d=restoreDialog();
@@ -317,7 +334,7 @@
   const end=Date.now()+20000;
   let sealed=0;
   while(Date.now()<end){
-   const d=pinDialog()||pagePinRoot();
+   const d=pinRoot();
    if(!d)return true;
    const err=[...d.querySelectorAll('[role=alert],div,span')].map(e=>F.clean(e.innerText)).find(t=>t&&t.length<200&&BAD.test(t));
    if(err)return 'Facebook says the PIN was not accepted: '+err;
