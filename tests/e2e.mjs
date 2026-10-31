@@ -693,7 +693,7 @@ try{
   assert.match(await fb('read','42','-n','6'),/❤️/);
   assert.match(await fb('reply','42','fixture reply text','--match','Earlier message'),/^replied/);
   assert.match(await fb('read','42','-n','6'),/fixture reply text/);
-  assert.equal(await evaluate('JSON.parse(localStorage.lastReplyTo)'),'Earlier message');
+  assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.lastReplyTo))'),'Earlier message');
  });
  await check('snapshot Unicode boundaries remain valid and bounded',async()=>{
   await fb('page','unicode','open','https://www.facebook.com/fixture');
