@@ -458,7 +458,7 @@
   // the message row itself may be re-rendered by the reaction: re-find it
   const ok=await waitFor(()=>{
    const again=[...log.querySelectorAll('[role=article]')].reverse().find(x=>{const mm=F.parseMessage(x,log);return mm.text===t.m.text&&mm.sender===t.m.sender});
-   return !!again&&F.parseMessage(again,log).reactions.includes(emoji);
+   return !!again&&F.parseMessage(again,log).re.includes(emoji);
   },3000,150);
   if(!ok)return 'the reaction did not land on the message';
   return{text:'reacted '+emoji+' to '+(t.m.sender||'a message')+': '+(t.m.text||'['+(t.m.att||'attachment')+']')};
