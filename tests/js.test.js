@@ -21,6 +21,7 @@ assert.strictEqual(F.canon('https://www.facebook.com/groups/123/?multi_permalink
 assert.strictEqual(F.canon('https://www.facebook.com/page/posts/pfbid0X?__cft__[0]=zz&__tn__=%2CO'), '/page/posts/pfbid0X');
 assert.strictEqual(F.canon('https://www.facebook.com/photo/?fbid=99&set=a.1&__cft__[0]=z'), '/photo/?fbid=99&set=a.1');
 assert.strictEqual(F.clean('a͏ ​b  c'), 'a b c');
+assert.strictEqual(F.clean('AH.FM Accounts with a verified badge have been authenticated and can be Meta Verified subscribers or notable persons or brands. is with Tiësto'), 'AH.FM Verified is with Tiësto');
 assert.strictEqual(F.groupPath('https://www.facebook.com/groups/123456/'), '/groups/123456');
 assert.strictEqual(F.groupPath('/groups/hikers.uk?__cft__[0]=x'), '/groups/hikers.uk');
 assert.strictEqual(F.groupPath('https://www.facebook.com/groups/123/posts/456'), null);
