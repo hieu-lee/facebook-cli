@@ -592,6 +592,20 @@ impl Browser {
             .map(|_| ())
     }
 
+    /// Freeze or unfreeze a tab's page: a frozen page runs no timers and
+    /// renders nothing, so a parked background tab costs no CPU. Best
+    /// effort — a browser that refuses leaves the page exactly as it was.
+    pub async fn set_lifecycle(&self, t: &Tab, frozen: bool) {
+        let _ = self
+            .cdp
+            .call(
+                Some(&t.session),
+                "Page.setWebLifecycleState",
+                json!({"state": if frozen { "frozen" } else { "active" }}),
+            )
+            .await;
+    }
+
     pub async fn key(&self, t: &Tab, key: &str, code: &str, vk: u32, modifiers: u32) -> Res<()> {
         let key = if modifiers & 8 != 0 && key.len() == 1 {
             const LOWER: &str = "abcdefghijklmnopqrstuvwxyz1234567890-=[]\\;',./`";
