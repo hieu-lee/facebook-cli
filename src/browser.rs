@@ -425,7 +425,19 @@ impl Browser {
         self.release_as(t, "").await
     }
 
-    pub async fn release_as(&self, mut t: Tab, kind: &str) {
+    /// Pool a tab that must stay live: the page still has work running in
+    /// it (a Messenger restore verifying in the page). This tree never
+    /// freezes parked tabs, so it is the same pool path as release; it
+    /// exists so the unlock call site can state the requirement.
+    pub async fn release_live(&self, t: Tab) {
+        self.release_as_frozen(t, "", false).await
+    }
+
+    pub async fn release_as(&self, t: Tab, kind: &str) {
+        self.release_as_frozen(t, kind, true).await
+    }
+
+    async fn release_as_frozen(&self, mut t: Tab, kind: &str, _freeze: bool) {
         t.armed = false;
         t.permit = None;
         // the account changed while this tab was in use: its page belongs to the previous login
