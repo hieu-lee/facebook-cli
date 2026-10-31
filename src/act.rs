@@ -87,18 +87,26 @@ async fn type_into(b: &Browser, t: &Tab, text: &str) -> Res<()> {
 }
 
 pub async fn post(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> {
-    let a = parse(args, &["img", "to"], &["dry"])?;
+    let a = parse(args, &["img", "video", "to"], &["dry"])?;
     let text = a.pos.join(" ");
     let imgs = a.opts_all("img");
-    if text.is_empty() && imgs.is_empty() {
-        return Err("usage: post <text> [--img file]... [--to public|friends|me]".into());
+    let videos = a.opts_all("video");
+    if text.is_empty() && imgs.is_empty() && videos.is_empty() {
+        return Err(
+            "usage: post <text> [--img file]... [--video file]... [--to public|friends|me]".into(),
+        );
     }
     let audience = a.opt("to").map(|s| match s {
         "public" | "friends" | "me" => Ok(s.to_string()),
         _ => Err("--to must be public|friends|me".to_string()),
     });
     let audience = audience.transpose()?;
-    let files: Vec<_> = imgs.iter().map(|p| file_arg(p, cwd)).collect::<Res<_>>()?;
+    // photos and videos ride the same composer file input
+    let files: Vec<_> = imgs
+        .iter()
+        .chain(videos.iter())
+        .map(|p| file_arg(p, cwd))
+        .collect::<Res<_>>()?;
     let b = d.browser(out).await?;
     let gen0 = b.generation.load(std::sync::atomic::Ordering::SeqCst);
     // mutations hold the shared side of the account lock; an account import takes the exclusive side
@@ -359,6 +367,405 @@ fn current_reaction(label: &str, picker: &[String]) -> Option<usize> {
         .filter(|(_, p)| !p.is_empty() && l.ends_with(p.as_str()))
         .max_by_key(|(_, p)| p.len())
         .map(|(i, _)| i)
+}
+
+/// Join a group. Idempotent: already joined / already requested is reported,
+/// not re-clicked. A group that asks membership questions gets its questions
+/// reported back; answering them is the user's call, nothing is submitted.
+pub async fn group_join(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
+    let a = parse(args, &[], &[])?;
+    let spec = a.pos.first().ok_or("usage: group-join <group>")?;
+    let b: Arc<Browser> = d.browser(out).await?;
+    let p = crate::ops::group_path(d, spec)?;
+    let gen0 = b.generation.load(std::sync::atomic::Ordering::SeqCst);
+    // mutations hold the shared side of the account lock; an account import takes the exclusive side
+    let _account = d.account.read().await;
+    if b.generation.load(std::sync::atomic::Ordering::SeqCst) != gen0 {
+        return Err(
+            "the account changed while this command waited; nothing was done, try again".into(),
+        );
+    }
+    let t = b.acquire().await?;
+    same_account(&b, gen0)?;
+    let r = async {
+        b.goto(&t, &format!("https://www.facebook.com{p}")).await?;
+        let state = match b.eval(&t, "window.__fb.groupState()").await? {
+            Value::String(s) => s,
+            other => return Err(format!("unexpected group button state: {other}")),
+        };
+        match state.as_str() {
+            "joined" => {
+                out.line("already joined");
+                return Ok(());
+            }
+            "pending" => {
+                out.line("join request already pending");
+                return Ok(());
+            }
+            "can-join" => {}
+            _ => return Err("no Join group button on this group page".into()),
+        }
+        same_account(&b, gen0)?;
+        if out.cancelled() {
+            return Err("cancelled by client; no join was attempted".into());
+        }
+        let after = match b.eval(&t, "window.__fb.groupJoin()").await? {
+            Value::String(s) => s,
+            other => return Err(format!("unexpected join result: {other}")),
+        };
+        if let Some(qs) = after.strip_prefix("questions:") {
+            // TSV so callers can present the questions and answer them with
+            // group-apply: a count line, then one `q<TAB>question` per line
+            let list: Vec<String> = serde_json::from_str(qs).unwrap_or_default();
+            out.line(format!("questions\t{}", list.len()));
+            for q in &list {
+                out.line(format!("q\t{}", q.replace(['\t', '\n'], " ")));
+            }
+            return Ok(());
+        }
+        match after.as_str() {
+            "joined" => {
+                out.line("joined group");
+                Ok(())
+            }
+            "pending" => {
+                out.line("join requested; an admin must approve");
+                Ok(())
+            }
+            other => Err(format!("join not confirmed (state: {other})")),
+        }
+    }
+    .await;
+    b.release(t).await;
+    r
+}
+
+/// Leave a group. Idempotent: not a member is reported, not an error.
+/// A pending join request is left alone (cancelling is a different action).
+pub async fn group_leave(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
+    let a = parse(args, &[], &[])?;
+    let spec = a.pos.first().ok_or("usage: group-leave <group>")?;
+    let b: Arc<Browser> = d.browser(out).await?;
+    let p = crate::ops::group_path(d, spec)?;
+    let gen0 = b.generation.load(std::sync::atomic::Ordering::SeqCst);
+    // mutations hold the shared side of the account lock; an account import takes the exclusive side
+    let _account = d.account.read().await;
+    if b.generation.load(std::sync::atomic::Ordering::SeqCst) != gen0 {
+        return Err(
+            "the account changed while this command waited; nothing was done, try again".into(),
+        );
+    }
+    let t = b.acquire().await?;
+    same_account(&b, gen0)?;
+    let r = async {
+        b.goto(&t, &format!("https://www.facebook.com{p}")).await?;
+        let state = match b.eval(&t, "window.__fb.groupState()").await? {
+            Value::String(s) => s,
+            other => return Err(format!("unexpected group button state: {other}")),
+        };
+        match state.as_str() {
+            "can-join" => {
+                out.line("not a member of this group");
+                return Ok(());
+            }
+            "pending" => {
+                return Err(
+                    "your join request is still pending; cancel it from the group page".into(),
+                );
+            }
+            "joined" => {}
+            _ => return Err("no membership button on this group page".into()),
+        }
+        same_account(&b, gen0)?;
+        if out.cancelled() {
+            return Err("cancelled by client; you are still a member".into());
+        }
+        let after = match b.eval(&t, "window.__fb.groupLeave()").await? {
+            Value::String(s) => s,
+            other => return Err(format!("unexpected leave result: {other}")),
+        };
+        match after.as_str() {
+            "left" => {
+                out.line("left group");
+                Ok(())
+            }
+            other => Err(format!("leave not confirmed (state: {other})")),
+        }
+    }
+    .await;
+    b.release(t).await;
+    r
+}
+
+/// Join a group that asks membership questions, answering them in order:
+/// `group-apply <group> <answer>...`. Choice questions take the answer that
+/// matches an option label; text questions take the answer as typed.
+pub async fn group_apply(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
+    let a = parse(args, &[], &[])?;
+    let spec = a
+        .pos
+        .first()
+        .ok_or("usage: group-apply <group> <answer>...")?;
+    let answers: Vec<String> = a.pos.iter().skip(1).cloned().collect();
+    if answers.is_empty() {
+        return Err("usage: group-apply <group> <answer>...".into());
+    }
+    let b: Arc<Browser> = d.browser(out).await?;
+    let p = crate::ops::group_path(d, spec)?;
+    let gen0 = b.generation.load(std::sync::atomic::Ordering::SeqCst);
+    // mutations hold the shared side of the account lock; an account import takes the exclusive side
+    let _account = d.account.read().await;
+    if b.generation.load(std::sync::atomic::Ordering::SeqCst) != gen0 {
+        return Err(
+            "the account changed while this command waited; nothing was done, try again".into(),
+        );
+    }
+    let t = b.acquire().await?;
+    same_account(&b, gen0)?;
+    let r = async {
+        b.goto(&t, &format!("https://www.facebook.com{p}")).await?;
+        let state = match b.eval(&t, "window.__fb.groupState()").await? {
+            Value::String(s) => s,
+            other => return Err(format!("unexpected group button state: {other}")),
+        };
+        match state.as_str() {
+            "joined" => {
+                out.line("already joined");
+                return Ok(());
+            }
+            "pending" => {
+                out.line("join request already pending");
+                return Ok(());
+            }
+            "can-join" => {}
+            _ => return Err("no Join group button on this group page".into()),
+        }
+        same_account(&b, gen0)?;
+        if out.cancelled() {
+            return Err("cancelled by client; no answers were submitted".into());
+        }
+        let after = match b
+            .eval(&t, &format!("window.__fb.groupApply({})", json!(answers)))
+            .await?
+        {
+            Value::String(s) => s,
+            other => return Err(format!("unexpected apply result: {other}")),
+        };
+        match after.as_str() {
+            "joined" => {
+                out.line("joined group");
+                Ok(())
+            }
+            "pending" | "submitted" => {
+                out.line("answers submitted; an admin must approve");
+                Ok(())
+            }
+            "no-questions" => {
+                Err("this group shows no membership questions; use group-join instead".into())
+            }
+            other => Err(format!("answers not confirmed submitted (state: {other})")),
+        }
+    }
+    .await;
+    b.release(t).await;
+    r
+}
+
+/// Message a Marketplace seller from the listing page: opens the listing's
+/// chat popover, types the text, sends with Enter and verifies the message
+/// landed in the conversation.
+pub async fn listing_message(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
+    let a = parse(args, &[], &[])?;
+    let spec = a
+        .pos
+        .first()
+        .ok_or("usage: listing-message <listing> <text>")?;
+    let text = a.pos.iter().skip(1).cloned().collect::<Vec<_>>().join(" ");
+    if text.is_empty() {
+        return Err("usage: listing-message <listing> <text>".into());
+    }
+    let path = if let Some(p) = d.refs.get(spec) {
+        p
+    } else {
+        crate::ops::fb_path(spec).ok_or_else(|| format!("not a facebook url: {spec}"))?
+    };
+    if !path.starts_with("/marketplace/item/") {
+        return Err(format!("'{spec}' is not a marketplace listing"));
+    }
+    let b: Arc<Browser> = d.browser(out).await?;
+    let gen0 = b.generation.load(std::sync::atomic::Ordering::SeqCst);
+    // mutations hold the shared side of the account lock; an account import takes the exclusive side
+    let _account = d.account.read().await;
+    if b.generation.load(std::sync::atomic::Ordering::SeqCst) != gen0 {
+        return Err(
+            "the account changed while this command waited; nothing was done, try again".into(),
+        );
+    }
+    let t = b.acquire().await?;
+    same_account(&b, gen0)?;
+    let r = async {
+        b.goto(&t, &format!("https://www.facebook.com{path}")).await?;
+        ok(&b.eval(&t, "window.__fb.listingMessageOpen()").await?)?;
+        // one insert for the whole text: Enter keystrokes would send early
+        b.insert_text(&t, &text).await?;
+        same_account(&b, gen0)?;
+        if out.cancelled() {
+            return Err("cancelled by client; the message was not sent".into());
+        }
+        b.key(&t, "Enter", "Enter", 13, 0).await?;
+        let sent = b
+            .eval(
+                &t,
+                &format!(
+                    "window.__fb.waitFor(()=>window.__fb.listingMessageSent({})||null,10000,200).then(v=>!!v)",
+                    json!(text)
+                ),
+            )
+            .await?;
+        if sent != Value::Bool(true) {
+            return Err("the message did not appear in the conversation".into());
+        }
+        out.line("message sent");
+        Ok(())
+    }
+    .await;
+    b.release(t).await;
+    r
+}
+
+/// Create a Marketplace listing ("Item for sale") from the desktop sell form.
+/// Facebook requires a title (100 chars max), a price (0 = free), a condition,
+/// a category and at least one photo; every gap is a loud error, never a
+/// half-filled form left behind. Prints listed<TAB>ref<TAB>path when Facebook
+/// lands on the new listing.
+pub async fn sell(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> {
+    let a = parse(
+        args,
+        &["price", "desc", "condition", "category", "img", "video"],
+        &["dry"],
+    )?;
+    let title = a.pos.join(" ");
+    if title.is_empty() || title.chars().count() > 100 {
+        return Err("usage: sell <title, 100 chars max> --price N [--condition new|like-new|good|fair] [--category name] [--desc text] [--img file]... [--video file]".into());
+    }
+    let price = a.opt("price").ok_or("--price is required (0 = free)")?;
+    if price.parse::<f64>().map(|p| p < 0.0).unwrap_or(true) {
+        return Err(format!("--price must be a number, got '{price}'"));
+    }
+    let condition = a.opt("condition").map(|s| match s {
+        "new" | "like-new" | "good" | "fair" => Ok(s.to_string()),
+        _ => Err("--condition must be new|like-new|good|fair".to_string()),
+    });
+    let condition = condition.transpose()?;
+    let imgs = a.opts_all("img");
+    let videos = a.opts_all("video");
+    if imgs.is_empty() && videos.is_empty() {
+        return Err("a listing needs at least one photo (--img) or video (--video)".into());
+    }
+    if imgs.len() + videos.len() > 10 {
+        return Err("marketplace allows at most 10 photos/videos per listing".into());
+    }
+    let files: Vec<_> = imgs
+        .iter()
+        .chain(videos.iter())
+        .map(|p| file_arg(p, cwd))
+        .collect::<Res<_>>()?;
+    let b = d.browser(out).await?;
+    let gen0 = b.generation.load(std::sync::atomic::Ordering::SeqCst);
+    // mutations hold the shared side of the account lock; an account import takes the exclusive side
+    let _account = d.account.read().await;
+    if b.generation.load(std::sync::atomic::Ordering::SeqCst) != gen0 {
+        return Err(
+            "the account changed while this command waited; nothing was done, try again".into(),
+        );
+    }
+    let t = b.acquire().await?;
+    same_account(&b, gen0)?;
+    let r = async {
+        b.goto(&t, "https://www.facebook.com/marketplace/create/item")
+            .await?;
+        // the form counts as open once its title field exists
+        let opened = b
+            .eval(
+                &t,
+                "window.__fb.waitFor(()=>document.querySelector('input[aria-label^=\"Title\" i],input[placeholder^=\"Title\" i]'),15000).then(v=>!!v)",
+            )
+            .await?;
+        if opened != Value::Bool(true) {
+            return Err("the marketplace sell form did not open".into());
+        }
+        for (name, mime, bytes) in &files {
+            crate::messenger::upload(&b, &t, bytes).await?;
+            ok(&b
+                .eval(
+                    &t,
+                    &format!(
+                        "window.__fb.sellAttach({},{})",
+                        json!(name),
+                        json!(mime)
+                    ),
+                )
+                .await?)?;
+        }
+        ok(&b
+            .eval(
+                &t,
+                &format!("window.__fb.sellSet('Title',{})", json!(title)),
+            )
+            .await?)?;
+        ok(&b
+            .eval(
+                &t,
+                &format!("window.__fb.sellSet('Price',{})", json!(price)),
+            )
+            .await?)?;
+        if let Some(desc) = a.opt("desc") {
+            ok(&b
+                .eval(
+                    &t,
+                    &format!("window.__fb.sellSet('Description',{})", json!(desc)),
+                )
+                .await?)?;
+        }
+        if let Some(cond) = &condition {
+            ok(&b
+                .eval(
+                    &t,
+                    &format!("window.__fb.sellPick('condition',{})", json!(cond)),
+                )
+                .await?)?;
+        }
+        if let Some(cat) = a.opt("category") {
+            ok(&b
+                .eval(
+                    &t,
+                    &format!("window.__fb.sellPick('category',{})", json!(cat)),
+                )
+                .await?)?;
+        }
+        if a.flag("dry") {
+            out.line("dry: listing form filled, not published");
+            return Ok(());
+        }
+        ok(&b.eval(&t, "window.__fb.sellNext()").await?)?;
+        same_account(&b, gen0)?;
+        if out.cancelled() {
+            return Err("cancelled by client; the listing was not published".into());
+        }
+        let done = match b.eval(&t, "window.__fb.sellPublish()").await? {
+            Value::String(s) => s,
+            other => return Err(format!("unexpected publish result: {other}")),
+        };
+        if done.starts_with("/marketplace/item/") {
+            out.line(format!("listed\t{}\t{done}", d.refs.put('u', &done)));
+        } else {
+            out.line("listed (confirmation seen; open Marketplace > Your listings to view it)");
+        }
+        Ok(())
+    }
+    .await;
+    b.release(t).await;
+    r
 }
 
 pub async fn react(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
