@@ -437,7 +437,7 @@ impl Browser {
             return;
         }
         t.kind = kind.to_string();
-        let mut idle = self.idle.lock().await;
+        let idle = self.idle.lock().await;
         if idle.len() < MAX_IDLE {
             // Freeze the parked page: Facebook tabs run heavy timers, and
             // the browser is launched with background throttling disabled,
