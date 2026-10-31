@@ -1,7 +1,7 @@
 (()=>{
  if(window.__fb)return;
  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
- const clean=s=>(s||'').replace(/[͏​-‏⁠﻿]/g,'').replace(/[ \t ]+/g,' ').replace(/ *\n */g,'\n').trim();
+ const clean=s=>(s||'').replace(/[͏​-‏⁠﻿]/g,'').replace(/Accounts with a verified badge have been authenticated and can be Meta Verified subscribers or notable persons or brands\.?/gi,'Verified').replace(/[ \t ]+/g,' ').replace(/ *\n */g,'\n').trim();
  const vtext=(root,visibleOnly=false,includeAriaHidden=false,preserveSpace=false)=>{
   const w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT),o=[];let n;
   while(n=w.nextNode()){
@@ -15,7 +15,7 @@
      if(hidden)continue;const r=document.createRange();r.selectNodeContents(n);if(!r.getClientRects().length)continue;
     }
    }
-   const c=t.replace(/[͏​-‏⁠﻿]/g,'').replace(/ /g,' ');if(preserveSpace?c:c.trim())o.push(preserveSpace?c:c.trim());
+   const c=t.replace(/Accounts with a verified badge have been authenticated and can be Meta Verified subscribers or notable persons or brands\.?/gi,'Verified').replace(/[͏​-‏⁠﻿]/g,'').replace(/ /g,' ');if(preserveSpace?c:c.trim())o.push(preserveSpace?c:c.trim());
   }
   return o;
  };

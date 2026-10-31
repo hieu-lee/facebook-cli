@@ -257,12 +257,16 @@
  const seenRestore=()=>{
   const parts=[];
   for(const d of document.querySelectorAll('[role=dialog]')){const t=F.clean(d.innerText).slice(0,120);if(t)parts.push('dialog: '+t);}
-  const btns=[...document.querySelectorAll('button,[role=button]')].filter(b=>F.visible(b)).map(label).filter(Boolean).slice(0,12);
+  const btns=[...document.querySelectorAll('button,[role=button],a[href],[role=link]')].filter(b=>F.visible(b)).map(label).filter(Boolean).slice(0,30);
   if(btns.length)parts.push('buttons: '+btns.join(' | '));
-  return parts.length?(' On screen: '+parts.join(' ;; ').slice(0,600)):'';
+  const hints=new Set();
+  for(const e of document.querySelectorAll('div,span,a,p')){if(hints.size>=6)break;if(!F.visible(e)||e.children.length>3)continue;const t=F.clean(e.innerText||'');if(t&&t.length<=160&&/restore|secure storage|chat history|end-to-end/i.test(t))hints.add(e.tagName.toLowerCase()+': '+t.slice(0,120));}
+  if(hints.size)parts.push('restore text: '+[...hints].join(' | '));
+  return parts.length?(' On screen: '+parts.join(' ;; ').slice(0,900)):'';
  };
  F.pinFocus=async()=>{
   const pressed=new WeakSet();
+  let lastHint=0;
   const end=Date.now()+45000;
   while(Date.now()<end){
    const root=pinRoot();
@@ -276,9 +280,18 @@
     const btn=[...d.querySelectorAll('button,[role=button]')].find(b=>F.visible(b)&&F.enabled(b)&&ADVANCE.test(label(b)));
     if(btn&&!pressed.has(btn)){pressed.add(btn);try{F.press(btn);}catch(e){}await F.sleep(300);continue;}
    }
-   // No dialog: the restore offer may be a banner button in the chat pane.
-   const open=[...document.querySelectorAll('button,[role=button]')].find(b=>F.visible(b)&&F.enabled(b)&&label(b).length<60&&OPEN.test(label(b)));
+   // No dialog: the restore offer may be a banner or link in the chat pane.
+   // It is not always a <button>: Facebook also renders it as a link, and a
+   // banner button's label is the whole sentence, well past 60 chars.
+   const open=[...document.querySelectorAll('button,[role=button],a[href],[role=link],[role=menuitem],[role=tab]')].find(b=>F.visible(b)&&F.enabled(b)&&label(b).length<=140&&OPEN.test(label(b)));
    if(open&&!pressed.has(open)){pressed.add(open);try{F.press(open);}catch(e){}await F.sleep(300);continue;}
+   // Last resort, throttled: a bare text element that reads like a restore
+   // entry and is clickable (pointer cursor or inside a clickable ancestor).
+   if(Date.now()-lastHint>1500){
+    lastHint=Date.now();
+    const hint=[...document.querySelectorAll('a,div,span,[role=link]')].filter(e=>F.visible(e)&&e.children.length<4).find(e=>{const t=label(e);return t.length>0&&t.length<=140&&/restore (your )?(chat history|messages)|restore from secure storage|enter (your )?pin/i.test(t)&&(e.closest('a,button,[role=button],[role=link]')||getComputedStyle(e).cursor==='pointer');});
+    if(hint){const c=hint.closest('a,button,[role=button],[role=link]')||hint;if(!pressed.has(c)){pressed.add(c);try{F.press(c);}catch(e){}await F.sleep(300);continue;}}
+   }
    await F.sleep(200);
   }
   return 'PIN restore dialog not found; open Messenger history restoration with `fb page`.'+seenRestore();
