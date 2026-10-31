@@ -9,7 +9,7 @@ READ
   profile [who]                      key<TAB>value lines
   friends [who] [-n 30]              name, ref, mutual friends
   groups [-n 100] [--urls]           groups you have joined: name, ref, privacy and size
-  search <q> [--type people|pages|groups|posts|events] [--match text]... [-n 10]   match visible clues
+  search <q> [--type top|posts|people|friends|photos|videos|pages|places|groups|events|marketplace] [--match text]... [-n 10]   top = All (default); friends = people narrowed by the Friends chip; rows carry a kind (post, profile, page, group, photo, video, event, place, listing); match visible clues
   stories <who> [--out dir] [-n N]  protected downloads, all visible stories by default
   photos <who> [--out dir] [-n 10 | --all]  protected profile-photo downloads
   Media output: d<TAB>directory, then numbered filenames; join them to form paths. Search names first and use a ref.
@@ -21,10 +21,16 @@ MESSENGER
   unsend <chat> [--match text] [--dry]   remove your newest loaded message (containing text) for everyone
   unlock [-]                         once: restore end-to-end encrypted chats; PIN read from $FB_PIN or stdin
 ACT
-  post <text> [--img file]... [--to public|friends|me]   confirmed: posted<TAB>ref<TAB>path
+  post <text> [--img file]... [--video file]... [--to public|friends|me]   confirmed: posted<TAB>ref<TAB>path
   comment <post> <text>
   react <post> [like|love|care|haha|wow|sad|angry|none]
   delete <post>                      your own posts only
+  group-join <group>                 join a group (reports joined / requested; membership questions come back as questions<TAB>n then q<TAB>text lines)
+  group-apply <group> <answer>...    join a group by answering its membership questions in order (a choice question takes the option text)
+  group-leave <group>                leave a group (reports not-a-member; a pending request is left alone)
+  sell <title> --price N [--condition new|like-new|good|fair] [--category name] [--desc text] [--img file]... [--video file]   create a Marketplace listing; price 0 = free; at least one photo or video, 10 max
+  listing-message <listing> <text>   message a Marketplace seller from the listing page
+>>>>>>> bb059e6 (Search all types, group join/apply/leave, Marketplace sell + listing-message, post --video (#4))
 BROWSER (fallback; named tabs are separate from normal commands)
   page <name> open <url> | snapshot [filter]   bounded text + refs; max 6 pages
   page <name> stories [story-url]     experimental story page; blocks known seen requests, not a privacy guarantee

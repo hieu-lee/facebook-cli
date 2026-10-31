@@ -53,6 +53,17 @@
   const shown=x=>x.checkVisibility?x.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}):x.getClientRects().length;
   const content=x=>{const u=new URL(x.href);return /\/posts\/|pfbid|\/permalink|\/videos?\/|\/reel\/|\/photos?(?:\/|$)|\/photo\.php$/i.test(u.pathname)||u.searchParams.has('fbid')};
   const person=x=>{const u=new URL(x.href);return (u.hostname==='facebook.com'||u.hostname.endsWith('.facebook.com'))&&/^\/(?:profile\.php|people\/[^/]+\/\d+|[a-z0-9.%_-]+)\/?$/i.test(u.pathname)&&!content(x)&&u.pathname!=='/search'};
+  // what a result row IS, from its link, so callers can offer the right
+  // actions; the tab is the fallback when the link alone does not say
+  const kindOf=u=>{
+   if(/\/groups\/[^/]+\/?$/.test(u))return 'group';
+   if(/\/marketplace\/item\//.test(u))return 'listing';
+   if(/\/events\/\d+/.test(u))return 'event';
+   if(/\/photo|fbid=|\/photos\//.test(u))return 'photo';
+   if(/\/watch|\/videos?\/|\/reel\//.test(u))return 'video';
+   if(/\/posts\/|pfbid|\/permalink/.test(u))return 'post';
+   return null;
+  };
   const nameText=(link,parts)=>{const rendered=clean(link.innerText||'');return rendered&&normalize(rendered).replace(/\s+/g,'')===normalize(parts.join('')).replace(/\s+/g,'')?rendered:clean(parts.join(' '))};
   const compareNodes=(a,b)=>{const p=a.compareDocumentPosition(b);return p&Node.DOCUMENT_POSITION_DISCONNECTED?0:p&Node.DOCUMENT_POSITION_FOLLOWING?-1:p&Node.DOCUMENT_POSITION_PRECEDING?1:0};
   const order=(a,b)=>compareNodes(a.node,b.node);
@@ -84,13 +95,46 @@
     if(clues.length){const text=normalize([name,...all].join(' '));if(!clues.every(c=>text.includes(c))){const raw=normalize(vtext(a,true,true,true).join(''));if(!clues.every(c=>text.includes(c)||raw.includes(c)))continue}}
     const btn=new Set([...a.querySelectorAll('[role=button]')].map(b=>clean(b.innerText)));
     const info=all.filter(c=>c!==name&&!nameParts.includes(c)&&!btn.has(c)&&c!=='·');
-    const row={k:url,node:a,v:[name,{r:'u',v:url},trunc(info.join(' · '),160)]};
+    const kind=kindOf(url)||({people:'profile',pages:'page',groups:'group',events:'event',photos:'photo',videos:'video',posts:'post',places:'place'})[type]||'profile';
+    const target=['photo','video','event','place','listing'].includes(kind)?'https://www.facebook.com'+url:{r:'u',v:url};
+    const row={k:url,node:a,v:[name,target,trunc(info.join(' · '),160),kind]};
     if(seen.has(url)){if(order(row,seen.get(url))<0)seen.set(url,row);continue}
     added.add(url);found.push(row);
     if((final?found.length:seen.size+found.length)>=n)break;
    }return found;},25000,null,()=>progress,()=>{for(const node of dirty)scan(node);dirty.clear();return pending.size>0},order);
    return {rows:rows.map(r=>r.v),...(!rows.length&&clues.length?{note:'no matching results'}:{})};
   }finally{observer.disconnect()}
+ };
+ // people search narrowed by the page's own Friends filter chip; when the
+ // chip is not offered, fall back to plain people results and say so
+ F.searchFriends=async(n,clues=[])=>{
+  const chip=await waitFor(()=>[...document.querySelectorAll('[role=main] [role=button],[role=main] [role=switch],[role=main] [role=checkbox]')].find(b=>/^(Friends|Bạn bè|Amis)$/i.test(clean(b.innerText||b.getAttribute('aria-label')||''))),10000);
+  let note;
+  if(chip){chip.click();await sleep(1800);}else note='friends filter not offered by facebook here; showing all people';
+  const r=await F.search(n,clues,'people');
+  if(note&&!r.err)r.note=r.note?r.note+'; '+note:note;
+  return r;
+ };
+ // marketplace search: listing cards link to /marketplace/item/<id>; the
+ // card text is title, price and location in no guaranteed order, so the
+ // price is the chunk that looks like money
+ F.marketSearch=async(n)=>{
+  const ok=await waitFor(()=>document.querySelector('[role=main] a[href*="/marketplace/item/"]'),12000);
+  if(!ok)return {rows:[],note:'no listings loaded'};
+  await sleep(500);
+  const rows=await gather(n,()=>{
+   const byPath=new Map();
+   for(const a of document.querySelectorAll('[role=main] a[href*="/marketplace/item/"]')){
+    const p=stripQ(a.getAttribute('href'));
+    const chunks=vtext(a).map(clean).filter(Boolean);
+    if(!chunks.length)continue;
+    const price=chunks.find(c=>/^[$€£¥]|^(Free|Miễn phí)$/i.test(c))||'';
+    const rest=chunks.filter(c=>c!==price);
+    if(!byPath.has(p))byPath.set(p,{title:rest[0]||'',price,loc:rest.slice(1).join(' · ')});
+   }
+   return [...byPath.entries()].map(([p,g])=>({k:p,v:[g.title,'https://www.facebook.com'+p,trunc([g.price,g.loc].filter(Boolean).join(' · '),120),'listing']}));
+  });
+  return {rows:rows.map(r=>r.v)};
  };
  F.friends=async(n)=>{
   const ok=await waitFor(()=>document.querySelector('[role=main] a[href*="friends_mutual"]')||document.querySelector('[role=main] [role=tablist]'),12000);

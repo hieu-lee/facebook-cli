@@ -326,17 +326,46 @@ async fn person_path(b: &std::sync::Arc<Browser>, who: &str) -> Res<String> {
     r
 }
 
+/// A group spec (ref, url, path, vanity or id) → "/groups/<id>".
+/// Rejects the reserved /groups/ sections so "joins" can never become a group.
+pub fn group_path(d: &Daemon, spec: &str) -> Res<String> {
+    let path = if let Some(p) = d.refs.get(spec) {
+        p
+    } else if spec.starts_with('/') || spec.starts_with("http") {
+        fb_path(spec).ok_or_else(|| format!("not a facebook url: {spec}"))?
+    } else {
+        format!("/groups/{}", spec.trim_start_matches('@'))
+    };
+    let seg = path
+        .strip_prefix("/groups/")
+        .and_then(|rest| rest.split('/').next())
+        .filter(|s| {
+            !s.is_empty()
+                && !matches!(
+                    *s,
+                    "feed" | "discover" | "joins" | "create" | "search" | "yourgroups"
+                )
+        })
+        .ok_or_else(|| format!("'{spec}' is not a group"))?;
+    Ok(format!("/groups/{seg}"))
+}
+
 pub async fn search(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     let a = parse(args, &["type", "match"], &[])?;
     let q = a.pos.join(" ");
     if q.is_empty() {
         return Err(
-            "usage: search <query> [--type people|pages|groups|posts|events] [--match text] [-n N]"
+            "usage: search <query> [--type top|posts|people|friends|photos|videos|pages|places|groups|events|marketplace] [--match text] [-n N]"
                 .into(),
         );
     }
-    let ty = a.opt("type").unwrap_or("people");
-    if !["people", "pages", "groups", "posts", "events"].contains(&ty) {
+    let ty = a.opt("type").unwrap_or("top");
+    if ![
+        "top", "posts", "people", "friends", "photos", "videos", "pages", "places", "groups",
+        "events", "marketplace",
+    ]
+    .contains(&ty)
+    {
         return Err("invalid search type".into());
     }
     let clues = a.opts_all("match");
@@ -344,14 +373,38 @@ pub async fn search(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
         return Err("--match needs text".into());
     }
     let b = d.browser(out).await?;
-    let url = format!("https://www.facebook.com/search/{ty}/?q={}", enc(&q));
-    let expression = format!(
-        "window.__fb.search({},{},{}).then(JSON.stringify)",
-        a.n.unwrap_or(10),
-        serde_json::json!(clues),
-        serde_json::json!(ty)
-    );
-    run_expression(d, &b, out, &url, &expression).await
+    let n = a.n.unwrap_or(10);
+    match ty {
+        // friends is the people tab narrowed by its own Friends chip
+        "friends" => {
+            let url = format!("https://www.facebook.com/search/people/?q={}", enc(&q));
+            let expression = format!(
+                "window.__fb.searchFriends({},{}).then(JSON.stringify)",
+                n,
+                serde_json::json!(clues)
+            );
+            run_expression(d, &b, out, &url, &expression).await
+        }
+        // marketplace search lives on its own surface with listing cards
+        "marketplace" => {
+            let url = format!(
+                "https://www.facebook.com/marketplace/search/?query={}",
+                enc(&q)
+            );
+            run_js(d, &b, out, &url, "marketSearch", n).await
+        }
+        // the All tab and every other vertical share the /search/<type>/ surface
+        _ => {
+            let url = format!("https://www.facebook.com/search/{ty}/?q={}", enc(&q));
+            let expression = format!(
+                "window.__fb.search({},{},{}).then(JSON.stringify)",
+                n,
+                serde_json::json!(clues),
+                serde_json::json!(ty)
+            );
+            run_expression(d, &b, out, &url, &expression).await
+        }
+    }
 }
 
 pub async fn friends(d: &Daemon, args: &[String], out: &Out) -> Res<()> {

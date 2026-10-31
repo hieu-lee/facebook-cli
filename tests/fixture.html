@@ -28,7 +28,7 @@ function render(){main.querySelectorAll('section').forEach(x=>x.remove());const 
 function composer(){
  const d=dialog(),tb=document.createElement('div');tb.role='textbox';tb.contentEditable='true';d.append(tb);let aud='friends';
  const ab=button('Friends',()=>{const select=document.createElement('div');for(const [k,v]of [['public','Public'],['friends','Friends'],['me','Only me']]){const lab=document.createElement('label');lab.textContent=v;lab.onclick=()=>{aud=k};select.append(lab,document.createElement('br'))}select.append(button('Done',()=>{const replacement=ab.cloneNode(true);replacement.textContent={public:'Public',friends:'Friends',me:'Only me'}[aud];replacement.onclick=ab.onclick;ab.replaceWith(replacement);if(read('retainedAudience'))select.style.display='none';else select.remove()}));d.append(select)},'Audience. Friends');d.append(ab);
- let attached=null;const fi=document.createElement('input');fi.type='file';d.append(fi);fi.onchange=async()=>{const f=fi.files[0],u=new Uint8Array(await f.arrayBuffer());let sum=0;for(const x of u)sum=(sum*31+x)%1000003;attached={name:f.name,type:f.type,size:f.size,sum};const im=document.createElement('img');im.src=URL.createObjectURL(f);d.append(im)};
+ let attached=null;const fi=document.createElement('input');fi.type='file';fi.multiple=true;d.append(fi);fi.onchange=async()=>{for(const f of fi.files){if(!attached){const u=new Uint8Array(await f.arrayBuffer());let sum=0;for(const x of u)sum=(sum*31+x)%1000003;attached={name:f.name,type:f.type,size:f.size,sum}}if(f.type.startsWith('video')){const v=document.createElement('video');v.src=URL.createObjectURL(f);d.append(v)}else{const im=document.createElement('img');im.src=URL.createObjectURL(f);d.append(im)}}};
  const publish=button(read('postLabel')||'Post',async()=>{save('publishVisibility',getComputedStyle(publish).visibility);save('publishAttempted',true);let created=null;if(!read('failPublish')){created={id:String(Date.now()),text:tb.innerText,aud,receiptMode:read('receiptMode'),attached};posts=[created,...posts];save('posts',posts)}render();await fetch('/api/graphql/',{method:'POST',body:new URLSearchParams({fb_api_req_friendly_name:'ComposerStoryCreateMutation',variables:JSON.stringify(created)})});d.remove()},read('postLabel')||'Post');if(read('publishDisabled')){const group=document.createElement('div');group.setAttribute('aria-disabled','true');group.append(publish);d.append(group);if(read('publishDisabled')==='override')publish.setAttribute('aria-disabled','false')}else d.append(publish);const mutation=read('publishMutation');if(mutation)publish.addEventListener(mutation.event,()=>{const change=()=>{if(mutation.kind==='hide')publish.style.visibility='hidden';else if(mutation.kind==='disable')publish.setAttribute('aria-disabled','true');else if(mutation.kind==='rename'){publish.textContent='Other action';publish.setAttribute('aria-label','Other action')}else if(mutation.kind==='detach')publish.remove();else if(mutation.kind==='replace')publish.replaceWith(publish.cloneNode(true))};if(mutation.queued)setTimeout(change,0);else change()},{once:true});if(read('collapsedPublish'))publish.style.visibility='collapse';if(read('trailingControl'))d.append(button('More options',()=>save('wrongPublishTarget',true)));tb.focus();
 }
 if(location.pathname==='/search/people/'){
@@ -52,6 +52,13 @@ if(location.pathname==='/search/people/'){
   main.style.display='none';main.innerHTML='<div role="feed"><div role="article"><a href="/delayed">Delayed</a><span>Paris</span></div></div>';setTimeout(()=>main.style.display='',1000);
  }else if(new URL(location.href).searchParams.get('q')==='Alias'){
   main.innerHTML='<div role="feed"><div role="article"><a href="/photoshop">Ma&#x34f;<b>rc</b></a><span>Pa&#x34f;<b>ris</b></span><blockquote>Academy</blockquote></div></div>';
+}else if(new URL(location.href).searchParams.get('q')==='person'){
+ main.innerHTML='';const feed=document.createElement('div');feed.setAttribute('role','feed');
+ const card=(href,name,info,btn)=>{const a=document.createElement('div');a.setAttribute('role','article');const l=document.createElement('a');l.href=href;const s=document.createElement('span');s.textContent=name;l.append(s);a.append(l);const d=document.createElement('div');d.textContent=info;a.append(d);if(btn)a.append(button(btn,()=>{}));return a};
+ feed.append(card('/friend-person','Friend Person','Friend · Lives in Vancouver','Message'),card('/stranger-person','Stranger Person','Lives in Vancouver','Add friend'));
+ feed.lastChild.dataset.stranger='1';
+ main.append(button('Friends',()=>{const s=document.querySelector('[data-stranger]');if(s)s.remove()}));
+ main.append(feed);
  }else main.innerHTML='<div role="feed"><div role="article"><a hidden href="/photo.php?fbid=99">Hidden</a><a href="/bob">Bob</a><h3><a href="/media-user" style="display:contents"><span>Alice One</span></a></h3><a href="/photo.php?fbid=100">Photo</a><span>Paris</span><span>Đại học NEOMA</span><span role="button">Science Academy</span></div><div role="article"><a href="/media-user">Alice One</a><span>Paris</span><span>Đại học NEOMA</span></div><div role="article"><a href="/alice-two">Alice Two</a><span>Paris</span><span>Đại học NEOMA</span></div><div role="article"><a href="/alice-three">Alice Three</a><span>Lyon</span><span>Đại học NEOMA</span><span style="display:none">Secret University</span><span aria-hidden="true" style="display:none">Hidden College</span><span aria-hidden="true">Visible College</span><span style="opacity:0"><span style="display:contents">Ghost College</span></span></div><div role="article"><a href="/mira" aria-label="Profile picture of Mira"><img width="10" height="10"></a><a href="/mira" aria-hidden="true">Mira</a><span>Paris</span></div></div>';
 }else if(location.pathname==='/search/posts/'){
  main.innerHTML='<div role="feed"><div role="article"><a href="/photoshop">Alice</a><a aria-hidden="true" href="/fixture/posts/100">Post</a></div></div>';
@@ -191,6 +198,63 @@ if(location.pathname==='/search/people/'){
  msgs();if(read('recipientMode')){const grid=main.querySelector('[role=grid]');grid.innerHTML='<div role="row"><a href="/messages/e2ee/t/900/"><span>Moon (Work)</span><span>hello</span><span>·</span><span>now</span></a></div>';main.querySelector('h2').textContent='Moon (Work)';tb.setAttribute('aria-label','Message Moon (Work)')}if(read('recipientChatIncomplete')){const grid=main.querySelector('[role=grid]');grid.style='height:60px;overflow:auto';const spacer=document.createElement('div');spacer.style.height='6000px';grid.append(spacer);Object.defineProperty(grid,'scrollTop',{get:()=>0,set:()=>{}})}tb.oninput=()=>{if(read('truncateDraft')){tb.innerText=tb.innerText.slice(0,5);save('truncateDraft',false)}};tb.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();if(blocked)return;messages.push(tb.innerText.trim());save('sentThread',location.pathname);save('messages',messages);tb.innerText='';msgs()}};
  const restore=()=>{const d=dialog();if(read('pinStyle')==='staged'){d.innerHTML='<h2>Restore your chat history</h2><p>Your messages are end-to-end encrypted. Restore them from secure storage to read them on this device.</p>';const stage3=()=>{d.innerHTML='<h2>'+words[0]+'</h2>';const input=document.createElement('input');input.setAttribute('aria-label','PIN');input.oninput=()=>{if(input.value==='1234'){save('unlocked',true);d.remove()}};d.append(input,button(words[1],()=>d.remove()))};const stage2=()=>{d.innerHTML='<h2>How do you want to restore?</h2>';let picked=false;const next=button('Next',()=>{if(picked)stage3()});next.disabled=true;const opt=button('Use your PIN',()=>{picked=true;next.disabled=false});d.append(button('Use a one-time code',()=>{picked=false;next.disabled=true}),opt,next)};d.append(button('Continue',stage2));return}d.innerHTML='<h2>'+words[0]+'</h2>';if(read('pinStyle')==='segmented'){const boxes=[];for(let i=0;i<4;i++){const b=document.createElement('input');b.maxLength=1;b.setAttribute('aria-label','PIN digit '+(i+1));b.oninput=()=>{if(b.value&&boxes[i+1])boxes[i+1].focus()};boxes.push(b);d.append(b)}const alert=document.createElement('div');alert.setAttribute('role','alert');const go=button('Continue',()=>{if(boxes.map(b=>b.value).join('')==='1234'){save('unlocked',true);d.remove()}else alert.textContent='Incorrect PIN. Please try again.'});go.disabled=true;boxes.forEach(b=>b.addEventListener('input',()=>{go.disabled=boxes.some(x=>!x.value)}));d.append(go,alert);}else{const input=document.createElement('input');input.setAttribute('aria-label','PIN');d.append(input);if(read('pinAutofocus'))input.focus();input.oninput=()=>{if(input.value==='1234'){save('unlocked',true);d.remove()}}}d.append(button(words[1],()=>{const confirm=dialog();confirm.append(words[3],button(words[2],()=>{blocked=false;save('restored',true);d.remove();confirm.remove()}))},words[1]))};
  if(blocked)setTimeout(restore,100);else if(!read('unlocked'))main.append(button({en:'Enter PIN',vi:'Nhập mã PIN',fr:'Saisir le code PIN'}[locale],restore));
+}else if(location.pathname.startsWith('/search/')){
+ const type=location.pathname.split('/')[2];
+ const feed=document.createElement('div');feed.role='feed';
+ const card=(href,name,info,btn)=>{const a=document.createElement('div');a.role='article';const l=document.createElement('a');l.href=href;const s=document.createElement('span');s.textContent=name;l.append(s);a.append(l);const d=document.createElement('div');d.textContent=info;a.append(d);if(btn)a.append(button(btn,()=>{}));return a};
+  if(type==='pages'){feed.append(card('/fixture-page','Fixture Page','Brand · 1K followers','Follow'))}
+ else if(type==='groups'){feed.append(card('/groups/111','Fixture Group','Public group · 500 members'))}
+ else if(type==='events'){feed.append(card('/events/999','Fixture Event','Sat, Nov 14 · Vancouver','Interested'))}
+ else if(type==='places'){feed.append(card('/fixture-cafe','Fixture Cafe','Coffee shop · Vancouver'))}
+ else if(type==='photos'){const a=document.createElement('div');a.role='article';const l=document.createElement('a');l.href='/photo.php?fbid=321';const img=document.createElement('img');img.alt='Photo of a chair';l.append(img);a.append(l);feed.append(a)}
+ else if(type==='videos'){feed.append(card('/watch/?v=654','Chair assembly video','1K views · 2 days ago'))}
+ else{feed.append(card('/fixture/posts/100','Fixture User','2h · Public'),card('/friend-person','Friend Person','Friend · Lives in Vancouver','Message'),card('/groups/111','Fixture Group','Public group · 500 members'))}
+ main.append(feed);
+}else if(/^\/groups\/\w+\/?$/.test(location.pathname)&&!/^\/(groups)\/(joins|feed|discover|create|search|yourgroups)/.test(location.pathname)){
+ const gid=location.pathname.split('/')[2];
+ let gs=read('gs-'+gid)||'out';
+ const head=document.createElement('div');const h=document.createElement('h2');h.textContent='Fixture Group '+gid;head.append(h);
+ const jb=button('Join group',()=>{});
+ const paint=()=>{jb.textContent=gs==='joined'?'Joined':gs==='pending'?'Requested':'Join group'};
+ jb.onclick=()=>{
+  if(gs==='out'){
+   if(gid==='333'){const d=dialog();const l1=document.createElement('label');l1.textContent='Why do you want to join?';const t1=document.createElement('textarea');const l2=document.createElement('label');l2.textContent='Do you agree to the group rules?';const t2=document.createElement('textarea');d.append(l1,t1,l2,t2,button('Cancel',()=>d.remove()),button('Submit answers',()=>{gs='pending';save('gs-'+gid,gs);paint();d.remove()}));return}
+   gs=gid==='222'?'pending':'joined';save('gs-'+gid,gs);paint();
+  }else if(gs==='joined'){
+   const menu=document.createElement('div');menu.role='menu';const item=button('Leave group',()=>{menu.remove();const d=dialog();d.append('Leave this group?',button('Leave group',()=>{gs='out';save('gs-'+gid,gs);paint();d.remove()}),button('Cancel',()=>d.remove()))});item.role='menuitem';menu.append(item);document.body.append(menu);
+  }
+ };
+ paint();head.append(jb);main.append(head);
+}else if(location.pathname==='/marketplace/create/item'){
+ const wrap=document.createElement('div');
+ const title=document.createElement('input');title.setAttribute('aria-label','Title');
+ const price=document.createElement('input');price.setAttribute('aria-label','Price');
+ const desc=document.createElement('textarea');desc.setAttribute('aria-label','Description');
+ const file=document.createElement('input');file.type='file';file.multiple=true;
+ let previews=0,cond='',cat='';
+ const next=button('Next',()=>{wrap.remove();const pub=button('Publish',()=>{history.pushState(null,'','/marketplace/item/777/');const n=document.createElement('div');n.textContent='Your listing is now live';main.append(n)});main.append(pub)});
+ const upd=()=>{if(title.value&&price.value&&previews>0&&cond)next.removeAttribute('aria-disabled');else next.setAttribute('aria-disabled','true')};
+ next.setAttribute('aria-disabled','true');
+ file.onchange=()=>{for(const f of file.files){const img=document.createElement('img');img.src=URL.createObjectURL(f);wrap.append(img);previews++}upd()};
+ title.oninput=upd;price.oninput=upd;
+ const picker=(label,options,searchable,pick)=>{const b=button(label,()=>{const lb=document.createElement('div');lb.role='listbox';if(searchable){const si=document.createElement('input');lb.append(si)}for(const o of options){const op=document.createElement('div');op.role='option';op.textContent=o;op.onclick=()=>{pick(o);lb.remove();upd()};lb.append(op)}document.body.append(lb)},label);return b};
+ wrap.append(title,price,desc,file,picker('Condition',['New','Used - like new','Used - good','Used - fair'],false,v=>cond=v),picker('Category',['Furniture','Electronics','Clothing'],true,v=>cat=v),next);
+ main.append(wrap);
+}else if(/^\/marketplace\/item\/\d+\/?$/.test(location.pathname)){
+ const wrap=document.createElement('div');
+ const h=document.createElement('h2');h.textContent='Wooden chair';wrap.append(h);
+ const price=document.createElement('div');price.textContent='$40';wrap.append(price);
+ wrap.append(button('Message',()=>{
+  const d=dialog();const log=document.createElement('div');log.role='log';d.append(log);
+  const tb=document.createElement('div');tb.role='textbox';tb.contentEditable='true';d.append(tb);
+  tb.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();const m=document.createElement('div');m.role='article';m.textContent=tb.innerText.trim();log.append(m);tb.innerText=''}};
+ }));
+ main.append(wrap);
+}else if(location.pathname==='/marketplace/search/'){
+ const wrap=document.createElement('div');
+ const mk=(id,t,p,l)=>{const a=document.createElement('a');a.href='/marketplace/item/'+id+'/';for(const s of [t,p,l]){const sp=document.createElement('span');sp.textContent=s;a.append(sp)}return a};
+ wrap.append(mk('555','Wooden chair','$40','Vancouver'),mk('556','Desk lamp','$15','Burnaby'));
+ main.append(wrap);
 }else if(location.pathname==='/groups/joins'){
  main.innerHTML='<a href="/groups/9" style="display:none">Hidden Group</a><a href="/groups/feed/">Your feed</a><a href="/groups/1"><span>Paris</span><span> Hikers</span></a><a href="/groups/1"><div>Private group · 2K members</div></a><a href="/groups/2" aria-label="Solo"><img alt="Solo" width="40" height="40" src="data:image/gif;base64,R0lGODlhAQABAAAAACw="></a>';
 }else{
