@@ -939,10 +939,19 @@ pub async fn unlock(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     let t = b.acquire().await?;
     let r = async {
         b.goto(&t, "https://www.facebook.com/messages/t/").await?;
-        match b.eval(&t, "window.__fb.pinFocus()").await? {
-            Value::Bool(true) => {}
-            Value::String(s) => return Err(s),
-            _ => return Err("unexpected".into()),
+        if b.eval(&t, "window.__fb.pinFocus(20000)").await? != Value::Bool(true) {
+            // The restore prompt is summoned by the messages page itself
+            // (verified on the user's account, 2026-10-31: it reappears on
+            // a fresh load even after being closed). One reload re-summons
+            // it when the first load raced or the prompt was mid-dismissal.
+            // facebook.com/secure-storage is NOT a fallback: on a real
+            // account it redirects to an unrelated business Page.
+            b.goto(&t, "https://www.facebook.com/messages/t/").await?;
+            match b.eval(&t, "window.__fb.pinFocus(20000)").await? {
+                Value::Bool(true) => {}
+                Value::String(s) => return Err(s),
+                _ => return Err("unexpected".into()),
+            }
         }
         // Type the PIN as real keystrokes, one digit at a time. A single
         // Input.insertText lands in only the first box of the surfaces that
