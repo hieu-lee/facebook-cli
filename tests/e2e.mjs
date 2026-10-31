@@ -526,7 +526,7 @@ try{
   await evaluate('localStorage.restored="false";localStorage.pinStyle=JSON.stringify("staged");localStorage.removeItem("unlocked");JSON.stringify(true)');
   assert.match(await fb('unlock','1234'),/^unlocked/);
   assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.unlocked))'),true);
-  await evaluate('localStorage.removeItem("pinStyle");localStorage.restored="true";JSON.stringify(true)');
+  await evaluate('localStorage.pinStyle=JSON.stringify("segmented");localStorage.restored="true";JSON.stringify(true)');
  });
  await check('a wrong segmented PIN reports what Facebook said',async()=>{
   await evaluate('localStorage.restored="false";localStorage.removeItem("unlocked");JSON.stringify(true)');
