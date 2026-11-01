@@ -461,13 +461,15 @@
   return gone?true:'not confirmed by messenger';
  };
  // Find one message in the open thread: the newest whose text contains
- // `match` (any sender), or the newest message at all. Same discipline as
+ // `match` (any sender), or the newest message at all. `nth` counts
+ // matches from the newest (0 = the newest), so a caller that shows the
+ // user a list can name an older duplicate exactly. Same discipline as
  // unsendOpen: start from the newest rows, never pick among half-rendered
  // ones. A row counts as rendered only once its message label parses (a
  // toolbar's own aria-label appears earlier), and a newer row that never
  // does is an error: falling through would act on an older message.
  // Returns {a,m} or {err}.
- F.msgTarget=async match=>{
+ F.msgTarget=async(match,nth=0)=>{
   const log=document.querySelector('[role=log]');
   if(!log)return{err:'no thread'};
   const sc=F.scroller(log);
@@ -477,16 +479,20 @@
   const ready=await waitFor(()=>[...log.querySelectorAll('[role=article]')].slice(-4).every(a=>readable(F.parseMessage(a,log))),5000,100);
   if(!ready)return{err:'messages are still loading; try again'};
   if(!await F.settleBottom(log,3,300))return{err:'could not reach the newest messages; nothing was changed'};
+  let seen=0;
   for(const a of [...log.querySelectorAll('[role=article]')].reverse()){
    const m=F.parseMessage(a,log);
    if(!readable(m))return{err:'a newer message could not be read; nothing was changed'};
    if(match&&!(m.text||'').toLowerCase().includes(match.toLowerCase()))continue;
    if(!m.text&&!m.att){
     // a readable row with no text or attachment (voice message, sticker) can never match; with no
-    // selector it IS the newest message, which we cannot act on: never fall through to an older one
+    // selector it is a candidate like any other, and as the target it cannot be acted on: never
+    // fall through to an older one in its place
     if(match)continue;
+    if(seen++<nth)continue;
     return{err:'the newest message has no readable text; nothing was changed'};
    }
+   if(seen++<nth)continue;
    return{a,m};
   }
   return{err:match?'no message contains that text':'no message found in this chat'};
@@ -506,10 +512,10 @@
  // React to one message in two steps, so the caller can still cancel
  // between them: Open finds the message and opens its toolbar's emoji
  // picker, Confirm clicks our emoji and verifies it landed.
- F.msgReactOpen=async(match,name)=>{
+ F.msgReactOpen=async(match,name,nth=0)=>{
   const emoji=REACT_EMOJI[name];
   if(!emoji)return 'unknown reaction: '+name;
-  const t=await F.msgTarget(match);
+  const t=await F.msgTarget(match,nth);
   if(t.err)return t.err;
   const btn=await F.msgToolbarBtn(t.a,/react|emoji|cảm xúc|réagir/i);
   if(!btn)return 'no react button on that message';
@@ -557,8 +563,8 @@
  };
  // Arm a reply: the message's toolbar Reply button makes Messenger quote
  // it above the composer; the caller then sends the reply text normally.
- F.msgReplyOpen=async match=>{
-  const t=await F.msgTarget(match);
+ F.msgReplyOpen=async(match,nth=0)=>{
+  const t=await F.msgTarget(match,nth);
   if(t.err)return t.err;
   const btn=await F.msgToolbarBtn(t.a,/^reply|reply|trả lời|répondre/i);
   if(!btn)return 'no reply button on that message';

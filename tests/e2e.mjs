@@ -625,6 +625,16 @@ try{
   await assert.rejects(()=>fb('unlock','9999'),/PIN was not accepted/);
   await evaluate('localStorage.removeItem("pinStyle");localStorage.restored="true";JSON.stringify(true)');
  });
+ await check('message reactions can target an older duplicate',async()=>{
+  const savedMessages=await evaluate('JSON.stringify(localStorage.getItem("messages"))');
+  const savedReactions=await evaluate('JSON.stringify(localStorage.getItem("reactions"))');
+  await evaluate('localStorage.messages=JSON.stringify(["ok","ok","later"]);localStorage.removeItem("reactions");JSON.stringify(true)');
+  assert.match(await fb('msgreact','42','love','--match','ok'),/^reacted/);
+  assert.deepEqual(await evaluate('JSON.stringify(JSON.parse(localStorage.reactions||"{}"))'),{'1':'❤️'});
+  assert.match(await fb('msgreact','42','wow','--match','ok','--nth','1'),/^reacted/);
+  assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.reactions||"{}")["0"])'),'😮');
+  await evaluate(`localStorage.messages=${JSON.stringify(savedMessages)};localStorage.reactions=${JSON.stringify(savedReactions)};JSON.stringify(true)`);
+ });
  await check('HTTP named page initializes outside a secure context',async()=>{
   assert.match(await fb('page','http','open','http://example.test/'),/^url\thttp:\/\/example.test\//);
   await fb('page','http','close');
