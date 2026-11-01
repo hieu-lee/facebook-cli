@@ -514,7 +514,9 @@ pub async fn resolve(d: &Daemon, b: &std::sync::Arc<Browser>, spec: &str) -> Res
         format!("could not finish scanning your chat list to confirm '{spec}' is unique; try again, or use a ref/id")
     })?;
     match hits.len() {
-        0 if !complete => Err(format!("could not finish scanning your chat list before resolving '{spec}'; use a profile ref or @handle")),
+        0 if !complete => Err(format!(
+            "could not finish scanning your chat list before resolving '{spec}'; use a profile ref or @handle"
+        )),
         0 => friend_thread(d, b, spec).await,
         1 => Ok(Resolved {
             path: hits[0].path.clone(),
@@ -1146,7 +1148,7 @@ pub async fn msgreact(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
         let open = b
             .eval(
                 &t,
-&format!(
+                &format!(
                     "window.__fb.msgReactOpen({}, {}, {})",
                     json!(m),
                     json!(reaction),

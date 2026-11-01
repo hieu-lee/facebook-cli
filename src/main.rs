@@ -12,6 +12,7 @@ mod feed;
 mod help;
 mod ipc;
 mod keys;
+mod media;
 mod messenger;
 mod ops;
 mod page;
@@ -19,7 +20,6 @@ mod proto;
 mod refs;
 mod session;
 mod stories;
-mod media;
 
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();

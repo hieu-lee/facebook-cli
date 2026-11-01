@@ -615,7 +615,10 @@ pub async fn group_apply(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
             return Err("cancelled by client; no answers were submitted".into());
         }
         let filled = match b
-            .eval(&t, &format!("window.__fb.groupApplyFill({})", json!(answers)))
+            .eval(
+                &t,
+                &format!("window.__fb.groupApplyFill({})", json!(answers)),
+            )
             .await?
         {
             Value::String(s) => s,
@@ -660,6 +663,16 @@ pub async fn group_apply(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
 
 async fn probe_picker(b: &Browser, t: &Tab, idx: usize, x: f64, y: f64, round: u32) -> Res<Value> {
     if round > 0 {
+        // A picker left open by the previous attempt is still the
+        // picker: reuse it instead of tagging it as scenery (tagging
+        // it would leave the retry waiting for a second picker that
+        // can never appear while the first is open).
+        let open = b
+            .eval(t, &format!("window.__fb.reactionPick({idx}, {x}, {y})"))
+            .await?;
+        if open["labels"].as_array().is_some_and(|l| !l.is_empty()) {
+            return Ok(open);
+        }
         b.hover(t, x + 40.0, y + 60.0).await?;
         tokio::time::sleep(Duration::from_millis(250)).await;
         // The picker (if any) has closed again; re-tag what remains.
@@ -802,7 +815,23 @@ pub async fn react(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
                 }
             }
             if !landed {
-                return Err("the reaction did not land on the post".into());
+                // Say what the page actually shows: a diagnosable error
+                // beats a bare failure (this is how a macOS-only miss
+                // was pinned down — label and picker state tell apart a
+                // click that missed from a label that never changed).
+                let now = b.eval(&t, "window.__fb.likeInfo()").await?;
+                let l = now["label"].as_str().unwrap_or("");
+                let still = b
+                    .eval(
+                        &t,
+                        &format!("window.__fb.reactionPick({}, {x}, {y})", idx.min(6)),
+                    )
+                    .await?;
+                let picker_open = still["labels"].as_array().is_some_and(|a| !a.is_empty());
+                return Err(format!(
+                    "the reaction did not land on the post (button reads '{l}', picker {})",
+                    if picker_open { "still open" } else { "closed" }
+                ));
             }
         }
         let _ = b
