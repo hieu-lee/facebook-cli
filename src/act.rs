@@ -666,8 +666,10 @@ async fn probe_picker(b: &Browser, t: &Tab, idx: usize, x: f64, y: f64, round: u
         b.eval(t, "window.__fb.markToolbars()").await?;
     }
     b.hover(t, x, y).await?;
-    let deadline =
-        std::time::Instant::now() + Duration::from_millis(if round == 0 { 4000 } else { 2500 });
+    // Both rounds get the full window: on a slow machine each probe eval
+    // is itself slow, and a short second window missed a 1.6s picker on
+    // the macOS CI runner while Linux and Windows passed.
+    let deadline = std::time::Instant::now() + Duration::from_millis(5000);
     loop {
         let pick = b
             .eval(t, &format!("window.__fb.reactionPick({idx}, {x}, {y})"))
@@ -752,7 +754,7 @@ pub async fn react(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
             if liked {
                 ok(&b.eval(&t, "window.__fb.likePress()").await?)?;
                 // Verify it came off: the button label must change.
-                let deadline = std::time::Instant::now() + Duration::from_millis(3000);
+                let deadline = std::time::Instant::now() + Duration::from_millis(6000);
                 let mut off = false;
                 while std::time::Instant::now() < deadline {
                     tokio::time::sleep(Duration::from_millis(300)).await;
@@ -782,15 +784,18 @@ pub async fn react(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
                     pick["y"].as_f64().ok_or("reaction picker not found")?,
                 );
                 b.click(&t, px, py).await?;
-                let deadline = std::time::Instant::now() + Duration::from_millis(3000);
-                while std::time::Instant::now() < deadline {
-                    tokio::time::sleep(Duration::from_millis(300)).await;
+                let deadline = std::time::Instant::now() + Duration::from_millis(6000);
+                loop {
                     let now = b.eval(&t, "window.__fb.likeInfo()").await?;
                     let l = now["label"].as_str().unwrap_or("").to_lowercase();
                     if current_reaction(&l, &labels) == Some(idx) {
                         landed = true;
                         break;
                     }
+                    if std::time::Instant::now() >= deadline {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(250)).await;
                 }
                 if landed {
                     break;
