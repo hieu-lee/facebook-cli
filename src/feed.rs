@@ -161,6 +161,12 @@ async fn collect(d: &Daemon, b: &Browser, t: &Tab, url: &str, args: &Args, out: 
     let mut count = 0;
     let mut seen_urls = std::collections::HashSet::new();
     let mut last = Instant::now();
+    // End of the rendered list: window pinned to the bottom with a stable
+    // height while steps come back empty. A short profile or group used to
+    // pay the full 12 s no-post stall; a page still growing (lazy load in
+    // flight changes the height) or not yet at its bottom keeps the stall.
+    let mut end_h: Option<i64> = None;
+    let mut end_since: Option<Instant> = None;
     while count < n
         && last.elapsed() < Duration::from_secs(12)
         && t0.elapsed() < Duration::from_secs(90)
@@ -168,6 +174,18 @@ async fn collect(d: &Daemon, b: &Browser, t: &Tab, url: &str, args: &Args, out: 
         let posts = step(b, t).await?;
         if !posts.is_empty() {
             last = Instant::now();
+            end_h = None;
+            end_since = None;
+        } else if let Ok(end) = b.eval(t, "window.__fbFeed.atEnd()").await {
+            let h = end["h"].as_i64().unwrap_or(-1);
+            if end["bottom"] == Value::Bool(true) && end_h == Some(h) {
+                if end_since.is_some_and(|s| s.elapsed() > Duration::from_millis(2500)) {
+                    break;
+                }
+            } else {
+                end_h = Some(h);
+                end_since = Some(Instant::now());
+            }
         }
         for p in posts
             .into_iter()

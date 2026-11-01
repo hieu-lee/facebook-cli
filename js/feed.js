@@ -109,6 +109,8 @@
    if(pending.length)await waitFor(()=>pending.every(msg=>!more(msg).length),1500,30);
   },
   scroll(){window.scrollBy(0,innerHeight*0.7)},
+  /* is the window pinned to the end of everything the page has rendered? */
+  atEnd(){const de=document.documentElement;const h=Math.max(de.scrollHeight,document.body?document.body.scrollHeight:0);return {bottom:window.scrollY+window.innerHeight>=h-2,h}},
   /* the feed sometimes stops loading at the bottom; leaving and re-entering it starts it again */
   async nudge(){scrollBy(0,-innerHeight*2);await new Promise(r=>setTimeout(r,400));scrollTo(0,document.body.scrollHeight);return 1}
  };
