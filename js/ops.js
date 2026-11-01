@@ -9,12 +9,28 @@
  // scroll the page until `collect()` yields n rows or growth stalls
  const gather=async(n,collect,ms=25000,sc=null,progress=null,finalize=null,order=null)=>{
   const t0=Date.now();let last=0,stall=0;const map=new Map();
+  // The end of a list, as opposed to a pause while more loads: the scroller
+  // sits pinned to its bottom and neither its height nor the row count moved
+  // across settled rechecks — the same exhaustion test the chat-list scan
+  // uses. Without it every short list paid the full 14-round stall tail.
+  let endH=-1,endSeen=-1,endRounds=0;
+  const metrics=el=>{
+   if(el)return {h:el.scrollHeight,pos:el.scrollTop,clientH:el.clientHeight,bottom:el.scrollTop+el.clientHeight>=el.scrollHeight-2};
+   const de=document.documentElement;
+   return {h:de.scrollHeight,pos:window.scrollY,clientH:window.innerHeight,bottom:window.scrollY+window.innerHeight>=de.scrollHeight-2};
+  };
   while(Date.now()-t0<ms){
    for(const r of collect(map))if(!map.has(r.k))map.set(r.k,r);
    if(map.size>=n)break;
    const current=progress?progress():map.size;
    if(current===last){if(++stall>=14)break;}else{stall=0;last=current;}
    const el=typeof sc==='function'?sc():sc;
+   const m=metrics(el);
+   // only trust the bottom when scrolling demonstrably works on this
+   // scroller (it moved, or there is nothing to scroll): a wrong scroller
+   // must fall back to the stall tail, never truncate the list
+   if(m.bottom&&m.h===endH&&current===endSeen&&(m.pos>0||m.h<=m.clientH+2)){if(++endRounds>=3)break;}
+   else{endRounds=0;endH=m.h;endSeen=current;}
    if(el)el.scrollTop+=el.clientHeight*0.8;else window.scrollBy(0,innerHeight*0.8);
    await sleep(220);
   }
