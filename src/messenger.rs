@@ -1370,7 +1370,7 @@ mod tests {
     #[test]
     fn reply_needs_a_nonblank_match_selector() {
         let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        let usage = "usage: reply <chat> <text> --match text [--file path]...";
+        let usage = "usage: reply <chat> <text> --match text [--nth n] [--file path]...";
         assert_eq!(
             require_reply_selector(&args(&["42", "answer"])),
             Err(usage.into())
