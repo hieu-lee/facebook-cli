@@ -941,7 +941,7 @@ try{
  await check('group members list every profile link form',async()=>{
   const out=await fb('members','/groups/111','-n','10','--urls');
   assert.match(out,/Alice Admin\thttps:\/\/www\.facebook\.com\/alice\.admin/);
-  assert.match(out,/Bob People\thttps:\/\/www\.facebook\.com\/people\/Bob-People\/100002/);
+  assert.match(out,/Bob People\thttps:\/\/www\.facebook\.com\/profile\.php\?id=100002/);
   assert.match(out,/Carol Groupuser\thttps:\/\/www\.facebook\.com\/profile\.php\?id=100003/);
   assert.match(out,/Dave Id\thttps:\/\/www\.facebook\.com\/profile\.php\?id=100004/);
  });
