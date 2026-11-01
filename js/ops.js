@@ -112,7 +112,15 @@
  F.searchFriends=async(n,clues=[])=>{
   const chip=await waitFor(()=>[...document.querySelectorAll('[role=main] [role=button],[role=main] [role=switch],[role=main] [role=checkbox]')].filter(b=>!b.closest('[role=feed],[role=article]')).find(b=>/^(Friends|Bạn bè|Amis)$/i.test(clean(b.innerText||b.getAttribute('aria-label')||''))),10000);
   let note;
-  if(chip){chip.click();await sleep(1800);}else note='friends filter not offered by facebook here; showing all people';
+  if(chip){
+   // wait for the filter to visibly apply (chip state, results swap) instead
+   // of a flat 1.8 s; the cap stays as the timeout when nothing observable
+   // changes
+   const feedEl=document.querySelector('[role=main] [role=feed]');
+   const hadStranger=!!document.querySelector('[data-stranger]');
+   chip.click();
+   await waitFor(()=>chip.getAttribute('aria-pressed')==='true'||chip.getAttribute('aria-checked')==='true'||(hadStranger&&!document.querySelector('[data-stranger]'))||(feedEl&&document.querySelector('[role=main] [role=feed]')!==feedEl),1800,100);
+  }else note='friends filter not offered by facebook here; showing all people';
   const r=await F.search(n,clues,'people');
   if(note&&!r.err)r.note=r.note?r.note+'; '+note:note;
   return r;
