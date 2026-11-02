@@ -14,7 +14,7 @@ const seedProfile=(path,buckets=[])=>{const user={id:'123',name:'Fixture User',s
 const seedCollection=(edges=[],more=true)=>{const script=document.createElement('script');script.type='application/json';script.textContent=JSON.stringify({data:{section:{__typename:'TimelineAppSection',id:btoa('app_section:123:1'),all_collections:{nodes:[{style_renderer:{__typename:'TimelineAppCollectionPhotosRenderer',collection:{id:'collection',pageItems:{edges,page_info:{end_cursor:'cursor1',has_next_page:more}}}}}]}}}});document.head.append(script)};
 function postNode(p){
  const s=document.createElement('section');s.dataset.post=p.id;if(read('recycle')==='aria')s.setAttribute('aria-posinset','1');
- s.innerHTML='<h3 data-ad-rendering-role="profile_name"><a href="/fixture">Fixture User</a></h3><a class="time" href="?tracking=1"><span style="position:relative">Just now</span></a><div data-ad-rendering-role="story_message"></div><div data-ad-rendering-role="like_button">0</div>';
+ s.innerHTML='<h3 data-ad-rendering-role="profile_name"><a href="/fixture">Fixture User</a></h3><a class="time" href="?tracking=1"><span style="position:relative">Just now</span></a><div data-ad-rendering-role="story_message"></div><div role="button" class="likeBtn" aria-label="Like"><span data-ad-rendering-role="like_button">0</span></div>';
  const msg=s.querySelector('[data-ad-rendering-role=story_message]');
  if(p.badge){const b=document.createElement('span');b.textContent=' Accounts with a verified badge have been authenticated and can be Meta Verified subscribers or notable persons or brands.';s.querySelector('h3').append(b);}
  if(read('oldHeaderPartial')&&p.id==='100'){msg.removeAttribute('data-ad-rendering-role');s.querySelector('[data-ad-rendering-role=like_button]').removeAttribute('data-ad-rendering-role')}
@@ -23,6 +23,18 @@ function postNode(p){
  if(read('delayedBody')&&p.id!=='100')setTimeout(body,1000);else body();
  s.querySelector('.time').onmouseover=e=>{if(read('recycleHover')&&s.dataset.post==='100'){s.dataset.post='200';msg.textContent='Hover recycled second post';e.currentTarget.href='/fixture/posts/200';return}if(s.dataset.post==='200'){e.currentTarget.href='/fixture/posts/200';return}if(read('oldUrlDeferred')&&p.id==='100'&&!read('publishAttempted'))return;e.currentTarget.href='/fixture/posts/'+p.id};
  const action=button('Options',()=>{const menu=document.createElement('div');menu.role='menu';const item=button('Move to trash',()=>{menu.remove();const d=dialog();d.append('Move to trash?',button('Move',()=>{posts=posts.filter(x=>x.id!==p.id);save('posts',posts);s.remove();d.remove()}),button('Cancel',()=>d.remove()))});item.role='menuitem';menu.append(item);document.body.append(menu)},'Actions for this post');action.setAttribute('aria-haspopup','menu');s.append(action);
+ const likeBtn=s.querySelector('.likeBtn');
+ const paintLike=()=>likeBtn.setAttribute('aria-label',p.reaction?'Remove '+p.reaction:'Like');
+ let picker=null,pickTimer=null;
+ const hidePicker=()=>{if(pickTimer){clearTimeout(pickTimer);pickTimer=null}if(picker){picker.remove();picker=null}};
+ const setReaction=name=>{p.reaction=name||null;save('posts',posts);paintLike()};
+ const showPicker=()=>{if(picker)return;picker=document.createElement('div');picker.role='toolbar';for(const name of ['Like','Love','Care','Haha','Wow','Sad','Angry'])picker.append(button(name,()=>{setReaction(name);hidePicker()},name));likeBtn.before(picker)};
+ likeBtn.addEventListener('mouseover',()=>{if(!picker&&!pickTimer)pickTimer=setTimeout(()=>{pickTimer=null;showPicker()},read('pickerDelay')||300)});
+ likeBtn.addEventListener('mouseout',()=>{if(pickTimer){clearTimeout(pickTimer);pickTimer=null}});
+ likeBtn.onclick=()=>{hidePicker();setReaction(p.reaction?null:'Like')};
+ paintLike();
+ if(read('decoyToolbar')&&!document.getElementById('decoyBar')){const decoy=document.createElement('div');decoy.id='decoyBar';decoy.role='toolbar';for(const name of ['Bold','Italic','Emoji','GIF','Sticker','Photo','Feeling'])decoy.append(button(name,()=>{},name));setTimeout(()=>main.append(decoy),0)}
+ if(!read('decoyToolbar'))document.getElementById('decoyBar')?.remove();
  return s;
 }
 function render(){main.querySelectorAll('section').forEach(x=>x.remove());const id=location.pathname.match(/\/posts\/(\d+)/)?.[1];for(const p of posts.filter(p=>(!id||p.id===id)&&!(read('oldUnmounted')&&p.id==='100'&&!read('publishAttempted'))))main.append(postNode(p));}

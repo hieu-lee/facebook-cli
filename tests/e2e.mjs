@@ -477,6 +477,31 @@ try{
   assert.deepEqual(await evaluate('JSON.stringify(JSON.parse(localStorage.posts)[0].attached)'),{name:'upload.png',type:'image/png',size:image.length,sum});
   assert.match(await fb('delete',result.split('\t')[1]),/^deleted/);
  });
+ await check('post reactions land, change and clear',async()=>{
+  const ref=(await fb('posts','me','-n','1')).split('\t')[0];
+  const state=async()=>await evaluate('JSON.stringify(String((JSON.parse(localStorage.posts).find(p=>p.id==="100")||{}).reaction??"none"))');
+  assert.match(await fb('react',ref,'love'),/^reacted love/);assert.equal(await state(),'Love');
+  assert.match(await fb('react',ref,'haha'),/^reacted haha/);assert.equal(await state(),'Haha');
+  assert.match(await fb('react',ref,'none'),/^reacted none/);assert.equal(await state(),'none');
+  assert.match(await fb('react',ref,'like'),/^reacted like/);assert.equal(await state(),'Like');
+  assert.match(await fb('react',ref,'none'),/^reacted none/);assert.equal(await state(),'none');
+ });
+ await check('post reactions wait out a slow picker',async()=>{
+  await evaluate('localStorage.pickerDelay="1600";JSON.stringify(true)');
+  const ref=(await fb('posts','me','-n','1')).split('\t')[0];
+  assert.match(await fb('react',ref,'wow'),/^reacted wow/);
+  assert.equal(await evaluate('JSON.stringify(String((JSON.parse(localStorage.posts).find(p=>p.id==="100")||{}).reaction??"none"))'),'Wow');
+  await fb('react',ref,'none');
+  await evaluate('localStorage.removeItem("pickerDelay");JSON.stringify(true)');
+ });
+ await check('post reactions ignore a later decoy toolbar',async()=>{
+  await evaluate('localStorage.decoyToolbar="true";JSON.stringify(true)');
+  const ref=(await fb('posts','me','-n','1')).split('\t')[0];
+  assert.match(await fb('react',ref,'love'),/^reacted love/);
+  assert.equal(await evaluate('JSON.stringify(String((JSON.parse(localStorage.posts).find(p=>p.id==="100")||{}).reaction??"none"))'),'Love');
+  await fb('react',ref,'none');
+  await evaluate('localStorage.removeItem("decoyToolbar");document.getElementById("decoyBar")?.remove();JSON.stringify(true)');
+ });
  await check('retained audience panes never become publish targets',async()=>{
   for(const label of ['Post','Đăng','Publier']){
    await evaluate(`localStorage.retainedAudience="true";localStorage.trailingControl="true";localStorage.postLabel=JSON.stringify(${JSON.stringify(label)});localStorage.wrongPublishTarget="false";JSON.stringify(true)`);

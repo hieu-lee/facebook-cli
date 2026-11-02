@@ -241,14 +241,34 @@
 })();
 (()=>{
  const F=window.__fb;
- F.reactionPick=idx=>{
+ // Tag every toolbar already on the page. The reaction picker is the
+ // toolbar that APPEARS after the hover; page furniture (the comment
+ // composer, comment rows) can hold as many buttons and must never be
+ // mistaken for it, however long the picker takes to open.
+ F.markToolbars=()=>{document.querySelectorAll('[role=toolbar]').forEach(t=>t.setAttribute('data-fb-seen','1'));return true};
+ F.reactionPick=(idx,x,y)=>{
   const r=F.postRoot();if(!r)return null;
-  const cands=[...document.querySelectorAll('[role=dialog] [role=toolbar],[role=toolbar]')].filter(t=>t.querySelectorAll('[role=button],[aria-label]').length>=6);
-  const tb=cands[cands.length-1];
-  if(!tb)return null;
-  const items=[...tb.querySelectorAll('[role=button]')].filter(b=>b.getBoundingClientRect().width>10);
-  const it=items[idx];if(!it)return null;
+  const cands=[...document.querySelectorAll('[role=dialog] [role=toolbar],[role=toolbar]')]
+   .filter(t=>!t.hasAttribute('data-fb-seen'))
+   .map(tb=>({tb,items:[...tb.querySelectorAll('[role=button]')].filter(b=>b.getBoundingClientRect().width>10)}))
+   .filter(c=>c.items.length>=6);
+  if(!cands.length)return null;
+  // The picker opens right at the Like button. Other toolbars on the page
+  // (the comment composer, comment rows) can hold as many buttons and are
+  // often later in the document — the old last-in-document pick clicked
+  // those instead, some of the time. Nearest to the button wins.
+  let chosen=cands[cands.length-1];
+  if(typeof x==='number'&&typeof y==='number'){
+   let best=Infinity;
+   for(const c of cands){
+    const rc=c.tb.getBoundingClientRect();
+    const dx=Math.max(rc.left-x,0,x-rc.right),dy=Math.max(rc.top-y,0,y-rc.bottom);
+    const d=dx*dx+dy*dy;
+    if(d<=best){best=d;chosen=c}
+   }
+  }
+  const it=chosen.items[idx];if(!it)return null;
   const rc=it.getBoundingClientRect();
-  return {x:rc.x+rc.width/2,y:rc.y+rc.height/2,labels:items.map(b=>b.getAttribute('aria-label')||'')};
+  return {x:rc.x+rc.width/2,y:rc.y+rc.height/2,labels:chosen.items.map(b=>b.getAttribute('aria-label')||'')};
  };
 })();

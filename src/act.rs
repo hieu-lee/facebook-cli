@@ -428,6 +428,17 @@ fn current_reaction(label: &str, picker: &[String]) -> Option<usize> {
         .map(|(i, _)| i)
 }
 
+/// A reaction has landed only when the button shows a SELECTED state naming
+/// it. The neutral button reads exactly the first picker label ("Like"),
+/// which suffix-matches index 0 — so a suffix match alone would confirm a
+/// Like that never landed and bypass the retry.
+fn reaction_landed(label: &str, picker: &[String], idx: usize) -> bool {
+    picker
+        .first()
+        .is_some_and(|first| !first.is_empty() && label != first)
+        && current_reaction(label, picker) == Some(idx)
+}
+
 /// Join a group. Idempotent: already joined / already requested is reported,
 /// not re-clicked. A group that asks membership questions gets its questions
 /// reported back; answering them is the user's call, nothing is submitted.
@@ -658,6 +669,41 @@ pub async fn group_apply(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     r
 }
 
+async fn probe_picker(b: &Browser, t: &Tab, idx: usize, x: f64, y: f64, round: u32) -> Res<Value> {
+    if round > 0 {
+        // A picker left open by the previous attempt is still the
+        // picker: reuse it instead of tagging it as scenery (tagging
+        // it would leave the retry waiting for a second picker that
+        // can never appear while the first is open).
+        let open = b
+            .eval(t, &format!("window.__fb.reactionPick({idx}, {x}, {y})"))
+            .await?;
+        if open["labels"].as_array().is_some_and(|l| !l.is_empty()) {
+            return Ok(open);
+        }
+        b.hover(t, x + 40.0, y + 60.0).await?;
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        // The picker (if any) has closed again; re-tag what remains.
+        b.eval(t, "window.__fb.markToolbars()").await?;
+    }
+    b.hover(t, x, y).await?;
+    // Both rounds get the full window: on a slow machine each probe eval
+    // is itself slow, and a short second window missed a 1.6s picker on
+    // the macOS CI runner while Linux and Windows passed.
+    let deadline = std::time::Instant::now() + Duration::from_millis(5000);
+    loop {
+        let pick = b
+            .eval(t, &format!("window.__fb.reactionPick({idx}, {x}, {y})"))
+            .await?;
+        if pick["labels"].as_array().is_some_and(|l| !l.is_empty())
+            || std::time::Instant::now() >= deadline
+        {
+            return Ok(pick);
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+}
+
 pub async fn react(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     let a = parse(args, &[], &[])?;
     let spec = a
@@ -690,23 +736,20 @@ pub async fn react(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
             info["x"].as_f64().ok_or("no like button")?,
             info["y"].as_f64().ok_or("no like button")?,
         );
+        let label0 = info["label"].as_str().unwrap_or("").to_lowercase();
         // The picker labels are the language-independent reference: the button reads exactly like
         // the first entry ("Like") when nothing is selected, and like "Remove <reaction>" otherwise.
-        // the picker opens on hover after a short delay: retry, never guess "no reaction"
-        let mut pick = Value::Null;
-        for attempt in 0..4 {
-            if attempt > 0 {
-                b.hover(&t, x + 40.0, y + 60.0).await?;
-                tokio::time::sleep(Duration::from_millis(200)).await;
-            }
-            b.hover(&t, x, y).await?;
-            tokio::time::sleep(Duration::from_millis(900)).await;
-            pick = b
-                .eval(&t, &format!("window.__fb.reactionPick({})", idx.min(6)))
-                .await?;
-            if pick["labels"].as_array().is_some_and(|l| !l.is_empty()) {
-                break;
-            }
+        // The picker opens on hover after Facebook's own delay, which is not
+        // fixed: hover and poll for it (one re-hover if it never comes)
+        // instead of probing once after a fixed sleep. reactionPick anchors
+        // on the button's coordinates, so a same-sized toolbar elsewhere
+        // on the page cannot be mistaken for the picker.
+        // Tag the toolbars already on the page: the picker is the one
+        // that appears after the hover, whenever that is.
+        b.eval(&t, "window.__fb.markToolbars()").await?;
+        let mut pick = probe_picker(&b, &t, idx.min(6), x, y, 0).await?;
+        if !pick["labels"].as_array().is_some_and(|l| !l.is_empty()) {
+            pick = probe_picker(&b, &t, idx.min(6), x, y, 1).await?;
         }
         let labels: Vec<String> = match pick["labels"].as_array() {
             Some(a) if !a.is_empty() => a
@@ -715,7 +758,7 @@ pub async fn react(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
                 .collect(),
             _ => return Err("reaction picker did not open (nothing was changed)".into()),
         };
-        let label = info["label"].as_str().unwrap_or("").to_lowercase();
+        let label = label0.clone();
         let liked = labels
             .first()
             .is_some_and(|first| !first.is_empty() && label != *first);
@@ -731,13 +774,79 @@ pub async fn react(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
         if idx == 7 {
             if liked {
                 ok(&b.eval(&t, "window.__fb.likePress()").await?)?;
+                // Verify it came off: the button label must change.
+                let deadline = std::time::Instant::now() + Duration::from_millis(6000);
+                let mut off = false;
+                while std::time::Instant::now() < deadline {
+                    tokio::time::sleep(Duration::from_millis(300)).await;
+                    let now = b.eval(&t, "window.__fb.likeInfo()").await?;
+                    if now["label"].as_str().unwrap_or("").to_lowercase() != label0 {
+                        off = true;
+                        break;
+                    }
+                }
+                if !off {
+                    return Err("the reaction did not come off the post".into());
+                }
             }
         } else if current != Some(idx) {
-            let (px, py) = (
-                pick["x"].as_f64().ok_or("reaction picker not found")?,
-                pick["y"].as_f64().ok_or("reaction picker not found")?,
-            );
-            b.click(&t, px, py).await?;
+            // Click, then verify the button now names the picked reaction;
+            // one full retry, then report honestly instead of success.
+            let mut landed = false;
+            for attempt in 0..2 {
+                if attempt > 0 {
+                    pick = probe_picker(&b, &t, idx.min(6), x, y, 1).await?;
+                    if !pick["labels"].as_array().is_some_and(|l| !l.is_empty()) {
+                        break;
+                    }
+                }
+                let (px, py) = (
+                    pick["x"].as_f64().ok_or("reaction picker not found")?,
+                    pick["y"].as_f64().ok_or("reaction picker not found")?,
+                );
+                // The verification wait and picker probing can take seconds;
+                // a client that disconnected meanwhile must not get a fresh
+                // click dispatched on its behalf.
+                if out.cancelled() {
+                    return Err("cancelled by client; reaction unchanged".into());
+                }
+                b.click(&t, px, py).await?;
+                let deadline = std::time::Instant::now() + Duration::from_millis(6000);
+                loop {
+                    let now = b.eval(&t, "window.__fb.likeInfo()").await?;
+                    let l = now["label"].as_str().unwrap_or("").to_lowercase();
+                    if reaction_landed(&l, &labels, idx) {
+                        landed = true;
+                        break;
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(250)).await;
+                }
+                if landed {
+                    break;
+                }
+            }
+            if !landed {
+                // Say what the page actually shows: a diagnosable error
+                // beats a bare failure (this is how a macOS-only miss
+                // was pinned down — label and picker state tell apart a
+                // click that missed from a label that never changed).
+                let now = b.eval(&t, "window.__fb.likeInfo()").await?;
+                let l = now["label"].as_str().unwrap_or("");
+                let still = b
+                    .eval(
+                        &t,
+                        &format!("window.__fb.reactionPick({}, {x}, {y})", idx.min(6)),
+                    )
+                    .await?;
+                let picker_open = still["labels"].as_array().is_some_and(|a| !a.is_empty());
+                return Err(format!(
+                    "the reaction did not land on the post (button reads '{l}', picker {})",
+                    if picker_open { "still open" } else { "closed" }
+                ));
+            }
         }
         let _ = b
             .eval(&t, "document.activeElement&&document.activeElement.blur()")
@@ -773,5 +882,22 @@ mod tests {
         assert_eq!(current_reaction("Gỡ Thích", &picker), Some(0));
         assert_eq!(current_reaction("Gỡ Haha", &picker), Some(3));
         assert_eq!(current_reaction("Bày tỏ cảm xúc", &picker), None);
+    }
+
+    #[test]
+    fn reaction_landed_requires_a_selected_state() {
+        let picker: Vec<String> = ["like", "love", "haha"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        // Neutral button reads exactly "like": suffix-matches index 0 but
+        // nothing is selected, so a missed click must not confirm.
+        assert!(!reaction_landed("like", &picker, 0));
+        assert!(!reaction_landed("like", &picker, 1));
+        // Selected states name the reaction in its remove form.
+        assert!(reaction_landed("remove like", &picker, 0));
+        assert!(reaction_landed("remove love", &picker, 1));
+        assert!(!reaction_landed("remove love", &picker, 0));
+        assert!(!reaction_landed("remove haha", &picker, 1));
     }
 }
