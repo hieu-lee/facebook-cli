@@ -24,6 +24,12 @@
  // never in message text or drafts, which must compare and read back exactly.
  const shortBadge=s=>s.replace(/Accounts with a verified badge have been authenticated and can be Meta Verified subscribers or notable persons or brands\.?/gi,'Verified');
  const visible=e=>e.isConnected&&e.getClientRects().length&&getComputedStyle(e).visibility==='visible';
+ // Is anything in `root` (default: the whole page) still fetching?
+ // Facebook marks in-flight loads three ways: a progressbar, an aria-busy
+ // region, and its own loading-state placeholder. A list that looks
+ // settled while one of these is present is mid-load, not finished: its
+ // height and rows simply have not moved YET.
+ const pageLoading=(root)=>!!(root||document).querySelector('[role=progressbar],[aria-busy="true"],[data-visualcompletion="loading-state"]');
  const enabled=e=>!e.matches(':disabled')&&e.closest('[aria-disabled="true" i],[aria-disabled="false" i]')?.getAttribute('aria-disabled').toLowerCase()!=='true';
  // Use application buttons: removing a modal leaves React's focus trap and state alive.
  const dismissRestore=async()=>{
@@ -161,5 +167,5 @@
   const before=l.slice(sep+2,colon<0?l.length:colon).trim();
   return {t:tm[0],sender:before,text:colon>=0?clean(l.slice(colon+2)):''};
  };
- window.__fb={shortBadge,parseLabel,mergeChunks,press,sleep,clean,vtext,waitFor,visible,enabled,dismissRestore,postCards,postText,canon,groupPath,profilePath,addGroup,TIME,SPON,ACT,trunc,scrollerOf,num};
+ window.__fb={shortBadge,parseLabel,mergeChunks,press,sleep,clean,vtext,waitFor,visible,enabled,pageLoading,dismissRestore,postCards,postText,canon,groupPath,profilePath,addGroup,TIME,SPON,ACT,trunc,scrollerOf,num};
 })();

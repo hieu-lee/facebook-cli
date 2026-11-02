@@ -410,7 +410,7 @@ console.log('js removed-newest ok');
     const main = new El({ role: 'main' });
     const scans = build(main);
     scans.next();
-    const doc = { querySelector: () => (main.anchors()[0] || null), querySelectorAll: () => main.anchors() };
+    const doc = { documentElement: { scrollHeight: 0 }, querySelector: sel => (sel.includes('progressbar') ? null : (main.anchors()[0] || null)), querySelectorAll: () => main.anchors() };
     const ctx = vm.createContext({ window: { scrollBy: () => scans.next() }, document: doc, location: { href: 'https://www.facebook.com/groups/1/members' }, URL, setTimeout, Date, innerHeight: 800, getComputedStyle: () => ({ visibility: 'visible', display: 'block' }) });
     vm.runInContext(src, ctx);
     const G = ctx.window.__fb;
@@ -476,3 +476,51 @@ console.log('js removed-newest ok');
   ]) assert.strictEqual(kindOf(href), kind, href);
   console.log('js search kinds ok');
 })();
+
+// gather(): pagination that lands 1.2 s after the scroller reaches the
+// bottom, with a progressbar up the whole time, belongs in the result.
+// A settled bottom (and a no-growth stall) only proves the end of the
+// list while nothing is loading.
+(async () => {
+  const vm = require('vm');
+  const run = async (total, lazyDelay) => {
+    let mounted = Math.min(total, 10), pending = null;
+    const state = { loading: false };
+    const anchor = i => ({
+      href: 'https://www.facebook.com/groups/' + (100 + i),
+      innerText: 'Group ' + i + '\nPublic group',
+      getAttribute: k => (k === 'href' ? '/groups/' + (100 + i) : null),
+      getClientRects: () => [{}],
+    });
+    const docEl = { get scrollHeight() { return mounted * 100; } };
+    const doc = {
+      documentElement: docEl, body: {},
+      querySelector: sel => {
+        if (sel.includes('progressbar')) return state.loading ? {} : null;
+        if (sel.includes('/groups/')) return {};
+        return null;
+      },
+      querySelectorAll: sel => (sel.includes('a[href]') ? Array.from({ length: mounted }, (_, i) => anchor(i)) : []),
+    };
+    const win = { scrollY: 0, innerHeight: 500 };
+    win.scrollBy = (x, dy) => {
+      win.scrollY = Math.min(win.scrollY + dy, Math.max(0, docEl.scrollHeight - 500));
+      if (lazyDelay && win.scrollY + 500 >= docEl.scrollHeight - 2 && mounted < total && !pending) {
+        state.loading = true;
+        pending = setTimeout(() => { mounted = total; state.loading = false; pending = null; }, lazyDelay);
+      }
+    };
+    const ctx = vm.createContext({
+      window: win, document: doc, location: { href: 'https://www.facebook.com/groups/joins' },
+      innerHeight: 500, URL, setTimeout, getComputedStyle: () => ({ visibility: 'visible', display: 'block', overflowY: 'visible' }),
+    });
+    vm.runInContext(src, ctx);
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/ops.js'), 'utf8'), ctx);
+    return win.__fb.groups(400);
+  };
+  const lazy = await run(25, 1200);
+  assert.strictEqual(lazy.rows.length, 25, 'delayed pagination was truncated');
+  const settled = await run(10, 0);
+  assert.strictEqual(settled.rows.length, 10);
+  console.log('js gather loading ok');
+})().catch(e => { console.error(e); process.exit(1); });

@@ -1,6 +1,6 @@
 (()=>{
  const F=window.__fb;
- const {sleep,clean,vtext,waitFor,canon,groupPath,profilePath,addGroup,TIME,SPON,ACT,trunc,scrollerOf,num}=F;
+ const {sleep,clean,vtext,waitFor,canon,groupPath,profilePath,addGroup,TIME,SPON,ACT,trunc,scrollerOf,num,pageLoading}=F;
  const main=()=>document.querySelector('[role=main]');
  const tab=s=>String(s==null?'':s).replace(/[\t\r\n]+/g,' ');
  const abs=h=>{try{const u=new URL(h,location.href);return u.pathname+u.search}catch(e){return h}};
@@ -23,13 +23,19 @@
    for(const r of collect(map))if(!map.has(r.k))map.set(r.k,r);
    if(map.size>=n)break;
    const current=progress?progress():map.size;
-   if(current===last){if(++stall>=14)break;}else{stall=0;last=current;}
    const el=typeof sc==='function'?sc():sc;
    const m=metrics(el);
+   // While a load is in flight neither counter may advance: the height
+   // and row count have not moved YET, and counting those settled
+   // rechecks truncated lists whose next page was seconds out (a slow
+   // pagination response reads exactly like the end of the list). The
+   // overall ms cap still bounds a load that never finishes.
+   const loading=pageLoading(el||document);
+   if(current===last){if(!loading&&++stall>=14)break;}else{stall=0;last=current;}
    // only trust the bottom when scrolling demonstrably works on this
    // scroller (it moved, or there is nothing to scroll): a wrong scroller
    // must fall back to the stall tail, never truncate the list
-   if(m.bottom&&m.h===endH&&current===endSeen&&(m.pos>0||m.h<=m.clientH+2)){if(++endRounds>=3)break;}
+   if(!loading&&m.bottom&&m.h===endH&&current===endSeen&&(m.pos>0||m.h<=m.clientH+2)){if(++endRounds>=3)break;}
    else{endRounds=0;endH=m.h;endSeen=current;}
    if(el)el.scrollTop+=el.clientHeight*0.8;else window.scrollBy(0,innerHeight*0.8);
    await sleep(220);
