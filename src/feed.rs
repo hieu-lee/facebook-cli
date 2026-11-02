@@ -178,7 +178,12 @@ async fn collect(d: &Daemon, b: &Browser, t: &Tab, url: &str, args: &Args, out: 
             end_since = None;
         } else if let Ok(end) = b.eval(t, "window.__fbFeed.atEnd()").await {
             let h = end["h"].as_i64().unwrap_or(-1);
-            if end["bottom"] == Value::Bool(true) && end_h == Some(h) {
+            // Settled time only counts while nothing is loading: while a
+            // fetch is in flight the height has not moved YET, and counting
+            // it truncated pages whose next posts were seconds out (a slow
+            // pagination response reads exactly like the end of the page).
+            let loading = end["loading"] == Value::Bool(true);
+            if !loading && end["bottom"] == Value::Bool(true) && end_h == Some(h) {
                 if end_since.is_some_and(|s| s.elapsed() > Duration::from_millis(2500)) {
                     break;
                 }

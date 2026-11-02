@@ -476,3 +476,27 @@ console.log('js removed-newest ok');
   ]) assert.strictEqual(kindOf(href), kind, href);
   console.log('js search kinds ok');
 })();
+
+// atEnd: a pinned window is only the end when nothing is loading —
+// while a fetch is in flight the height has not moved YET, and the
+// caller (feed collect) must not count that settled time.
+(async () => {
+  const vm = require('vm');
+  let loading = false;
+  const win = { scrollY: 1500, innerHeight: 500 };
+  const doc = {
+    documentElement: { scrollHeight: 2000 }, body: { scrollHeight: 2000 },
+    querySelector: sel => (sel.includes('progressbar') ? (loading ? {} : null) : null),
+    querySelectorAll: () => [],
+  };
+  const ctx = vm.createContext({ window: win, document: doc, location: { href: 'https://www.facebook.com/fixture' }, URL, setTimeout });
+  vm.runInContext(src, ctx);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/feed.js'), 'utf8'), ctx);
+  const end = win.__fbFeed.atEnd();
+  assert.strictEqual(end.bottom, true);
+  assert.strictEqual(end.h, 2000);
+  assert.strictEqual(end.loading, false);
+  loading = true;
+  assert.strictEqual(win.__fbFeed.atEnd().loading, true);
+  console.log('js atEnd ok');
+})().catch(e => { console.error(e); process.exit(1); });

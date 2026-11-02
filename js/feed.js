@@ -1,5 +1,5 @@
 (()=>{
- const {TIME,SPON,shortBadge,vtext,num,postCards,postText,canon,waitFor,clean}=window.__fb;
+ const {TIME,SPON,shortBadge,vtext,num,postCards,postText,canon,waitFor,clean,pageLoading}=window.__fb;
  let seen=new WeakMap();let seq=0,current=null;
  const timeNode=(u,tt)=>{const w=document.createTreeWalker(u,NodeFilter.SHOW_TEXT);let n;while(n=w.nextNode()){const t=n.nodeValue;if(!t||t.includes('\u034f')||n.parentElement.closest('blockquote'))continue;if(t.replace(/[\u200b-\u200f\u2060\ufeff]/g,'').trim()===tt)return n;}return null;};
  const decode=a=>{
@@ -110,7 +110,9 @@
   },
   scroll(){window.scrollBy(0,innerHeight*0.7)},
   /* is the window pinned to the end of everything the page has rendered? */
-  atEnd(){const de=document.documentElement;const h=Math.max(de.scrollHeight,document.body?document.body.scrollHeight:0);return {bottom:window.scrollY+window.innerHeight>=h-2,h}},
+  /* `loading`: a fetch is still in flight, so a pinned, stable window
+     is a pause, not the end — the height has not moved YET */
+  atEnd(){const de=document.documentElement;const h=Math.max(de.scrollHeight,document.body?document.body.scrollHeight:0);return {bottom:window.scrollY+window.innerHeight>=h-2,h,loading:pageLoading()}},
   /* the feed sometimes stops loading at the bottom; leaving and re-entering it starts it again */
   async nudge(){scrollBy(0,-innerHeight*2);await new Promise(r=>setTimeout(r,400));scrollTo(0,document.body.scrollHeight);return 1}
  };
