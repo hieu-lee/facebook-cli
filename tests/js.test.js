@@ -476,3 +476,38 @@ console.log('js removed-newest ok');
   ]) assert.strictEqual(kindOf(href), kind, href);
   console.log('js search kinds ok');
 })();
+
+// searchFriends: the chip reports aria-pressed the moment it is tapped,
+// 1.2 s before the filtered results land. The read must wait for the
+// results themselves; F.search is stubbed to record whether the
+// stranger row was still on the page when the read started.
+(async () => {
+  const vm = require('vm');
+  let stranger = true, loading = false, pressed = false;
+  const chip = {
+    innerText: 'Friends',
+    closest: () => null,
+    getAttribute: k => (k === 'aria-pressed' ? (pressed ? 'true' : 'false') : null),
+    click: () => { pressed = true; loading = true; setTimeout(() => { stranger = false; loading = false; }, 1200); },
+  };
+  const feedEl = { querySelector: () => null, querySelectorAll: () => [] };
+  const doc = {
+    querySelectorAll: sel => (sel.includes('[role=button]') ? [chip] : []),
+    querySelector: sel => {
+      if (sel.includes('progressbar')) return loading ? {} : null;
+      if (sel.includes('[data-stranger]')) return stranger ? {} : null;
+      if (sel.includes('[role=feed]')) return feedEl;
+      return null;
+    },
+  };
+  const ctx = vm.createContext({ window: {}, document: doc, location: { href: 'https://www.facebook.com/search/people/?q=x' }, URL, setTimeout, Date });
+  vm.runInContext(src, ctx);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/ops.js'), 'utf8'), ctx);
+  const G = ctx.window.__fb;
+  G.search = async () => ({ rows: [], strangerAtRead: stranger });
+  const t0 = Date.now();
+  const r = await G.searchFriends(5);
+  assert.strictEqual(r.strangerAtRead, false, 'search read results before the friends filter applied');
+  assert(Date.now() - t0 >= 1000, 'searchFriends returned before the delayed filter landed');
+  console.log('js searchFriends ok');
+})().catch(e => { console.error(e); process.exit(1); });
