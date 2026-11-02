@@ -928,6 +928,13 @@ try{
   assert.match(await fb('search','chair','--type','marketplace','--match','Paris'),/^Chaise\thttps:\/\/www\.facebook\.com\/marketplace\/item\/557\t40 € · Paris\tlisting$/);
   assert.match(await fb('search','Permalink','--type','top'),/^Permalink Author\tu[a-z0-9]+\t.*\tpost$/);
  });
+ await check('group members list every profile link form',async()=>{
+  const out=await fb('members','/groups/111','-n','10','--urls');
+  assert.match(out,/Alice Admin\thttps:\/\/www\.facebook\.com\/alice\.admin/);
+  assert.match(out,/Bob People\thttps:\/\/www\.facebook\.com\/profile\.php\?id=100002/);
+  assert.match(out,/Carol Groupuser\thttps:\/\/www\.facebook\.com\/profile\.php\?id=100003/);
+  assert.match(out,/Dave Id\thttps:\/\/www\.facebook\.com\/profile\.php\?id=100004/);
+ });
  await check('group join, idempotence, questions and leave',async()=>{
   assert.equal(await fb('group-join','111'),'joined group');
   assert.equal(await fb('group-join','111'),'already joined');

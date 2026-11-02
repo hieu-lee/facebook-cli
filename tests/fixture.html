@@ -225,6 +225,9 @@ if(location.pathname==='/search/people/'){
  else if(new URL(location.href).searchParams.get('q')==='Permalink'){feed.append(card('/permalink.php?story_fbid=123&id=456','Permalink Author','1h · Public'))}
  else{feed.append(card('/fixture/posts/100','Fixture User','2h · Public'),card('/friend-person','Friend Person','Friend · Lives in Vancouver','Message'),card('/groups/111','Fixture Group','Public group · 500 members'))}
  main.append(feed);
+}else if(/^\/groups\/\w+\/members\/?$/.test(location.pathname)){
+ const folks=[['Alice Admin','/alice.admin','Group admin · Joined 2019'],['Bob People','/people/Bob-People/100002','Joined 2021'],['Carol Groupuser','/groups/111/user/100003','Joined 2022'],['Dave Id','/profile.php?id=100004','Joined 2023']];
+ for(const [name,href,info] of folks){const row=document.createElement('div');row.role='listitem';const a=document.createElement('a');a.href=href;a.textContent=name;const s=document.createElement('span');s.textContent=' '+info;row.append(a,s);main.append(row)}
 }else if(/^\/groups\/\w+\/?$/.test(location.pathname)&&!/^\/(groups)\/(joins|feed|discover|create|search|yourgroups)/.test(location.pathname)){
  const gid=location.pathname.split('/')[2];
  let gs=read('gs-'+gid)||'out';
