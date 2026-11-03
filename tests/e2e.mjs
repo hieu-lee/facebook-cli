@@ -625,6 +625,19 @@ try{
   await assert.rejects(()=>fb('unlock','9999'),/PIN was not accepted/);
   await evaluate('localStorage.removeItem("pinStyle");localStorage.restored="true";JSON.stringify(true)');
  });
+ await check('message reactions can target an older duplicate',async()=>{
+  const keys=['messages','reactions','restored'];
+  const saved=await evaluate(`JSON.stringify(Object.fromEntries(${JSON.stringify(keys)}.map(k=>[k,localStorage.getItem(k)])))`);
+  try{
+   await evaluate('localStorage.restored="true";localStorage.messages=JSON.stringify(["ok","ok","later"]);localStorage.removeItem("reactions");JSON.stringify(true)');
+   assert.match(await fb('msgreact','42','love','--match','ok'),/^reacted/);
+   assert.deepEqual(await evaluate('JSON.stringify(JSON.parse(localStorage.reactions||"{}"))'),{'1':'❤️'});
+   assert.match(await fb('msgreact','42','wow','--match','ok','--nth','1'),/^reacted/);
+   assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.reactions||"{}")["0"])'),'😮');
+  }finally{
+   await evaluate(`const saved=${JSON.stringify(saved)};for(const k of Object.keys(saved))saved[k]===null?localStorage.removeItem(k):localStorage.setItem(k,saved[k]);JSON.stringify(true)`);
+  }
+ });
  await check('HTTP named page initializes outside a secure context',async()=>{
   assert.match(await fb('page','http','open','http://example.test/'),/^url\thttp:\/\/example.test\//);
   await fb('page','http','close');

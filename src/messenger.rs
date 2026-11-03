@@ -710,9 +710,9 @@ async fn submit(
 /// `reply` is `send` that must quote a message: without a selector it would
 /// silently become an ordinary send, so refuse before any browser work.
 fn require_reply_selector(args: &[String]) -> Res<()> {
-    let a = crate::ops::parse(args, &["file", "img", "match"], &["dry", "fuzzy"])?;
+    let a = crate::ops::parse(args, &["file", "img", "match", "nth"], &["dry", "fuzzy"])?;
     if a.opt("match").is_none_or(|m| m.trim().is_empty()) {
-        return Err("usage: reply <chat> <text> --match text [--file path]...".into());
+        return Err("usage: reply <chat> <text> --match text [--nth n] [--file path]...".into());
     }
     Ok(())
 }
@@ -722,8 +722,21 @@ pub async fn reply(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()>
     send(d, args, cwd, out).await
 }
 
+/// `--nth N`: which duplicate `--match` names, counting from the newest
+/// (0 = the newest match). Lets a client that shows the user a list act
+/// on the exact copy the user picked.
+fn nth_of(a: &crate::ops::Args) -> Res<usize> {
+    match a.opt("nth") {
+        None => Ok(0),
+        Some(v) => v
+            .parse::<usize>()
+            .map_err(|_| "--nth must be a whole number".to_string()),
+    }
+}
+
 pub async fn send(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> {
-    let a = crate::ops::parse(args, &["file", "img", "match"], &["dry", "fuzzy"])?;
+    let a = crate::ops::parse(args, &["file", "img", "match", "nth"], &["dry", "fuzzy"])?;
+    let nth = nth_of(&a)?;
     let dry = a.flag("dry");
     // `--img` is the older name of `--file`; both attach any file, in the order given. Only the
     // metadata is checked here; each file is read when its turn comes (memory stays bounded).
@@ -777,7 +790,10 @@ pub async fn send(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> 
         let mut replied = String::new();
         if let Some(m) = a.opt("match") {
             let info = b
-                .eval(&t, &format!("window.__fb.msgReplyOpen({})", json!(m)))
+                .eval(
+                    &t,
+                    &format!("window.__fb.msgReplyOpen({}, {})", json!(m), nth),
+                )
                 .await?;
             match &info {
                 Value::String(e) => return Err(e.clone()),
@@ -1090,12 +1106,13 @@ pub async fn unsend(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
 /// finds the message's toolbar and picks the emoji, verify by re-reading
 /// the message's reactions inside that same step.
 pub async fn msgreact(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
-    let a = crate::ops::parse(args, &["match"], &["fuzzy"])?;
+    let a = crate::ops::parse(args, &["match", "nth"], &["fuzzy"])?;
+    let nth = nth_of(&a)?;
     let (spec, reaction) = match a.pos.split_first() {
         Some((s, rest)) if rest.len() == 1 => (s.as_str(), rest[0].as_str()),
         _ => {
             return Err(
-                "usage: msgreact <chat> <like|love|care|haha|wow|sad|angry> [--match text]".into(),
+                "usage: msgreact <chat> <like|love|care|haha|wow|sad|angry> [--match text] [--nth n]".into(),
             );
         }
     };
@@ -1129,7 +1146,12 @@ pub async fn msgreact(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
         let open = b
             .eval(
                 &t,
-                &format!("window.__fb.msgReactOpen({}, {})", json!(m), json!(reaction)),
+                &format!(
+                    "window.__fb.msgReactOpen({}, {}, {})",
+                    json!(m),
+                    json!(reaction),
+                    nth
+                ),
             )
             .await?;
         if let Value::String(e) = &open {
@@ -1348,7 +1370,7 @@ mod tests {
     #[test]
     fn reply_needs_a_nonblank_match_selector() {
         let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        let usage = "usage: reply <chat> <text> --match text [--file path]...";
+        let usage = "usage: reply <chat> <text> --match text [--nth n] [--file path]...";
         assert_eq!(
             require_reply_selector(&args(&["42", "answer"])),
             Err(usage.into())

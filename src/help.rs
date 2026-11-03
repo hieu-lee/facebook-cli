@@ -20,8 +20,8 @@ MESSENGER
   read <chat> [-n 20]                `# date` lines, then `HH:MM sender: text` ([img] [file], {emoji} reactions)
   send <chat> <text> [--file path]... [--dry]   file or image, 25MB max each, one message per file then the text. Options BEFORE `--`; after `--` is text. Exact nickname or unique friend name (or use profile ref / @handle; --fuzzy for partial chat names)
   unsend <chat> [--match text] [--dry]   remove your newest loaded message (containing text) for everyone
-  msgreact <chat> <like|love|care|haha|wow|sad|angry> [--match text]   react to the newest message (or the newest containing text)
-  reply <chat> <text> --match text [--file path]...   reply to the message containing text (the first message sent quotes it), then send like `send`
+  msgreact <chat> <like|love|care|haha|wow|sad|angry> [--match text] [--nth n]   react to the newest message (or the nth newest containing text)
+  reply <chat> <text> --match text [--nth n] [--file path]...   reply to the (nth newest) message containing text (quotes it), then send like `send`
   unlock [-]                         once: restore end-to-end encrypted chats; PIN read from $FB_PIN or stdin
 ACT
   post <text> [--img file]... [--video file]... [--to public|friends|me]   confirmed: posted<TAB>ref<TAB>path
