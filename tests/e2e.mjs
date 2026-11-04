@@ -506,6 +506,19 @@ try{
    await evaluate('for(const key of ["reactionAuthor","reactionActions","missReaction"])localStorage.removeItem(key);'+(saved===null?'localStorage.removeItem("posts");':'localStorage.posts='+JSON.stringify(saved)+';')+'JSON.stringify(true)');
   }
  });
+ await check('post reactions refuse an unreadable picker before clicking',async()=>{
+  const saved=await evaluate('JSON.stringify(localStorage.getItem("posts"))');
+  const ref='/fixture/posts/100';
+  const state=()=>evaluate('JSON.stringify({reaction:(JSON.parse(localStorage.posts||"[]").find(p=>p.id==="100")||{}).reaction??"none",actions:JSON.parse(localStorage.reactionActions||"0")})');
+  try{
+   await evaluate('localStorage.unlabeledPicker=JSON.stringify(true);localStorage.reactionActions="0";JSON.stringify(true)');
+   for(const reaction of ['none','like','love'])
+    await assert.rejects(()=>fb('react',ref,reaction),/reaction picker labels are unreadable \(nothing was changed\)/);
+   assert.deepEqual(await state(),{reaction:'none',actions:0});
+  }finally{
+   await evaluate('for(const key of ["unlabeledPicker","reactionActions"])localStorage.removeItem(key);'+(saved===null?'localStorage.removeItem("posts");':'localStorage.posts='+JSON.stringify(saved)+';')+'JSON.stringify(true)');
+  }
+ });
  await check('post reactions wait out a slow picker',async()=>{
   await evaluate('localStorage.pickerDelay="1600";JSON.stringify(true)');
   const ref=(await fb('posts','me','-n','1')).split('\t')[0];
