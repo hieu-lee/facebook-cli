@@ -28,7 +28,7 @@ function postNode(p){
  let picker=null,pickTimer=null;
  const hidePicker=()=>{if(pickTimer){clearTimeout(pickTimer);pickTimer=null}if(picker){picker.remove();picker=null}};
  const setReaction=name=>{save('reactionActions',(read('reactionActions')||0)+1);if(name&&read('missReaction')===name)return;p.reaction=name||null;save('posts',posts);paintLike()};
- const showPicker=()=>{if(picker)return;picker=document.createElement('div');picker.role='toolbar';for(const name of ['Like','Love','Care','Haha','Wow','Sad','Angry'])picker.append(button(name,()=>{setReaction(name);hidePicker()},name));likeBtn.before(picker)};
+ const showPicker=()=>{if(picker)return;picker=document.createElement('div');picker.role='toolbar';for(const name of ['Like','Love','Care','Haha','Wow','Sad','Angry'])picker.append(button(name,()=>{setReaction(name);hidePicker()},read('unlabeledPicker')&&name==='Like'?'':name));likeBtn.before(picker)};
  likeBtn.addEventListener('mouseover',()=>{if(!picker&&!pickTimer)pickTimer=setTimeout(()=>{pickTimer=null;showPicker()},read('pickerDelay')||300)});
  likeBtn.addEventListener('mouseout',()=>{if(pickTimer){clearTimeout(pickTimer);pickTimer=null}});
  likeBtn.onclick=()=>{hidePicker();setReaction(p.reaction?null:'Like')};

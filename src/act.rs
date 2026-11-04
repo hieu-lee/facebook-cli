@@ -767,6 +767,9 @@ pub async fn react(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
                 .collect(),
             _ => return Err("reaction picker did not open (nothing was changed)".into()),
         };
+        if labels[0].is_empty() {
+            return Err("reaction picker labels are unreadable (nothing was changed)".into());
+        }
         let label = label0.clone();
         let liked = !reaction_neutral(&label, &labels);
         let current = if liked {
