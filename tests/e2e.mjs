@@ -410,6 +410,18 @@ try{
    assert.equal(posts[0].text,'Existing profile post');
   }finally{await fb('page','authors','close')}
  });
+ await check('post finds the composer in any language and refuses other dialogs',async()=>{
+  const flags=v=>evaluate(`for(const k of ['composerLayout','postLabel','publishWaitsForText','composerNext','noteShared'])localStorage.removeItem(k);Object.assign(localStorage,${JSON.stringify(v)});JSON.stringify(true)`);
+  try{
+   await flags({composerLayout:'"card"',postLabel:'"Közzététel"',publishWaitsForText:'true'});
+   const posted=await fb('post','any language post','--to','me');assert.match(posted,/^posted\t/);await fb('delete',posted.split('\t')[1]);
+   await flags({composerLayout:'"noteOnly"'});
+   await assert.rejects(()=>fb('post','never a note','--to','me'),/wrong dialog.*Share note.*nothing was posted/);
+   assert.equal(await evaluate('localStorage.noteShared||"false"'),false);
+   await flags({composerNext:'true'});
+   const next=await fb('post','next step post','--to','me');assert.match(next,/^posted\t/);await fb('delete',next.split('\t')[1]);
+  }finally{await flags({})}
+ });
  await check('post text omits only actual trailing collapse controls',async()=>{
   await fb('page','posttext','open','https://www.facebook.com/fixture');
   for(const label of ['See less','Thu gọn','Afficher moins','Réduire']){
