@@ -502,13 +502,26 @@ try{
   await fb('react',ref,'none');
   await evaluate('localStorage.removeItem("decoyToolbar");document.getElementById("decoyBar")?.remove();JSON.stringify(true)');
  });
+ await check('composer restores text focus and accepts native Post buttons',async()=>{
+  await evaluate('localStorage.composerFocusMoved="true";localStorage.nativePublish="true";JSON.stringify(true)');
+  try{const result=await fb('post','focus restored','--to','me');assert.match(result,/^posted\t/);await fb('delete',result.split('\t')[1])}finally{await evaluate('localStorage.removeItem("composerFocusMoved");localStorage.removeItem("nativePublish");JSON.stringify(true)')}
+ });
+ await check('empty and mismatched composer drafts fail before publication',async()=>{
+  const before=await evaluate('JSON.stringify(JSON.parse(localStorage.posts||"[]").length)');
+  try{for(const draft of ['', 'private unexpected draft']){
+   await evaluate(`localStorage.composerDraftText=JSON.stringify(${JSON.stringify(draft)});localStorage.publishAttempted="false";JSON.stringify(true)`);
+   await assert.rejects(()=>fb('post','requested draft','--to','me'),draft?/does not match/:/text is empty/);
+   assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.publishAttempted))'),false);
+   assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.posts||"[]").length)'),before);
+  }}finally{await evaluate('localStorage.removeItem("composerDraftText");JSON.stringify(true)')}
+ });
  await check('retained audience panes never become publish targets',async()=>{
   for(const label of ['Post','Đăng','Publier']){
    await evaluate(`localStorage.retainedAudience="true";localStorage.trailingControl="true";localStorage.postLabel=JSON.stringify(${JSON.stringify(label)});localStorage.wrongPublishTarget="false";JSON.stringify(true)`);
    const result=await fb('post','retained audience '+label,'--to','me');assert.match(result,/^posted\tp\w+\t/);assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.posts)[0].aud)'),'me');assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.wrongPublishTarget))'),false);await fb('delete',result.split('\t')[1]);
   }
   await evaluate('localStorage.removeItem("retainedAudience");localStorage.removeItem("trailingControl");localStorage.removeItem("postLabel");JSON.stringify(true)');
-  await fb('page','publish','open','https://www.facebook.com/fixture');await fb('page','publish','eval','window.__fb.composeOpen()');await fb('page','publish','cdp','Input.insertText','{"text":"do not publish changed target"}');await fb('page','publish','eval','window.__fb.composePrepare()');assert.match(await fb('page','publish','eval','window.__fbPostBtn.textContent="Other action";window.__fbPostBtn.setAttribute("aria-label","Other action");window.__fb.composePress()'),/post button changed/);assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.posts).some(p=>p.text==="do not publish changed target"))'),false);await fb('page','publish','close');
+  await fb('page','publish','open','https://www.facebook.com/fixture');await fb('page','publish','eval','window.__fb.composeOpen()');await fb('page','publish','cdp','Input.insertText','{"text":"do not publish changed target"}');await fb('page','publish','eval','window.__fb.composePrepare()');assert.match(await fb('page','publish','eval','window.__fbPostBtn.textContent="Other action";window.__fbPostBtn.setAttribute("aria-label","Other action");window.__fb.composePress("do not publish changed target")'),/post button changed/);assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.posts).some(p=>p.text==="do not publish changed target"))'),false);await fb('page','publish','close');
  });
  await check('collapsed publish control never dispatches',async()=>{
   const original=env,before=await evaluate('JSON.stringify(JSON.parse(localStorage.posts||"[]").length)');await evaluate('localStorage.collapsedPublish="true";JSON.stringify(true)');env={...env,FB_STATE:path.join(temp,'collapsed-state'),FB_TIMEOUT:'5'};

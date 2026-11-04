@@ -22,6 +22,7 @@
  };
  F.composeDialog=()=>dialogs().find(d=>d.querySelector('[role=textbox]'));
  F.composeFocus=()=>{const d=F.composeDialog();const tb=d&&d.querySelector('[role=textbox]');if(!tb)return false;tb.focus();return true;};
+ F.composeCheck=text=>{const d=F.composeDialog();if(!d)return 'no composer; nothing was posted';const draft=clean(d.querySelector('[role=textbox]').innerText);return draft===clean(text)?true:!draft?'composer text is empty; nothing was posted':'composer text does not match the requested text; nothing was posted';};
  // the bytes arrive beforehand as base64 chunks (upBegin/upChunk in msg.js), one CDP call each
  F.composeAttach=async(name,mime)=>{
   const parts=window.__fbUp;window.__fbUp=null;
@@ -156,21 +157,29 @@
  // The profile header mounts after DOMContentLoaded: wait for the tab strip, then for the relationship control, before concluding there is none.
  F.friendWait=async()=>{const m=await waitFor(()=>{const m=main();return m&&m.querySelector('[role=tablist]')&&m},15000);if(!m)return 'no-profile';const st=await waitFor(()=>{const s=F.friendState();return s!=='no-button'?s:null},5000,200);return st||'no-button';};
  F.friendAdd=async()=>{const st=F.friendState();if(st!=='can-add')return st;const b=friendButton();if(!b)return 'no-button';b.click();const ok=await waitFor(()=>{const s=F.friendState();return s==='requested'||s==='friends'?s:null;},8000,200);return ok||'unconfirmed';};
- const postButton=()=>{const d=F.composeDialog();const bs=d?[...d.querySelectorAll('[role=button]')].filter(b=>F.visible(b)&&/^(Post|Đăng|Publier)$/i.test(clean(b.getAttribute('aria-label')||btnText(b)))):[];return bs.length===1?bs[0]:null;};
+ const postButtons=()=>{const d=F.composeDialog();return d?[...d.querySelectorAll('[role=button],button')].filter(b=>F.visible(b)&&/^(Post|Đăng|Publier)$/i.test(clean(b.getAttribute('aria-label')||btnText(b)))):[];};
+ const postButton=()=>{const bs=postButtons();return bs.length===1?bs[0]:null;};
  // Retained audience panes can put Done after Post; order is not action identity.
  F.composePrepare=async()=>{
   if(!F.composeDialog())return 'no composer';
   const post=await waitFor(()=>{const b=postButton();return b&&F.enabled(b)?b:null},60000,150);
-  if(!post)return 'Post button never became enabled (upload still running?)';
+  if(!post){
+   const d=F.composeDialog();if(!d)return 'composer disappeared before Post became ready; nothing was posted';
+   const bs=postButtons();
+   const reason=!clean(d.querySelector('[role=textbox]').innerText)&&!d.querySelector('img[src^="blob:"],img[src^="data:"],video')?'composer text is empty and no attachments were found':!bs.length?'Post button not found':bs.length>1?'multiple visible Post buttons found':'Post button is disabled';
+   const progress=[...d.querySelectorAll('[role=progressbar]')].some(F.visible)?'; progress indicator visible':'';
+   return reason+progress+'; nothing was posted';
+  }
   F.press(post,{events:['pointerover','mouseover'],valid:()=>post===postButton()&&F.enabled(post)});
   await sleep(0);
   if(post!==postButton()||!F.enabled(post))return 'post button changed; nothing was posted';
   window.__fbPostBtn=post;
   return true;
  };
- F.composePress=async()=>{
+ F.composePress=async text=>{
   const post=window.__fbPostBtn;if(!post||post!==postButton()||!F.enabled(post))return 'post button changed; nothing was posted';
-  F.press(post,{events:['pointerdown','mousedown','pointerup','mouseup','click'],valid:()=>post===postButton()&&F.enabled(post)});
+  const checked=F.composeCheck(text);if(checked!==true)return checked;
+  F.press(post,{events:['pointerdown','mousedown','pointerup','mouseup','click'],valid:()=>post===postButton()&&F.enabled(post)&&F.composeCheck(text)===true});
   const closed=await waitFor(()=>!F.composeDialog(),90000,200);
   return closed?true:'post dialog still open (upload slow?)';
  };
