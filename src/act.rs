@@ -139,7 +139,7 @@ pub async fn post(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> 
             out.line("dry: composer filled, not posted");
             return Ok(());
         }
-        ok(&b.eval(&t, "window.__fb.composePrepare()").await?)?;
+        ok(&b.eval(&t, &format!("window.__fb.composePrepare({})", json!(text))).await?)?;
         let uid = crate::ops::uid(d, &b).await?;
         let mut events = b.cdp.subscribe();
         b.cdp.call(Some(&t.session), "Network.enable", json!({"maxTotalBufferSize":4194304,"maxResourceBufferSize":2097152,"maxPostDataSize":1048576})).await?;

@@ -189,13 +189,20 @@
  const postButton=()=>{const bs=postButtons();return bs.length===1?bs[0]:null;};
  const nextButton=()=>{const d=F.composeDialog();const bs=d?actionControls(d).filter(b=>F.visible(b)&&NEXT.test(actionLabel(b))):[];return bs.length===1?bs[0]:null;};
  // Retained audience panes can put Done after Post; order is not action identity.
- F.composePrepare=async()=>{
+ F.composePrepare=async text=>{
   if(!F.composeDialog())return 'no composer';
   const post=await waitFor(()=>{
    const b=postButton();if(b&&F.enabled(b))return b;
-   // Some accounts get Next, then a settings pane holding Post. Next publishes nothing.
+   // Some accounts get Next, then a settings pane holding Post. Next publishes nothing,
+   // but it can remove the editor, so this is the last chance to compare the draft.
+   // ponytail: a settings pane's Post is found by the POST list only. Guessing among its
+   // unlabelled toggles could press the wrong one; an unknown word fails and names the buttons.
    const n=!window.__fbComposer&&nextButton();
-   if(n&&F.enabled(n)){const d=F.composeDialog();F.press(n);window.__fbComposer=d;}
+   if(n&&F.enabled(n)&&F.composeCheck(text)===true){
+    const d=F.composeDialog();
+    F.press(n,{valid:()=>n===nextButton()&&F.enabled(n)&&F.composeCheck(text)===true});
+    window.__fbComposer=d;
+   }
    return null;
   },60000,150);
   if(!post){
