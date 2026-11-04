@@ -87,6 +87,20 @@ const F = global.window.__fb;
   buttons[0].onEvent = event => { if (event === 'click') present = false; };
   assert.strictEqual(await G.composePress(''), true, 'attachment-only posts remain supported');
   assert(buttons[0].events.includes('click'));
+  // Next can remove the editor, so a changed draft must never pass it.
+  present = true; attached = false; textbox.innerText = 'changed draft';
+  const next = button('div', 'Next'); buttons = [next];
+  await G.composePrepare('requested draft');
+  assert.strictEqual(next.events.length, 0, 'a changed draft must not advance past the editor');
+  textbox.innerText = 'requested draft';
+  next.onEvent = event => { if (event === 'pointerdown') textbox.innerText = 'changed draft'; };
+  await assert.rejects(() => G.composePrepare('requested draft'), /action target changed/);
+  assert(!next.events.includes('click'), 'a draft changed while pressing Next must not advance');
+  textbox.innerText = 'requested draft'; next.onEvent = null; next.events = [];
+  const pane = button('div', 'Post'); pane.visibility = 'hidden'; buttons = [next, pane];
+  next.onEvent = event => { if (event === 'click') { buttons = [pane]; pane.visibility = 'visible'; } };
+  await G.composePrepare('requested draft');
+  assert(next.events.includes('click'), 'the requested draft advances past Next');
   console.log('js composer ok');
 })().catch(e => { console.error(e); process.exit(1); });
 
