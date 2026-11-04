@@ -155,15 +155,32 @@ pub async fn post(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> 
         }
         let receipt = async {
             ok(&b.eval(&t, "window.__fb.composePress()").await?)?;
-            let path = tokio::time::timeout(Duration::from_secs(15), created_post(&b, &t, &uid, &mut events)).await.map_err(|_| "creation response timed out".to_string())??;
-            b.goto(&t, &format!("https://www.facebook.com{path}")).await?;
-            let readback = b.eval(&t, &format!("window.__fb.waitFor(()=>{{window.__fbFeed.expand();const r=window.__fb.postRoot();return r&&window.__fb.postText(r.querySelector('[data-ad-rendering-role=story_message]'))===window.__fb.clean({})}},15000)", json!(text))).await?;
-            if readback != Value::Bool(true) { return Err("created post content could not be read back".into()); }
-            Ok(path)
+            let created = tokio::time::timeout(Duration::from_secs(15), created_post(&b, &t, &uid, &mut events)).await.map_err(|_| "creation response timed out".to_string())??;
+            match created {
+                Created::Story(path) => {
+                    if !read_back(&b, &t, &path, &text, 15000).await? {
+                        return Err("created post content could not be read back".into());
+                    }
+                    Ok((true, Some(path)))
+                }
+                Created::Pending(path) => {
+                    let published = match &path {
+                        Some(p) => published_soon(&b, &t, p, &text, out).await,
+                        None => false,
+                    };
+                    Ok((published, path))
+                }
+            }
         }.await;
         let _ = b.cdp.call(Some(&t.session), "Network.disable", json!({})).await;
-        let path = receipt.map_err(|e: String| format!("post may have been published, but no verified receipt: {e}; inspect `fb posts me` before retrying"))?;
-        out.line(format!("posted\t{}\t{path}", d.refs.put('p', &path)));
+        let (verified, path) = receipt.map_err(|e: String| format!("post may have been published, but no verified receipt: {e}; inspect `fb posts me` before retrying"))?;
+        match path {
+            Some(path) => {
+                let status = if verified { "posted" } else { "pending" };
+                out.line(format!("{status}\t{}\t{path}", d.refs.put('p', &path)));
+            }
+            None => out.line("pending"),
+        }
 
         Ok(())
     }
@@ -172,12 +189,85 @@ pub async fn post(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> 
     r
 }
 
+/// What a create response proves.
+#[derive(Debug, PartialEq)]
+enum Created {
+    Story(String),
+    /// Facebook accepted the post and publishes it later: the response has no story yet, only
+    /// its future `story_id`. Facebook's composer calls this a pending post and waits for it.
+    /// The path is None when the response names no post id.
+    Pending(Option<String>),
+}
+
+/// The post a pending response will become. `story_id` is base64 of `S:_I<actor>:...:<post>`.
+fn future_post_path(story_id: &str, post_id: &Value, uid: &str) -> Res<Option<String>> {
+    use base64::Engine;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(story_id)
+        .ok()
+        .and_then(|b| String::from_utf8(b).ok())
+        .unwrap_or_default();
+    let actor = decoded.split(':').nth(1).and_then(|p| p.strip_prefix("_I"));
+    if actor.is_some_and(|a| a != uid) {
+        return Err("creation actor mismatch".into());
+    }
+    let post = match post_id {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        _ if actor.is_some() => decoded.rsplit(':').next().unwrap_or("").to_string(),
+        _ => String::new(),
+    };
+    let valid = !post.is_empty() && post.chars().all(|c| c.is_ascii_alphanumeric());
+    Ok(valid.then(|| format!("/{uid}/posts/{post}")))
+}
+
+/// None means a transient failure: Facebook's composer resubmits those by itself.
+fn parse_created(body: &str, uid: &str) -> Res<Option<Created>> {
+    let mut paths = std::collections::HashSet::new();
+    let mut pending = None;
+    for line in body
+        .trim_start()
+        .strip_prefix("for (;;);")
+        .unwrap_or(body)
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+    {
+        let value: Value = serde_json::from_str(line).map_err(|_| "invalid creation response")?;
+        if let Some(errors) = value["errors"].as_array().filter(|e| !e.is_empty()) {
+            if errors.iter().all(|e| e["is_transient"] == true) {
+                return Ok(None);
+            }
+            return Err("Facebook rejected the creation request".into());
+        }
+        let create = &value["data"]["story_create"];
+        let story = &create["story"];
+        if story.is_null() {
+            if let Some(id) = create["story_id"].as_str().filter(|id| !id.is_empty()) {
+                pending = Some(future_post_path(id, &create["post_id"], uid)?);
+            }
+            continue;
+        }
+        if story["default_actor"]["id"].as_str() != Some(uid) {
+            return Err("creation actor mismatch".into());
+        }
+        let path = crate::ops::fb_path(story["url"].as_str().ok_or("created story URL missing")?)
+            .filter(|p| crate::ops::is_post_path(p))
+            .ok_or("invalid created story URL")?;
+        paths.insert(path);
+    }
+    match (paths.len(), pending) {
+        (1, _) => Ok(paths.into_iter().next().map(Created::Story)),
+        (0, Some(path)) => Ok(Some(Created::Pending(path))),
+        _ => Err("unique creation identity missing".into()),
+    }
+}
+
 async fn created_post(
     b: &Browser,
     t: &Tab,
     uid: &str,
     events: &mut tokio::sync::broadcast::Receiver<crate::cdp::Event>,
-) -> Res<String> {
+) -> Res<Created> {
     let mut request: Option<String> = None;
     loop {
         let event = events
@@ -207,7 +297,9 @@ async fn created_post(
             continue;
         }
         if event.method == "Network.loadingFailed" {
-            return Err("creation request failed".into());
+            // Facebook's composer may resubmit; the caller's timeout ends the wait if it does not.
+            request = None;
+            continue;
         }
         if event.method != "Network.loadingFinished" {
             continue;
@@ -234,37 +326,39 @@ async fn created_post(
         } else {
             raw
         };
-        let mut paths = std::collections::HashSet::new();
-        for line in body
-            .trim_start()
-            .strip_prefix("for (;;);")
-            .unwrap_or(body)
-            .lines()
-            .filter(|l| !l.trim().is_empty())
-        {
-            let value: Value =
-                serde_json::from_str(line).map_err(|_| "invalid creation response")?;
-            if value["errors"].as_array().is_some_and(|e| !e.is_empty()) {
-                return Err("Facebook rejected the creation request".into());
-            }
-            let story = &value["data"]["story_create"]["story"];
-            if story.is_null() {
-                continue;
-            }
-            if story["default_actor"]["id"].as_str() != Some(uid) {
-                return Err("creation actor mismatch".into());
-            }
-            let path =
-                crate::ops::fb_path(story["url"].as_str().ok_or("created story URL missing")?)
-                    .filter(|p| crate::ops::is_post_path(p))
-                    .ok_or("invalid created story URL")?;
-            paths.insert(path);
+        match parse_created(body, uid)? {
+            Some(created) => return Ok(created),
+            None => request = None,
         }
-        if paths.len() != 1 {
-            return Err("unique creation identity missing".into());
-        }
-        return Ok(paths.into_iter().next().unwrap());
     }
+}
+
+/// Open the post and compare its rendered body with what was posted.
+async fn read_back(b: &Browser, t: &Tab, path: &str, text: &str, ms: u32) -> Res<bool> {
+    b.goto(t, &format!("https://www.facebook.com{path}"))
+        .await?;
+    let js = format!(
+        "window.__fb.waitFor(()=>{{window.__fbFeed.expand();const r=window.__fb.postRoot();return r&&window.__fb.postText(r.querySelector('[data-ad-rendering-role=story_message]'))===window.__fb.clean({})}},{ms})",
+        json!(text)
+    );
+    Ok(b.eval(t, &js).await? == Value::Bool(true))
+}
+
+/// Wait for a pending post to appear on its own page (a redirect to the profile proves nothing).
+/// ponytail: fixed one-minute wait; slower publishes such as video encoding report `pending`.
+async fn published_soon(b: &Browser, t: &Tab, path: &str, text: &str, out: &Out) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while Instant::now() < deadline && !out.cancelled() {
+        if read_back(b, t, path, text, 5000).await.unwrap_or(false)
+            && b.eval(t, "location.pathname+location.search")
+                .await
+                .is_ok_and(|v| v.as_str().is_some_and(crate::ops::is_post_path))
+        {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    }
+    false
 }
 
 async fn open_post(b: &Browser, t: &Tab, path: &str) -> Res<()> {
@@ -863,6 +957,72 @@ pub async fn react(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn create_response_with_a_story_is_a_receipt() {
+        let body = r#"for (;;);{"data":{"story_create":{"story":{"url":"https://www.facebook.com/a/posts/pfbid1","default_actor":{"id":"7"}}}}}
+{"label":"later","path":["story_create"],"data":{"x":1}}"#;
+        assert_eq!(
+            parse_created(body, "7"),
+            Ok(Some(Created::Story("/a/posts/pfbid1".into())))
+        );
+    }
+
+    #[test]
+    fn create_response_without_a_story_yet_is_pending() {
+        use base64::Engine;
+        let id = |s: &str| base64::engine::general_purpose::STANDARD.encode(s);
+        let pending = |create: Value| {
+            parse_created(&json!({"data":{"story_create":create}}).to_string(), "7")
+        };
+        let want = |post: &str| Ok(Some(Created::Pending(Some(format!("/7/posts/{post}")))));
+        assert_eq!(
+            pending(json!({"story":null,"story_id":id("S:_I7:55:55"),"post_id":"55"})),
+            want("55")
+        );
+        assert_eq!(
+            pending(json!({"story":null,"story_id":id("S:_I7:55:55"),"post_id":55})),
+            want("55")
+        );
+        // video stories put VK before the post id
+        assert_eq!(
+            pending(json!({"story":null,"story_id":id("S:_I7:VK:55")})),
+            want("55")
+        );
+        assert_eq!(
+            pending(json!({"story":null,"story_id":"opaque"})),
+            Ok(Some(Created::Pending(None)))
+        );
+        assert_eq!(
+            pending(json!({"story":null,"story_id":id("S:_I8:55:55"),"post_id":"55"})),
+            Err("creation actor mismatch".to_string())
+        );
+    }
+
+    #[test]
+    fn create_response_without_any_identity_stays_an_error() {
+        for body in [
+            r#"{"data":{"story_create":{"story":null}}}"#,
+            r#"{"data":{}}"#,
+        ] {
+            assert_eq!(
+                parse_created(body, "7"),
+                Err("unique creation identity missing".to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn create_response_errors_tell_transient_from_final() {
+        assert_eq!(
+            parse_created(r#"{"errors":[{"is_transient":true}]}"#, "7"),
+            Ok(None)
+        );
+        assert_eq!(
+            parse_created(r#"{"errors":[{"message":"no"}]}"#, "7"),
+            Err("Facebook rejected the creation request".to_string())
+        );
+    }
 
     #[test]
     fn video_files_keep_a_video_mime_type() {

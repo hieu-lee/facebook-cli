@@ -58,9 +58,15 @@
    await sleep(60);
   }
  };
+ // Facebook draws most emoji as <img alt="😀">, which innerText drops. Swap them for text only
+ // while reading, in one synchronous step, so the page never renders the change.
+ const emojiText=e=>{
+  const swaps=[...e.querySelectorAll('img[alt]')].filter(i=>/^[\p{Extended_Pictographic}\p{Emoji_Component}]+$/u.test(i.alt)).map(i=>{const t=document.createTextNode(i.alt);i.replaceWith(t);return [i,t]});
+  try{return e.innerText}finally{for(const [i,t] of swaps)t.replaceWith(i)}
+ };
  const postText=e=>{
   if(!e)return '';
-  const text=clean(e.innerText);
+  const text=clean(emojiText(e));
   for(const b of e.querySelectorAll('[role=button],button')){
    const label=clean(b.innerText);
    if(!/^(See less|Thu gọn|Afficher moins|Réduire)$/i.test(label)||!visible(b)||!text.endsWith(label))continue;

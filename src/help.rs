@@ -24,7 +24,7 @@ MESSENGER
   reply <chat> <text> --match text [--nth n] [--file path]...   reply to the (nth newest) message containing text (quotes it), then send like `send`
   unlock [-]                         once: restore end-to-end encrypted chats; PIN read from $FB_PIN or stdin
 ACT
-  post <text> [--img file]... [--video file]... [--to public|friends|me]   confirmed: posted<TAB>ref<TAB>path
+  post <text> [--img file]... [--video file]... [--to public|friends|me]   confirmed: posted<TAB>ref<TAB>path (pending<TAB>ref<TAB>path or pending: accepted, still publishing; do not retry)
   comment <post> <text>
   react <post> [like|love|care|haha|wow|sad|angry|none]
   delete <post>                      your own posts only
