@@ -347,18 +347,23 @@ async fn read_back(b: &Browser, t: &Tab, path: &str, text: &str, ms: u32) -> Res
 /// Wait for a pending post to appear on its own page (a redirect to the profile proves nothing).
 /// ponytail: fixed one-minute wait; slower publishes such as video encoding report `pending`.
 async fn published_soon(b: &Browser, t: &Tab, path: &str, text: &str, out: &Out) -> bool {
-    let deadline = Instant::now() + Duration::from_secs(60);
-    while Instant::now() < deadline && !out.cancelled() {
-        if read_back(b, t, path, text, 5000).await.unwrap_or(false)
-            && b.eval(t, "location.pathname+location.search")
-                .await
-                .is_ok_and(|v| v.as_str().is_some_and(crate::ops::is_post_path))
-        {
-            return true;
+    let poll = async {
+        while !out.cancelled() {
+            if read_back(b, t, path, text, 5000).await.unwrap_or(false)
+                && b.eval(t, "location.pathname+location.search")
+                    .await
+                    .is_ok_and(|v| v.as_str().is_some_and(crate::ops::is_post_path))
+            {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
         }
-        tokio::time::sleep(Duration::from_secs(5)).await;
-    }
-    false
+        false
+    };
+    // a stalled page load must end in the known `pending` receipt, not the command's timeout
+    tokio::time::timeout(Duration::from_secs(60), poll)
+        .await
+        .unwrap_or(false)
 }
 
 async fn open_post(b: &Browser, t: &Tab, path: &str) -> Res<()> {
