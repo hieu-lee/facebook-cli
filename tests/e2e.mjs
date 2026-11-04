@@ -1019,6 +1019,6 @@ try{
 }finally{
  if(env)try{await exec(binary,['stop'],{env,timeout:10000})}catch{}
  if(socket){try{await call('Browser.close')}catch{}socket.close()}
- child.kill();await writeFile(path.join(out,'report.json'),JSON.stringify(report,null,2)+'\n');await rm(temp,{recursive:true,force:true,maxRetries:5,retryDelay:250});
+ child.kill();await writeFile(path.join(out,'report.json'),JSON.stringify(report,null,2)+'\n');await rm(temp,{recursive:true,force:true,maxRetries:60,retryDelay:250});
 }
 console.log('E2E passed; evidence: '+out);
