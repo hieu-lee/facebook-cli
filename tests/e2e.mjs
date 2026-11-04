@@ -410,6 +410,31 @@ try{
    assert.equal(posts[0].text,'Existing profile post');
   }finally{await fb('page','authors','close')}
  });
+ await check('post finds the composer in any language and refuses other dialogs',async()=>{
+  const flags=v=>evaluate(`for(const k of ['composerLayout','postLabel','publishWaitsForText','composerNext','noteShared'])localStorage.removeItem(k);Object.assign(localStorage,${JSON.stringify(v)});JSON.stringify(true)`);
+  try{
+   await flags({composerLayout:'"card"',postLabel:'"Közzététel"',publishWaitsForText:'true'});
+   const posted=await fb('post','any language post','--to','me');assert.match(posted,/^posted\t/);await fb('delete',posted.split('\t')[1]);
+   await flags({composerLayout:'"noteOnly"'});
+   await assert.rejects(()=>fb('post','never a note','--to','me'),/wrong dialog.*Share note.*nothing was posted/);
+   assert.equal(await evaluate('localStorage.noteShared||"false"'),false);
+   await flags({composerNext:'true'});
+   const next=await fb('post','next step post','--to','me');assert.match(next,/^posted\t/);await fb('delete',next.split('\t')[1]);
+  }finally{await flags({})}
+ });
+ await check('post never presses an unrecognised Next as if it were Post',async()=>{
+  const flags=v=>evaluate(`for(const k of ['composerNext','nextLabel','nextWaitsForText','nextClicked','publishAttempted'])localStorage.removeItem(k);Object.assign(localStorage,${JSON.stringify(v)});JSON.stringify(true)`);
+  const count=()=>evaluate('JSON.stringify(JSON.parse(localStorage.posts||"[]").length)');
+  const before=await count(),original=env;
+  env={...env,FB_STATE:path.join(temp,'unknown-next-state'),FB_TIMEOUT:'5'};
+  try{
+   await flags({composerNext:'true',nextLabel:'"Tovább"',nextWaitsForText:'true'});
+   await assert.rejects(()=>fb('post','never advance unknown next','--to','me'));
+   assert.equal(await count(),before);
+   assert.equal(await evaluate('localStorage.nextClicked||"false"'),false);
+   assert.equal(await evaluate('localStorage.publishAttempted||"false"'),false);
+  }finally{try{await fb('stop')}finally{env=original;await flags({})}}
+ });
  await check('post text omits only actual trailing collapse controls',async()=>{
   await fb('page','posttext','open','https://www.facebook.com/fixture');
   for(const label of ['See less','Thu gọn','Afficher moins','Réduire']){
@@ -1007,6 +1032,6 @@ try{
 }finally{
  if(env)try{await exec(binary,['stop'],{env,timeout:10000})}catch{}
  if(socket){try{await call('Browser.close')}catch{}socket.close()}
- child.kill();await writeFile(path.join(out,'report.json'),JSON.stringify(report,null,2)+'\n');await rm(temp,{recursive:true,force:true,maxRetries:5,retryDelay:250});
+ child.kill();await writeFile(path.join(out,'report.json'),JSON.stringify(report,null,2)+'\n');await rm(temp,{recursive:true,force:true,maxRetries:60,retryDelay:250});
 }
 console.log('E2E passed; evidence: '+out);

@@ -56,6 +56,9 @@ const F = global.window.__fb;
   assert.match(await G.composePrepare(), /text is empty.*no attachments/);
   attached = true;
   assert.match(await G.composePrepare(), /Post button not found/);
+  buttons = [button('div', 'Share note')];
+  assert.match(await G.composePrepare(), /Post button not found.*Share note.*nothing was posted/, 'the error names what is on screen');
+  buttons = [];
   buttons = [button()]; buttons[0].disabled = true;
   assert.match(await G.composePrepare(), /Post button.*disabled/);
   progress = true;
@@ -84,6 +87,28 @@ const F = global.window.__fb;
   buttons[0].onEvent = event => { if (event === 'click') present = false; };
   assert.strictEqual(await G.composePress(''), true, 'attachment-only posts remain supported');
   assert(buttons[0].events.includes('click'));
+  // Next can remove the editor, so a changed draft must never pass it.
+  present = true; attached = false; textbox.innerText = 'changed draft';
+  const next = button('div', 'Next'); buttons = [next];
+  await G.composePrepare('requested draft');
+  assert.strictEqual(next.events.length, 0, 'a changed draft must not advance past the editor');
+  textbox.innerText = 'requested draft';
+  next.onEvent = event => { if (event === 'pointerdown') textbox.innerText = 'changed draft'; };
+  await assert.rejects(() => G.composePrepare('requested draft'), /action target changed/);
+  assert(!next.events.includes('click'), 'a draft changed while pressing Next must not advance');
+  textbox.innerText = 'requested draft'; next.onEvent = null; next.events = [];
+  const pane = button('div', 'Post'); pane.visibility = 'hidden'; buttons = [next, pane];
+  next.onEvent = event => { if (event === 'click') { buttons = [pane]; pane.visibility = 'visible'; } };
+  await G.composePrepare('requested draft');
+  assert(next.events.includes('click'), 'the requested draft advances past Next');
+  // An unknown label is never assumed to be Post, even when it is the only control.
+  present = true; textbox.innerText = 'requested draft';
+  const unknown = button('div', 'Tovább'); buttons = [unknown];
+  assert.match(await G.composePrepare('requested draft'), /Post button not found.*Tovább.*nothing was posted/);
+  assert.deepStrictEqual(unknown.events, [], 'an unrecognised control is never pressed');
+  assert.strictEqual(await G.composePress('requested draft'), 'post button changed; nothing was posted');
+  const known = button('div', 'Közzététel'); buttons = [known];
+  assert.strictEqual(await G.composePrepare('requested draft'), true, 'a listed translated Post label is recognised');
   console.log('js composer ok');
 })().catch(e => { console.error(e); process.exit(1); });
 
