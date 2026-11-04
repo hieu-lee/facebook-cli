@@ -418,27 +418,35 @@ pub async fn comment(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     r
 }
 
-/// Which picker entry the button label ("Remove Love") names: the longest picker label it ends with
-/// (in Vietnamese "Yêu thích" also ends with "thích", so the longest match wins).
+/// The reaction precedes the author in "Remove Love from <author>'s post".
+/// Keep localized suffix matching ("Yêu thích" also ends with "thích").
 fn current_reaction(label: &str, picker: &[String]) -> Option<usize> {
     let l = label.to_lowercase();
+    let reaction = l
+        .strip_prefix("remove ")
+        .and_then(|rest| rest.split_once(" from "))
+        .map_or(l.as_str(), |(reaction, _)| reaction);
     picker
         .iter()
         .enumerate()
-        .filter(|(_, p)| !p.is_empty() && l.ends_with(p.as_str()))
+        .filter(|(_, p)| !p.is_empty() && reaction.ends_with(p.as_str()))
         .max_by_key(|(_, p)| p.len())
         .map(|(i, _)| i)
 }
 
-/// A reaction has landed only when the button shows a SELECTED state naming
-/// it. The neutral button reads exactly the first picker label ("Like"),
-/// which suffix-matches index 0 — so a suffix match alone would confirm a
-/// Like that never landed and bypass the retry.
+fn reaction_neutral(label: &str, picker: &[String]) -> bool {
+    let l = label.to_lowercase();
+    picker.first().is_some_and(|first| {
+        !first.is_empty()
+            && (l == *first
+                || l.starts_with(&format!("{first} "))
+                || l.starts_with(&format!("react with {first} to ")))
+    })
+}
+
+/// Neutral labels can name both Like and an author; neither confirms a selection.
 fn reaction_landed(label: &str, picker: &[String], idx: usize) -> bool {
-    picker
-        .first()
-        .is_some_and(|first| !first.is_empty() && label != first)
-        && current_reaction(label, picker) == Some(idx)
+    !reaction_neutral(label, picker) && current_reaction(label, picker) == Some(idx)
 }
 
 /// Join a group. Idempotent: already joined / already requested is reported,
@@ -739,8 +747,7 @@ pub async fn react(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
             info["y"].as_f64().ok_or("no like button")?,
         );
         let label0 = info["label"].as_str().unwrap_or("").to_lowercase();
-        // The picker labels are the language-independent reference: the button reads exactly like
-        // the first entry ("Like") when nothing is selected, and like "Remove <reaction>" otherwise.
+        // Picker labels identify localized reactions; button labels may also name the author.
         // The picker opens on hover after Facebook's own delay, which is not
         // fixed: hover and poll for it (one re-hover if it never comes)
         // instead of probing once after a fixed sleep. reactionPick anchors
@@ -760,10 +767,11 @@ pub async fn react(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
                 .collect(),
             _ => return Err("reaction picker did not open (nothing was changed)".into()),
         };
+        if labels[0].is_empty() {
+            return Err("reaction picker labels are unreadable (nothing was changed)".into());
+        }
         let label = label0.clone();
-        let liked = labels
-            .first()
-            .is_some_and(|first| !first.is_empty() && label != *first);
+        let liked = !reaction_neutral(&label, &labels);
         let current = if liked {
             current_reaction(&label, &labels)
         } else {
@@ -776,13 +784,13 @@ pub async fn react(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
         if idx == 7 {
             if liked {
                 ok(&b.eval(&t, "window.__fb.likePress()").await?)?;
-                // Verify it came off: the button label must change.
+                // A different selected reaction must not confirm removal.
                 let deadline = std::time::Instant::now() + Duration::from_millis(6000);
                 let mut off = false;
                 while std::time::Instant::now() < deadline {
                     tokio::time::sleep(Duration::from_millis(300)).await;
                     let now = b.eval(&t, "window.__fb.likeInfo()").await?;
-                    if now["label"].as_str().unwrap_or("").to_lowercase() != label0 {
+                    if reaction_neutral(now["label"].as_str().unwrap_or(""), &labels) {
                         off = true;
                         break;
                     }
@@ -901,5 +909,50 @@ mod tests {
         assert!(reaction_landed("remove love", &picker, 1));
         assert!(!reaction_landed("remove love", &picker, 0));
         assert!(!reaction_landed("remove haha", &picker, 1));
+    }
+
+    #[test]
+    fn author_qualified_reactions_match_the_action_before_the_author() {
+        let picker: Vec<String> = ["like", "love", "care", "haha", "wow", "sad", "angry"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let reported = "Remove Like from The Royal National College for the Blind (RNC)'s post";
+        assert_eq!(current_reaction(reported, &picker), Some(0));
+        assert!(reaction_landed(reported, &picker, 0));
+        assert!(!reaction_neutral(reported, &picker));
+        for (idx, reaction) in picker.iter().enumerate() {
+            let label = format!("Remove {reaction} from Love Haha Angry's post");
+            assert_eq!(current_reaction(&label, &picker), Some(idx), "{label}");
+            assert!(!reaction_neutral(&label, &picker), "{label}");
+            for requested in 0..picker.len() {
+                assert_eq!(reaction_landed(&label, &picker, requested), idx == requested);
+            }
+        }
+    }
+
+    #[test]
+    fn author_qualified_neutral_labels_do_not_confirm_a_reaction() {
+        let picker: Vec<String> = ["like", "love", "care", "haha", "wow", "sad", "angry"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        for label in [
+            "Like",
+            "React with Like to Danielle Cools's post",
+            "React with Like to Love Haha Angry's post",
+            "React with Like to Love",
+            "Like Love Haha Angry's post",
+        ] {
+            assert!(reaction_neutral(label, &picker), "{label}");
+            for idx in 0..picker.len() {
+                assert!(!reaction_landed(label, &picker, idx), "{label}: {idx}");
+            }
+        }
+        for label in ["", "loading", "React to Danielle Cools's post"] {
+            assert!(!reaction_neutral(label, &picker), "{label}");
+        }
+        assert!(!reaction_neutral("Like", &[]));
+        assert!(!reaction_neutral("Like", &[String::new()]));
     }
 }
