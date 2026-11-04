@@ -422,6 +422,19 @@ try{
    const next=await fb('post','next step post','--to','me');assert.match(next,/^posted\t/);await fb('delete',next.split('\t')[1]);
   }finally{await flags({})}
  });
+ await check('post never presses an unrecognised Next as if it were Post',async()=>{
+  const flags=v=>evaluate(`for(const k of ['composerNext','nextLabel','nextWaitsForText','nextClicked','publishAttempted'])localStorage.removeItem(k);Object.assign(localStorage,${JSON.stringify(v)});JSON.stringify(true)`);
+  const count=()=>evaluate('JSON.stringify(JSON.parse(localStorage.posts||"[]").length)');
+  const before=await count(),original=env;
+  env={...env,FB_STATE:path.join(temp,'unknown-next-state'),FB_TIMEOUT:'5'};
+  try{
+   await flags({composerNext:'true',nextLabel:'"Tovább"',nextWaitsForText:'true'});
+   await assert.rejects(()=>fb('post','never advance unknown next','--to','me'));
+   assert.equal(await count(),before);
+   assert.equal(await evaluate('localStorage.nextClicked||"false"'),false);
+   assert.equal(await evaluate('localStorage.publishAttempted||"false"'),false);
+  }finally{try{await fb('stop')}finally{env=original;await flags({})}}
+ });
  await check('post text omits only actual trailing collapse controls',async()=>{
   await fb('page','posttext','open','https://www.facebook.com/fixture');
   for(const label of ['See less','Thu gọn','Afficher moins','Réduire']){

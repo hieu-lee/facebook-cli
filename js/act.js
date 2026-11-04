@@ -5,7 +5,7 @@
  const dialogs=()=>[...document.querySelectorAll('[role=dialog]')];
  const btnText=b=>clean(b.innerText||'');
  // ---- post composer
- const POST=/^(Post|Đăng|Publier|Publicar|Posten|Veröffentlichen|Pubblica|Plaatsen|Opublikuj|Přidat|Zveřejnit|Pridať|Uverejniť|Paylaş|Опубликовать|Опублікувати|Publicera|Publiser|Julkaise)$/i;
+ const POST=/^(Post|Đăng|Publier|Publicar|Posten|Veröffentlichen|Pubblica|Plaatsen|Opublikuj|Přidat|Zveřejnit|Pridať|Uverejniť|Paylaş|Опубликовать|Опублікувати|Publicera|Publiser|Julkaise|Közzététel)$/i;
  const NEXT=/^(Next|Tiếp|Tiếp tục|Suivant|Siguiente|Próximo|Seguinte|Weiter|Avanti|Volgende|Dalej|Další|Ďalej|İleri|Далее|Далі|Nästa|Næste|Neste|Seuraava)$/i;
  const actionLabel=b=>clean(b.getAttribute('aria-label')||btnText(b));
  const actionControls=d=>[...d.querySelectorAll('[role=button],button')];
@@ -42,9 +42,6 @@
   if(!d)return 'composer did not open';
   // Notes and profile editors also hold a textbox, but only the post composer takes files.
   if(!await waitFor(()=>d.querySelector('input[type=file]'),3000,100))return 'opened the wrong dialog instead of the post composer'+composerState(d)+'; nothing was posted';
-  // The publish control is the one action an empty composer disables, whatever its language.
-  const off=actionControls(d).filter(b=>F.visible(b)&&!F.enabled(b)&&actionLabel(b)&&!NEXT.test(actionLabel(b)));
-  window.__fbPublishLabel=off.length===1?actionLabel(off[0]):null;
   const tb=d.querySelector('[role=textbox]');tb.focus();
   return true;
  };
@@ -185,7 +182,7 @@
  // The profile header mounts after DOMContentLoaded: wait for the tab strip, then for the relationship control, before concluding there is none.
  F.friendWait=async()=>{const m=await waitFor(()=>{const m=main();return m&&m.querySelector('[role=tablist]')&&m},15000);if(!m)return 'no-profile';const st=await waitFor(()=>{const s=F.friendState();return s!=='no-button'?s:null},5000,200);return st||'no-button';};
  F.friendAdd=async()=>{const st=F.friendState();if(st!=='can-add')return st;const b=friendButton();if(!b)return 'no-button';b.click();const ok=await waitFor(()=>{const s=F.friendState();return s==='requested'||s==='friends'?s:null;},8000,200);return ok||'unconfirmed';};
- const postButtons=()=>{const d=F.composeDialog();return d?actionControls(d).filter(b=>{if(!F.visible(b))return false;const l=actionLabel(b);return POST.test(l)||l===window.__fbPublishLabel;}):[];};
+ const postButtons=()=>{const d=F.composeDialog();return d?actionControls(d).filter(b=>{if(!F.visible(b))return false;const l=actionLabel(b);return POST.test(l);}):[];};
  const postButton=()=>{const bs=postButtons();return bs.length===1?bs[0]:null;};
  const nextButton=()=>{const d=F.composeDialog();const bs=d?actionControls(d).filter(b=>F.visible(b)&&NEXT.test(actionLabel(b))):[];return bs.length===1?bs[0]:null;};
  // Retained audience panes can put Done after Post; order is not action identity.

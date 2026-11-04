@@ -101,6 +101,14 @@ const F = global.window.__fb;
   next.onEvent = event => { if (event === 'click') { buttons = [pane]; pane.visibility = 'visible'; } };
   await G.composePrepare('requested draft');
   assert(next.events.includes('click'), 'the requested draft advances past Next');
+  // An unknown label is never assumed to be Post, even when it is the only control.
+  present = true; textbox.innerText = 'requested draft';
+  const unknown = button('div', 'Tovább'); buttons = [unknown];
+  assert.match(await G.composePrepare('requested draft'), /Post button not found.*Tovább.*nothing was posted/);
+  assert.deepStrictEqual(unknown.events, [], 'an unrecognised control is never pressed');
+  assert.strictEqual(await G.composePress('requested draft'), 'post button changed; nothing was posted');
+  const known = button('div', 'Közzététel'); buttons = [known];
+  assert.strictEqual(await G.composePrepare('requested draft'), true, 'a listed translated Post label is recognised');
   console.log('js composer ok');
 })().catch(e => { console.error(e); process.exit(1); });
 
