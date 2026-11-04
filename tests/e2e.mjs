@@ -26,7 +26,7 @@ const record=(name,file,...args)=>fb('page',name,'record',file,...args,...record
 async function evaluate(js){return JSON.parse(await fb('eval','https://www.facebook.com/fixture',js))}
 async function recordedPixel(bytes){await fb('page','media-check','open','https://www.facebook.com/fixture');try{return JSON.parse(await fb('page','media-check','eval',`(async()=>{const v=document.createElement('video');v.muted=true;v.src='data:video/webm;base64,${bytes.toString('base64')}';document.body.append(v);await new Promise((ok,bad)=>{v.onloadeddata=ok;v.onerror=bad});await v.play();await new Promise(ok=>v.requestVideoFrameCallback(ok));const c=document.createElement('canvas');c.width=1;c.height=1;const g=c.getContext('2d');g.drawImage(v,0,0,1,1);return [...g.getImageData(0,0,1,1).data]})()`))}finally{await fb('page','media-check','close')}}
 try{
- let portInfo;for(let i=0;i<150;i++){try{portInfo=await readFile(path.join(temp,'chrome/DevToolsActivePort'),'utf8');break}catch{await new Promise(r=>setTimeout(r,100))}}
+ let portInfo;for(let i=0;i<600;i++){try{portInfo=await readFile(path.join(temp,'chrome/DevToolsActivePort'),'utf8');break}catch{await new Promise(r=>setTimeout(r,100))}}
  assert(portInfo,'Chrome started');const [port,wsPath]=portInfo.trim().split('\n');
  socket=new WebSocket('ws://127.0.0.1:'+port+wsPath);await new Promise((resolve,reject)=>{socket.onopen=resolve;socket.onerror=reject});
  socket.onclose=()=>{closed=true;cancelCalls()};
