@@ -1,5 +1,5 @@
 (()=>{
- const {TIME,SPON,shortBadge,vtext,num,postCards,postText,canon,waitFor,clean}=window.__fb;
+ const {TIME,SPON,shortBadge,vtext,num,postCards,postText,canon,waitFor,clean,profilePath}=window.__fb;
  let seen=new WeakMap();let seq=0,current=null;
  const timeNode=(u,tt)=>{const w=document.createTreeWalker(u,NodeFilter.SHOW_TEXT);let n;while(n=w.nextNode()){const t=n.nodeValue;if(!t||t.includes('\u034f')||n.parentElement.closest('blockquote'))continue;if(t.replace(/[\u200b-\u200f\u2060\ufeff]/g,'').trim()===tt)return n;}return null;};
  const decode=a=>{
@@ -80,7 +80,15 @@
     if(url)hover=null;
     else if(!hover){const tn=ti<0?null:timeNode(u,ch[ti]);if(tn){tn.parentElement.scrollIntoView({block:'center'});const rg=document.createRange();rg.selectNodeContents(tn);const r=rg.getBoundingClientRect();if(r.width>0)hover=[r.x+r.width/2,r.y+r.height/2];}}
     const alt=[...u.querySelectorAll('a[href]')].map(a=>a.getAttribute('href')).find(h=>POST.test(h)&&!/comment_id/.test(h));
-    out.push({pos,url,alt:alt?canon(alt):'',author:head.join(' / '),time:dt&&dt.text?dt.text:(ti<0?'':ch[ti]),text:postText(msg)||attached(u),
+    /* the author's own profile path: the header's first profile link (a group
+       post's author link is /groups/<g>/user/<id>, which profilePath maps to
+       the person; the group link itself maps to null). The author NAME is
+       not an identity: group posts merge the group name into it. Only links
+       before the message count: a profile named there or in a comment is not
+       the author, so an unlinked author gets no ref rather than a wrong one. */
+    const headerEnd=msg||tlk||reactions;
+    const aref=[...u.querySelectorAll('a[href]')].filter(a=>!headerEnd||a.compareDocumentPosition(headerEnd)&Node.DOCUMENT_POSITION_FOLLOWING).map(a=>profilePath(a.getAttribute('href'))).find(Boolean)||'';
+    out.push({pos,url,alt:alt?canon(alt):'',author:head.join(' / '),aref,time:dt&&dt.text?dt.text:(ti<0?'':ch[ti]),text:postText(msg)||attached(u),
       r:num(g(u,'like_button')),c:num(g(u,'comment_button')),s:num(g(u,'share_button')),
       ad:ch.slice(0,12).some(c=>SPON.test(c)),hover});
     if(url||!hover)continue;
