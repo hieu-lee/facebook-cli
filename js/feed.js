@@ -83,8 +83,11 @@
     /* the author's own profile path: the header's first profile link (a group
        post's author link is /groups/<g>/user/<id>, which profilePath maps to
        the person; the group link itself maps to null). The author NAME is
-       not an identity: group posts merge the group name into it. */
-    const aref=[...u.querySelectorAll('a[href]')].map(a=>profilePath(a.getAttribute('href'))).find(Boolean)||'';
+       not an identity: group posts merge the group name into it. Only links
+       before the message count: a profile named there or in a comment is not
+       the author, so an unlinked author gets no ref rather than a wrong one. */
+    const headerEnd=msg||tlk||reactions;
+    const aref=[...u.querySelectorAll('a[href]')].filter(a=>!headerEnd||a.compareDocumentPosition(headerEnd)&Node.DOCUMENT_POSITION_FOLLOWING).map(a=>profilePath(a.getAttribute('href'))).find(Boolean)||'';
     out.push({pos,url,alt:alt?canon(alt):'',author:head.join(' / '),aref,time:dt&&dt.text?dt.text:(ti<0?'':ch[ti]),text:postText(msg)||attached(u),
       r:num(g(u,'like_button')),c:num(g(u,'comment_button')),s:num(g(u,'share_button')),
       ad:ch.slice(0,12).some(c=>SPON.test(c)),hover});

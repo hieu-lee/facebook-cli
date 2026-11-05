@@ -88,7 +88,8 @@ const F = global.window.__fb;
 
   // feed step: a group post's author ref is the poster's profile path, not
   // the group link, and not the group name merged into the author name
-  const anchor = href => ({ getAttribute: n => (n === 'href' ? href : null) });
+  global.Node = { DOCUMENT_POSITION_FOLLOWING: 4 };
+  const anchor = (href, position = 4) => ({ getAttribute: n => (n === 'href' ? href : null), compareDocumentPosition: () => position });
   const userAnchor = anchor('https://www.facebook.com/groups/123/user/456/');
   const profileEl = { innerText: 'Michal Suchy', querySelector: sel => (sel === 'a' ? userAnchor : null), closest: () => null };
   const msgEl = { querySelectorAll: () => [] };
@@ -109,6 +110,19 @@ const F = global.window.__fb;
   assert.strictEqual(stepped.length, 1);
   assert.strictEqual(stepped[0].author, 'Michal Suchy / Odyssey Group');
   assert.strictEqual(stepped[0].aref, '/profile.php?id=456');
+
+  // a profile mentioned in the message is not the author: an unlinked author has no ref
+  const mentionEl = { innerText: 'Michal Suchy', querySelector: () => null, closest: () => null };
+  const mentionCard = {
+    querySelector: sel => (sel.includes('profile_name') ? mentionEl : sel.includes('story_message') ? msgEl : null),
+    querySelectorAll: sel => (sel === 'a[href]'
+      ? [anchor('https://www.facebook.com/groups/123'), anchor('https://www.facebook.com/bob', 2)]
+      : sel.includes('profile_name') ? [mentionEl] : []),
+    getAttribute: () => null,
+  };
+  global.window = { __fb: { ...F3, postCards: () => [mentionCard] } };
+  new Function(fs.readFileSync(path.join(__dirname, '../js/feed.js'), 'utf8')).call(global.window);
+  assert.strictEqual((await global.window.__fbFeed.step())[0].aref, '');
     console.log('js feed author ref ok');
 })().catch(e => { console.error(e); process.exit(1); });
 
