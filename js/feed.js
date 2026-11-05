@@ -80,7 +80,11 @@
     if(url)hover=null;
     else if(!hover){const tn=ti<0?null:timeNode(u,ch[ti]);if(tn){tn.parentElement.scrollIntoView({block:'center'});const rg=document.createRange();rg.selectNodeContents(tn);const r=rg.getBoundingClientRect();if(r.width>0)hover=[r.x+r.width/2,r.y+r.height/2];}}
     const alt=[...u.querySelectorAll('a[href]')].map(a=>a.getAttribute('href')).find(h=>POST.test(h)&&!/comment_id/.test(h));
-    out.push({pos,url,alt:alt?canon(alt):'',author:head.join(' / '),time:dt&&dt.text?dt.text:(ti<0?'':ch[ti]),text:postText(msg)||attached(u),
+    /* last time source: the timestamp link's own plain text. decode() only
+       reads the scrambled-span form, and the visible chunks may carry no
+       TIME-shaped piece at all, which left the post's time empty. */
+    const linkTime=tlk&&!dt?clean(tlk.innerText):'';
+    out.push({pos,url,alt:alt?canon(alt):'',author:head.join(' / '),time:dt&&dt.text?dt.text:(ti<0?linkTime:ch[ti]),text:postText(msg)||attached(u),
       r:num(g(u,'like_button')),c:num(g(u,'comment_button')),s:num(g(u,'share_button')),
       ad:ch.slice(0,12).some(c=>SPON.test(c)),hover});
     if(url||!hover)continue;
