@@ -11,6 +11,10 @@ use tokio::sync::{Mutex, Notify};
 #[derive(Clone, Debug, Default)]
 pub struct Post {
     pub author: String,
+    /// The author's profile path (/vanity or /profile.php?id=), when the card
+    /// linked one. Group posts merge the group name into `author`, so the
+    /// name alone cannot resolve the person; this path can.
+    pub author_ref: String,
     pub time: String,
     pub stats: String,
     pub text: String,
@@ -18,8 +22,23 @@ pub struct Post {
     pub ad: bool,
 }
 
+/// The line that carries a post's author profile path, printed before the
+/// post line itself (the same prefix-line shape as a comment's `cu` line).
+fn author_ref_prefix(author_ref: &str) -> String {
+    if author_ref.is_empty() {
+        String::new()
+    } else {
+        let mut prefix = String::with_capacity(author_ref.len() + 4);
+        prefix.push_str("au\t");
+        push_one_line(&mut prefix, author_ref);
+        prefix.push('\n');
+        prefix
+    }
+}
+
 pub(crate) fn format_post(refs: &crate::refs::Refs, p: &Post, urls: bool) -> String {
-    let mut line = String::with_capacity(p.url.len() + p.author.len() + p.text.len() + 32);
+    let mut line = author_ref_prefix(&p.author_ref);
+    line.reserve(p.url.len() + p.author.len() + p.text.len() + 32);
     if p.url.is_empty() {
         line.push('-');
     } else if urls {
@@ -139,6 +158,7 @@ async fn resolve(b: &Browser, t: &Tab, p: &Value) -> Res<Option<Post>> {
     let s = |k: &str| p[k].as_str().unwrap_or("").to_string();
     Ok(Some(Post {
         author: s("author"),
+        author_ref: s("aref"),
         time: s("time"),
         stats: format!(
             "{}/{}/{}",
@@ -436,6 +456,7 @@ mod tests {
     fn post(author: &str, text: &str, url: &str) -> Post {
         Post {
             author: author.into(),
+            author_ref: String::new(),
             time: "2h".into(),
             stats: "0/0/0".into(),
             text: text.into(),
@@ -471,6 +492,12 @@ mod tests {
         assert_eq!(
             format_post(&refs, &p, false),
             "-\tPage One\t2 h\t1/2/3\tline one line two"
+        );
+        // With an author ref, the post line is preceded by its `au` line.
+        p.author_ref = "/profile.php?id=456".into();
+        assert_eq!(
+            format_post(&refs, &p, false),
+            "au\t/profile.php?id=456\n-\tPage One\t2 h\t1/2/3\tline one line two"
         );
     }
 
