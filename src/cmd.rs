@@ -6,10 +6,15 @@ use crate::daemon::{Daemon, Out};
 /// and close the page that is still restoring the chat history.
 const UNLOCK_EXTRA_SECS: u64 = 300;
 
+/// A pending post may be polled for a minute after Post was pressed. Timing out there would
+/// report failure for a post Facebook already accepted.
+const POST_EXTRA_SECS: u64 = 60;
+
 fn command_limit(argv: &[String], base: u64) -> u64 {
     match argv.first().map(String::as_str) {
         // login waits for a human (Allow click, checkbox, 2FA): it has its own, longer limits
         Some("login") => 1200,
+        Some("post") => base.saturating_add(POST_EXTRA_SECS),
         Some("unlock") => base.saturating_add(UNLOCK_EXTRA_SECS),
         Some("send" | "reply") => {
             // every attachment is uploaded and confirmed on its own (up to 120s each)
