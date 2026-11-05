@@ -12,6 +12,81 @@ const src = fs.readFileSync(path.join(__dirname, '../js/lib.js'), 'utf8');
 new Function(src).call(global.window);
 const F = global.window.__fb;
 
+// Composer timeouts use an immediate waitFor so every failure state is checked without a minute's delay.
+(async () => {
+  const vm = require('vm');
+  const textbox = { innerText: 'requested draft' };
+  let buttons = [], present = true, attached = false, progress = false, afterWait = () => {};
+  const dialog = {
+    querySelector(sel) {
+      if (sel === '[role=textbox]') return textbox;
+      if (sel.includes('progressbar')) return progress ? {} : null;
+      if (sel.includes('img') || sel.includes('video')) return attached ? {} : null;
+      return null;
+    },
+    querySelectorAll(sel) { return sel === '[role=progressbar]' ? progress ? [button()] : [] : buttons.filter(b => sel.includes('[role=button]') && b.role === 'button' || sel.split(',').includes('button') && b.tag === 'button'); },
+  };
+  const ctx = vm.createContext({ window: {}, document: { querySelectorAll: () => present ? [dialog] : [] }, location: { href: 'https://www.facebook.com/' }, URL,
+    getComputedStyle: e => ({ visibility: e.visibility }), MouseEvent: class { constructor(type) { this.type = type; } }, PointerEvent: class { constructor(type) { this.type = type; } } });
+  vm.runInContext(src, ctx);
+  const G = ctx.window.__fb;
+  Object.assign(G, { sleep: async () => {}, waitFor: async (fn, ms) => { const result = fn(); if (ms === 60000) afterWait(); return result; } });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/act.js'), 'utf8'), ctx);
+  const button = (tag = 'div', label = 'Post') => ({ tag, role: tag === 'div' ? 'button' : null, innerText: label, visibility: 'visible', isConnected: true, disabled: false, events: [],
+    getAttribute(name) { return name === 'role' ? this.role : name === 'aria-label' ? this.innerText : null; },
+    getClientRects() { return [{}]; }, matches() { return this.disabled; }, closest() { return null; }, getBoundingClientRect() { return { x: 0, y: 0, width: 20, height: 20 }; },
+    dispatchEvent(e) { this.events.push(e.type); this.onEvent?.(e.type); },
+  });
+  buttons = [button('button')];
+  assert.strictEqual(await G.composePrepare(), true, 'native Post button is recognized');
+  assert.strictEqual(G.composeCheck('requested draft'), true);
+  textbox.innerText = ' requested\u00a0 draft\u200b ';
+  assert.strictEqual(G.composeCheck('requested draft'), true, 'draft uses receipt normalization');
+  textbox.innerText = '';
+  assert.match(G.composeCheck('requested draft'), /text is empty/);
+  assert.match(await G.composePress('requested draft'), /text is empty/);
+  assert(!buttons[0].events.includes('click'), 'empty draft must not publish');
+  textbox.innerText = 'private different draft';
+  const mismatch = await G.composePress('requested draft');
+  assert.match(mismatch, /does not match/);
+  assert(!mismatch.includes('private different draft'), 'error must not expose draft');
+  assert(!buttons[0].events.includes('click'), 'mismatched draft must not publish');
+  textbox.innerText = '';
+  buttons = [];
+  assert.match(await G.composePrepare(), /text is empty.*no attachments/);
+  attached = true;
+  assert.match(await G.composePrepare(), /Post button not found/);
+  buttons = [button()]; buttons[0].disabled = true;
+  assert.match(await G.composePrepare(), /Post button.*disabled/);
+  progress = true;
+  assert.match(await G.composePrepare(), /progress indicator/);
+  progress = false; attached = false; textbox.innerText = 'requested draft';
+  buttons = [button()]; buttons[0].visibility = 'hidden';
+  assert.match(await G.composePrepare(), /Post button not found/);
+  buttons = [button(), button('button')];
+  assert.match(await G.composePrepare(), /multiple.*Post buttons/);
+  buttons = [button()]; buttons[0].disabled = true;
+  afterWait = () => { present = false; };
+  assert.match(await G.composePrepare(), /composer.*closed|composer.*disappeared/);
+  assert.strictEqual(G.composeCheck('requested draft'), 'no composer; nothing was posted');
+  present = true; afterWait = () => {};
+  buttons = [button()];
+  assert.strictEqual(await G.composePrepare(), true);
+  buttons[0].innerText = 'Other action';
+  assert.match(await G.composePress('requested draft'), /post button changed/);
+  buttons = [button()];
+  assert.strictEqual(await G.composePrepare(), true);
+  buttons[0].onEvent = event => { if (event === 'pointerdown') textbox.innerText = 'changed during press'; };
+  await assert.rejects(() => G.composePress('requested draft'), /action target changed/);
+  assert(!buttons[0].events.includes('click'), 'draft mutation during press must not publish');
+  textbox.innerText = ''; attached = true; buttons = [button('button')];
+  assert.strictEqual(await G.composePrepare(), true);
+  buttons[0].onEvent = event => { if (event === 'click') present = false; };
+  assert.strictEqual(await G.composePress(''), true, 'attachment-only posts remain supported');
+  assert(buttons[0].events.includes('click'));
+  console.log('js composer ok');
+})().catch(e => { console.error(e); process.exit(1); });
+
 for (const t of ['3 giờ trước', '22 phút', 'Hôm qua lúc 14:00', '17 Tháng 6', '4 tháng 10 lúc 22:05', '2h', '5 minutes ago', 'Just now', 'il y a 3 jours', 'Oct 4 at 10:05 PM'])
   assert(F.TIME.test(t), 'TIME should match: ' + t);
 for (const t of ['Thích', 'Hieu Lee', '22 bình luận', 'Trả lời'])
