@@ -420,12 +420,35 @@ pub async fn comment(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
 
 /// Which picker entry the button label ("Remove Love") names: the longest picker label it ends with
 /// (in Vietnamese "Yêu thích" also ends with "thích", so the longest match wins).
+/// How a selected reaction button starts, per language ("Remove Love from …").
+const REMOVE_PREFIXES: [&str; 3] = ["remove ", "retirer ", "supprimer "];
+/// What follows the reaction name in a selected button ("… from <author>'s post",
+/// French "… de la publication de <author>").
+const TARGET_SEPARATORS: [&str; 4] = [
+    " from ",
+    " de la publication",
+    " à la publication",
+    " sur la publication",
+];
+
 fn current_reaction(label: &str, picker: &[String]) -> Option<usize> {
     let l = label.to_lowercase();
+    // A selected button can carry the full sentence ("Retirer J'adore de la
+    // publication de X"); reduce it to the reaction name before suffix matching.
+    let reaction = REMOVE_PREFIXES
+        .iter()
+        .find_map(|prefix| l.strip_prefix(prefix))
+        .and_then(|rest| {
+            TARGET_SEPARATORS
+                .iter()
+                .filter_map(|separator| rest.split_once(separator).map(|(reaction, _)| reaction))
+                .min_by_key(|reaction| reaction.len())
+        })
+        .unwrap_or(l.as_str());
     picker
         .iter()
         .enumerate()
-        .filter(|(_, p)| !p.is_empty() && l.ends_with(p.as_str()))
+        .filter(|(_, p)| !p.is_empty() && reaction.ends_with(p.as_str()))
         .max_by_key(|(_, p)| p.len())
         .map(|(i, _)| i)
 }
@@ -884,6 +907,28 @@ mod tests {
         assert_eq!(current_reaction("Gỡ Thích", &picker), Some(0));
         assert_eq!(current_reaction("Gỡ Haha", &picker), Some(3));
         assert_eq!(current_reaction("Bày tỏ cảm xúc", &picker), None);
+    }
+
+    #[test]
+    fn french_reaction_labels() {
+        // Labels seen on a French Facebook account; the picker gives the names.
+        let picker: Vec<String> = [
+            "j’aime",
+            "j’adore",
+            "solidaire",
+            "haha",
+            "wouah",
+            "triste",
+            "grrr",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(
+            current_reaction("Retirer J’adore de la publication de Logic Nation", &picker),
+            Some(1)
+        );
+        assert_eq!(current_reaction("Supprimer Haha", &picker), Some(3));
     }
 
     #[test]
