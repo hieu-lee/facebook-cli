@@ -1,7 +1,7 @@
 (()=>{
  if(window.__fb)return;
  const sleep=ms=>new Promise(r=>setTimeout(r,ms));
- const clean=s=>(s||'').replace(/[͏​-‏⁠﻿]/g,'').replace(/[ \t ]+/g,' ').replace(/ *\n */g,'\n').trim();
+ const clean=s=>(s||'').replace(/[͏​-‏⁠﻿]/g,'').replace(/[ \t \u202f]+/g,' ').replace(/ *\n */g,'\n').trim();
  const vtext=(root,visibleOnly=false,includeAriaHidden=false,preserveSpace=false)=>{
   const w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT),o=[];let n;
   while(n=w.nextNode()){
@@ -22,7 +22,7 @@
  const waitFor=async(f,ms=10000,step=60)=>{const t=Date.now();for(;;){let v;try{v=await f()}catch(e){}if(v)return v;if(Date.now()-t>ms)return null;await sleep(step);}};
  // The verified-badge tooltip is accessibility metadata that lands inside author headers; shorten it there only,
  // never in message text or drafts, which must compare and read back exactly.
- const shortBadge=s=>s.replace(/Accounts with a verified badge have been authenticated and can be Meta Verified subscribers or notable persons or brands\.?/gi,'Verified');
+ const shortBadge=s=>s.replace(/(?:Accounts with a verified badge have been authenticated and can be Meta Verified subscribers or notable persons or brands|Les comptes avec un badge Vérifié ont été authentifiés\. Il peut s[’']agir d[’']abonnés Meta Verified ou de personnes ou de marques notables)\.?/gi,'Verified');
  const visible=e=>e.isConnected&&e.getClientRects().length&&getComputedStyle(e).visibility==='visible';
  const enabled=e=>!e.matches(':disabled')&&e.closest('[aria-disabled="true" i],[aria-disabled="false" i]')?.getAttribute('aria-disabled').toLowerCase()!=='true';
  // Use application buttons: removing a modal leaves React's focus trap and state alive.
@@ -86,12 +86,12 @@
  const profilePath=h=>{try{const u=new URL(h,location.href);if(!/^https?:$/.test(u.protocol)||!/^(?:[a-z0-9-]+\.)*facebook\.com$/i.test(u.hostname)||/^(?:l|lm)\./i.test(u.hostname))return null;const pp=u.pathname.match(/^\/people\/[^/]+\/(\d+)\/?$/);if(pp)return '/profile.php?id='+pp[1];const gu=u.pathname.match(/^\/groups\/[^/]+\/user\/(\d+)\/?$/);if(gu)return '/profile.php?id='+gu[1];if(u.pathname==='/profile.php'){const id=u.searchParams.get('id');return /^\d+$/.test(id||'')?'/profile.php?id='+id:null;}const m=u.pathname.match(/^\/([A-Za-z0-9.]{3,})\/?$/);if(!m)return null;if(/^(groups|watch|reels?|videos|events|pages|search|friends|notifications|messages|marketplace|gaming|bookmarks|settings|help|login|login\.php|l\.php|sharer|sharer\.php|dialog|plugins|hashtag|checkpoint|ajax|photo|photo\.php|permalink\.php|story\.php|share|media|albums|notes|offers|jobs|fundraisers|saved|memories|news|local|people|home|menu|privacy|terms|about|developers|careers)$/i.test(m[1]))return null;return '/'+m[1];}catch(e){return null}};
  /* a group's name is the first line of its first link; the other lines of all its links are details */
  const addGroup=(m,p,lines)=>{const cur=m.get(p);if(!cur){m.set(p,{name:lines[0],info:lines.slice(1)});return}for(const l of lines)if(l!==cur.name&&!cur.info.includes(l))cur.info.push(l)};
- const TIME=/^(\d+\s*(giây|phút|giờ|ngày|tuần|tháng|năm)(\s*trước)?|Hôm qua.*|Vừa xong|Yesterday.*|Just now|\d+\s*(s|m|h|d|w|y|hr|hrs|min|mins)|\d+\s+(seconds?|minutes?|hours?|days?|weeks?|months?|years?)(\s+ago)?|\d{1,2}\s+tháng\s+\d{1,2}.*|(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2}.*|il y a .*|hier.*|\d{1,2} (janv|févr|mars|avr|mai|juin|juil|août|sept|oct|nov|déc).*)$/i;
+ const TIME=/^(\d+\s*(giây|phút|giờ|ngày|tuần|tháng|năm)(\s*trước)?|Hôm qua.*|Vừa xong|Yesterday.*|Just now|\d+\s*(s|m|h|d|w|y|hr|hrs|min|mins)|\d+\s+(seconds?|minutes?|hours?|days?|weeks?|months?|years?)(\s+ago)?|\d{1,2}\s+tháng\s+\d{1,2}.*|(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2}.*|il y a .*|hier.*|aujourd[’']hui.*|[àa] l[’']instant|\d+\s*(j|sem\.?|ans?)|\d+\s+(secondes?|minutes?|heures?|jours?|semaines?|mois|ans?)|(lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche).*|(\d{1,2}|1er) (janv|févr|mars|avr|mai|juin|juil|août|sept|oct|nov|déc).*)$/i;
  const SPON=/^(Được tài trợ|Sponsored|Sponsorisé|Gesponsert|Patrocinado)/i;
- const ACT=/^(Thích|Like|J'aime|Trả lời|Reply|Répondre|Chia sẻ|Share|Partager|Đã chỉnh sửa|Edited|Modifié|Dịch|See translation|Xem bản dịch)$/i;
+ const ACT=/^(Thích|Like|J['’]aime|Trả lời|Reply|Répondre|Chia sẻ|Share|Partager|Đã chỉnh sửa|Edited|Modifié|Dịch|See translation|Voir la traduction|Xem bản dịch)$/i;
  const trunc=(s,n)=>{if(!s)return s;const a=Array.from(s);return a.length>n?a.slice(0,n).join('')+'…':s;};
  const scrollerOf=el=>{let p=el;while(p&&p!==document.body&&p!==document.documentElement){if(p.scrollHeight>p.clientHeight+20&&/auto|scroll/.test(getComputedStyle(p).overflowY))return p;p=p.parentElement;}return null;};
- const num=e=>{const g=e&&e.parentElement&&e.parentElement.parentElement;const t=g?g.innerText.trim():'';return /^[\d.,]+[KMkmN]?$/.test(t)?t:'0';};
+ const num=e=>{const g=e&&e.parentElement&&e.parentElement.parentElement;const t=g?g.innerText.trim():'';return /^[\d.,]+(?:[\s  ]\d{3})*(?:[\s  ]?[KMkmN])?$/.test(t)?t:'0';};
  const press=(el,{events=['pointerover','mouseover','pointerdown','mousedown','pointerup','mouseup','click'],valid=()=>true}={})=>{
   const identity=()=>[location.href,el.getAttribute('role'),el.getAttribute('aria-label')||clean(el.innerText),el.getAttribute('href')].join('\n');
   const key=identity();
