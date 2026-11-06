@@ -418,16 +418,48 @@ pub async fn comment(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     r
 }
 
+/// What follows the reaction name in a long selected label ("… from
+/// <author>'s post", French "… de la publication de <author>"): the reaction
+/// name is what precedes it, so cut there before suffix matching.
+const TARGET_SEPARATORS: [&str; 4] = [
+    " from ",
+    " de la publication",
+    " à la publication",
+    " sur la publication",
+];
+
 /// Which picker entry the button label ("Remove Love") names: the longest picker label it ends with
 /// (in Vietnamese "Yêu thích" also ends with "thích", so the longest match wins).
 fn current_reaction(label: &str, picker: &[String]) -> Option<usize> {
     let l = label.to_lowercase();
+    let head = TARGET_SEPARATORS
+        .iter()
+        .filter_map(|separator| l.split_once(separator).map(|(head, _)| head))
+        .min_by_key(|head| head.len())
+        .unwrap_or(l.as_str());
     picker
         .iter()
         .enumerate()
-        .filter(|(_, p)| !p.is_empty() && l.ends_with(p.as_str()))
+        .filter(|(_, p)| !p.is_empty() && head.ends_with(p.as_str()))
         .max_by_key(|(_, p)| p.len())
         .map(|(i, _)| i)
+}
+
+/// The button in its neutral (nothing selected) state, per language: the
+/// plain first label, the count form ("J'aime, 28 réactions"), or the long
+/// invitation form ("Réagir avec J'aime à la publication de …"). The long
+/// form names the first reaction, so it suffix-matches index 0 although
+/// nothing is selected.
+fn reaction_neutral(label: &str, picker: &[String]) -> bool {
+    let l = label.to_lowercase();
+    picker.first().is_some_and(|first| {
+        !first.is_empty()
+            && (l == *first
+                || l.starts_with(&format!("{first} "))
+                || l.starts_with(&format!("{first},"))
+                || l.starts_with(&format!("react with {first} to "))
+                || l.starts_with(&format!("réagir avec {first} à ")))
+    })
 }
 
 /// A reaction has landed only when the button shows a SELECTED state naming
@@ -438,6 +470,7 @@ fn reaction_landed(label: &str, picker: &[String], idx: usize) -> bool {
     picker
         .first()
         .is_some_and(|first| !first.is_empty() && label != first)
+        && !reaction_neutral(label, picker)
         && current_reaction(label, picker) == Some(idx)
 }
 
@@ -763,7 +796,8 @@ pub async fn react(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
         let label = label0.clone();
         let liked = labels
             .first()
-            .is_some_and(|first| !first.is_empty() && label != *first);
+            .is_some_and(|first| !first.is_empty() && label != *first)
+            && !reaction_neutral(&label, &labels);
         let current = if liked {
             current_reaction(&label, &labels)
         } else {
@@ -901,5 +935,48 @@ mod tests {
         assert!(reaction_landed("remove love", &picker, 1));
         assert!(!reaction_landed("remove love", &picker, 0));
         assert!(!reaction_landed("remove haha", &picker, 1));
+    }
+
+    #[test]
+    fn french_reaction_labels() {
+        // Labels seen on a French Facebook account; the picker gives the names.
+        let picker: Vec<String> = [
+            "j’aime",
+            "j’adore",
+            "solidaire",
+            "haha",
+            "wouah",
+            "triste",
+            "grrr",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        // The long neutral form names the first reaction but selects nothing.
+        assert!(reaction_neutral(
+            "réagir avec j’aime à la publication de logic nation",
+            &picker
+        ));
+        assert!(reaction_neutral("j’aime, 28 réactions", &picker));
+        assert!(!reaction_landed(
+            "réagir avec j’aime à la publication de logic nation",
+            &picker,
+            0
+        ));
+        // The long selected form: the reaction precedes the target separator.
+        assert!(!reaction_neutral(
+            "retirer j’adore de la publication de logic nation",
+            &picker
+        ));
+        assert_eq!(
+            current_reaction("retirer j’adore de la publication de logic nation", &picker),
+            Some(1)
+        );
+        assert_eq!(current_reaction("supprimer haha", &picker), Some(3));
+        assert!(reaction_landed(
+            "retirer j’aime de la publication de x",
+            &picker,
+            0
+        ));
     }
 }
