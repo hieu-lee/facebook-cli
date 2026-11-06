@@ -129,6 +129,7 @@ assert.strictEqual(F.groupPath('https://www.facebook.com/somepage'), null);
 console.log('js groupPath ok');
 assert.strictEqual(F.trunc('abcdef', 3), 'abc…');
 assert(F.ACT.test('Thích') && F.ACT.test('Reply') && !F.ACT.test('Hello'));
+assert(F.SPON.test('Sponzorováno') && F.SPON.test('Sponzorované') && F.SPON.test('Sponsorowane'), 'sponsored labels in Czech, Slovak and Polish');
 console.log('js ok');
 
 // emoji must never be cut in half (a lone surrogate is invalid JSON for the Rust side)
