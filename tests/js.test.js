@@ -92,6 +92,18 @@ for (const t of ['3 giờ trước', '22 phút', 'Hôm qua lúc 14:00', '17 Thá
 for (const t of ['Thích', 'Hieu Lee', '22 bình luận', 'Trả lời'])
   assert(!F.TIME.test(t), 'TIME should not match: ' + t);
 
+// A French Facebook account (labels seen live on one).
+for (const t of ['il y a 10 heures', '8 h', '1 j', '1 sem.', '7 sem.', '2 ans', 'À l’instant', 'Aujourd’hui à 14:05', 'Hier à 9:00', 'lundi à 10:00', '1er janv.', '12 mars 2024'])
+  assert(F.TIME.test(t), 'TIME should match: ' + t);
+for (const t of ['J’aime', "J'aime", 'Répondre', 'Partager', 'Modifié', 'Voir la traduction'])
+  assert(F.ACT.test(t), 'ACT should match: ' + t);
+assert.strictEqual(F.shortBadge('Oh My Mag Les comptes avec un badge Vérifié ont été authentifiés. Il peut s’agir d’abonnés Meta Verified ou de personnes ou de marques notables.'), 'Oh My Mag Verified');
+assert.strictEqual(F.clean('4\u202f890\u00a0€'), '4 890 €');
+const count = text => F.num({parentElement: {parentElement: {innerText: text}}});
+for (const t of ['28', '1.2K', '1,9 K', '40,1\u00a0K', '4\u202f890']) assert.strictEqual(count(t), t, 'count ' + t);
+assert.strictEqual(count('28 réactions'), '0');
+console.log('js french ok');
+
 assert.strictEqual(F.canon('https://www.facebook.com/groups/123/?multi_permalinks=456&hoisted=1&__cft__[0]=abc'), '/groups/123/posts/456');
 assert.strictEqual(F.canon('https://www.facebook.com/page/posts/pfbid0X?__cft__[0]=zz&__tn__=%2CO'), '/page/posts/pfbid0X');
 assert.strictEqual(F.canon('https://www.facebook.com/photo/?fbid=99&set=a.1&__cft__[0]=z'), '/photo/?fbid=99&set=a.1');
