@@ -75,7 +75,13 @@ async fn step(b: &Browser, t: &Tab) -> Res<Vec<Post>> {
         }
         for p in batch {
             if let Some(post) = resolve(b, t, &p).await? {
-                out.push(post);
+                // A post with no permalink (sponsored and suggested cards
+                // usually have none) can never be opened, reacted to or
+                // commented on — every action keys off the ref — so it
+                // does not belong in the listing (BlindFB #21).
+                if !post.url.is_empty() {
+                    out.push(post);
+                }
             } else {
                 return Ok(out);
             }
@@ -171,7 +177,7 @@ async fn collect(d: &Daemon, b: &Browser, t: &Tab, url: &str, args: &Args, out: 
         }
         for p in posts
             .into_iter()
-            .filter(|p| p.url.is_empty() || seen_urls.insert(p.url.clone()))
+            .filter(|p| seen_urls.insert(p.url.clone()))
             .take(n - count)
         {
             count += 1;
