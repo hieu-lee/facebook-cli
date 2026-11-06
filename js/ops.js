@@ -134,7 +134,7 @@
     if(!chunks.length)continue;
     const money=c=>/^[A-Z]{0,3}[$€£¥₫]\s*\d[\d.,\s]*$|^\d[\d.,\s]*[$€£¥₫đ]$|^(Free|Gratuit|Miễn phí)$/i.test(c);
     const price=chunks.find(money)||'';
-    const rest=chunks.filter(c=>!money(c));
+    const rest=chunks.filter(c=>!money(c)&&!/^(Just listed|Annonce récente)$/i.test(c));
     if(!byPath.has(p)&&clues.every(c=>normalize(chunks.join(' ')).includes(c)))byPath.set(p,{title:rest[0]||'',price,loc:rest.slice(1).join(' · ')});
    }
    return [...byPath.entries()].map(([p,g])=>({k:p,v:[g.title,'https://www.facebook.com'+p,trunc([g.price,g.loc].filter(Boolean).join(' · '),120),'listing']}));
