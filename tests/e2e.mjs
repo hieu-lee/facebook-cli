@@ -470,6 +470,7 @@ try{
   await evaluate('localStorage.removeItem("truncateDraft");JSON.stringify(true)');
  });
  await check('post receipt, Only me, view and delete',async()=>{const result=await fb('post','fixture private post','--to','me');assert.match(result,/^posted\tp\w+\t\/.*posts\//);const ref=result.split('\t')[1];assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.posts)[0].aud)'),'me');assert.match(await fb('view',ref),/fixture private post/);assert.match(await fb('delete',ref),/^deleted/);assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.posts).some(x=>x.text==="fixture private post"))'),false)});
+ await check('view lists the links inside comments',async()=>{const out=await fb('view','/fixture/posts/100','-n','5');assert.match(out,/^c\tCommenter One\t2h\tGreat post, see/m);assert.match(out,/^cl\thttps:\/\/example\.com\/story\?a=1\texample\.com\/story$/m);assert.match(out,/^cl\thttps:\/\/othersite\.org\/page\tOther Site$/m);assert.equal((out.match(/^cl\t/gm)||[]).length,2)});
  await check('post uploads an image in chunks and the page receives every byte',async()=>{
   const image=Buffer.alloc(7*1024*1024+1);for(let i=0;i<image.length;i++)image[i]=(i*31+i%251)&255;
   const file=path.join(temp,'upload.png');await writeFile(file,image);let sum=0;for(const x of image)sum=(sum*31+x)%1000003;
