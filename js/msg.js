@@ -128,15 +128,17 @@
   // a list cut to n rows is not the whole list, however far the scan got
   return {chats:[...seen.values()].slice(0,n),complete:complete&&seen.size<=n};
  };
+ // Facebook keeps a hidden (zero-size) notifications dialog mounted; only a visible dialog blocks input
+ const openDialog=()=>[...document.querySelectorAll('[role=dialog]')].some(F.visible);
  F.focusComposer=async()=>{
   await dismissRestore();
-  if(document.querySelector('[role=dialog]'))throw Error('Messenger dialog blocks input; inspect with `fb page`');
+  if(openDialog())throw Error('Messenger dialog blocks input; inspect with `fb page`');
   const tb=await waitFor(()=>document.querySelector('[role=textbox][contenteditable=true]'),8000,100);
   if(!tb)return false;
   tb.focus();
   return document.activeElement===tb;
  };
- F.composerMatches=text=>{const tb=document.querySelector('[role=textbox][contenteditable=true]');return !!tb&&document.activeElement===tb&&!document.querySelector('[role=dialog]')&&clean(tb.innerText)===clean(text)};
+ F.composerMatches=text=>{const tb=document.querySelector('[role=textbox][contenteditable=true]');return !!tb&&document.activeElement===tb&&!openDialog()&&clean(tb.innerText)===clean(text)};
  // `markSent` remembers the mounted messages and which one is the newest; `sentSince` is true once a NEW
  // message that is ours (by layout) shows up BELOW that newest one. Ids, not content: identical repeated
  // messages and recycled rows are handled; "below" matters because a virtualized log mounts older rows

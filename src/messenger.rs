@@ -323,6 +323,9 @@ fn is_thread_path(p: &str) -> bool {
     })
 }
 
+/// Profile loads tried before giving up on a verified thread link.
+const PROFILE_THREAD_ATTEMPTS: usize = 3;
+
 /// Follow Facebook's profile-owned chat link: encrypted thread IDs are not user IDs.
 async fn profile_thread(b: &std::sync::Arc<Browser>, profile: &str) -> Res<Resolved> {
     let path = crate::ops::fb_path(profile).ok_or("not a Facebook profile")?;
@@ -351,31 +354,35 @@ async fn profile_thread(b: &std::sync::Arc<Browser>, profile: &str) -> Res<Resol
     }
     let t = b.acquire().await?;
     let result = async {
-        b.goto(&t, url.as_str()).await?;
-        let info = b
-            .eval(
-                &t,
-                &format!("({})()", include_str!("../js/media-profile.js")),
-            )
-            .await?;
-        let owner = info["owner"]
-            .as_str()
-            .filter(|id| !id.is_empty() && id.len() <= 32 && id.bytes().all(|c| c.is_ascii_digit()))
-            .ok_or("profile identity unavailable; cannot resolve a verified Messenger thread")?;
-        let value = b
-            .eval(
-                &t,
-                &format!(
-                    "({})({})",
-                    include_str!("../js/profile-thread.js"),
-                    json!(owner)
-                ),
-            )
-            .await?;
-        let path = value.as_str().filter(|p| is_thread_path(p)).ok_or(
-            "could not resolve a verified Messenger thread from this profile; use a chat ref",
-        )?;
-        Resolved::path(path.to_string())
+        // Facebook sometimes leaves the profile's chat popup half-loaded, which hides the settings menu
+        // that carries the thread link. A fresh load of the profile recovers, so look a few times.
+        for _ in 0..PROFILE_THREAD_ATTEMPTS {
+            b.goto(&t, url.as_str()).await?;
+            let info = b
+                .eval(
+                    &t,
+                    &format!("({})()", include_str!("../js/media-profile.js")),
+                )
+                .await?;
+            let owner = info["owner"]
+                .as_str()
+                .filter(|id| !id.is_empty() && id.len() <= 32 && id.bytes().all(|c| c.is_ascii_digit()))
+                .ok_or("profile identity unavailable; cannot resolve a verified Messenger thread")?;
+            let value = b
+                .eval(
+                    &t,
+                    &format!(
+                        "({})({})",
+                        include_str!("../js/profile-thread.js"),
+                        json!(owner)
+                    ),
+                )
+                .await?;
+            if let Some(path) = value.as_str().filter(|p| is_thread_path(p)) {
+                return Resolved::path(path.to_string());
+            }
+        }
+        Err("could not resolve a verified Messenger thread from this profile; use a chat ref".into())
     }
     .await;
     b.release(t).await;
@@ -610,7 +617,11 @@ pub async fn read(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
         if let Some(e) = v["err"].as_str() {
             return Err(e.to_string());
         }
-        for m in v["msgs"].as_array().into_iter().flatten() {
+        let msgs = v["msgs"].as_array().map(Vec::as_slice).unwrap_or_default();
+        if msgs.is_empty() {
+            out.err("note: no messages loaded; the conversation is empty or Facebook has not rendered it (retry, or open the chat from the profile with `fb page`)\n");
+        }
+        for m in msgs {
             out.line(message_line(m));
         }
         Ok(())

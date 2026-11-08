@@ -244,7 +244,87 @@ console.log('js removed-newest ok');
   assert.strictEqual(lazy.chats.length, 40); // pagination that lands after reaching the bottom is awaited
   assert.strictEqual(lazy.complete, true);
   console.log('js chats ok');
+
+  // composer focus: Facebook keeps a hidden notifications dialog mounted, which must not block input;
+  // a visible dialog still does
+  const load = (dialogs, focused = false) => {
+    const box = { focus() { global.document.activeElement = box; }, innerText: 'hi' };
+    const F2 = { ...F, dismissRestore: async () => true, waitFor: async f => f() };
+    global.window = { __fb: F2 };
+    global.document = {
+      activeElement: focused ? box : null,
+      querySelectorAll: sel => (sel === '[role=dialog]' ? dialogs : []),
+      querySelector: sel => (sel === '[role=textbox][contenteditable=true]' ? box : null),
+    };
+    new Function(fs.readFileSync(path.join(__dirname, '../js/msg.js'), 'utf8')).call(global.window);
+    return F2;
+  };
+  const hidden = { getClientRects: () => [], isConnected: true };
+  const shown = { getClientRects: () => [{}], isConnected: true };
+  global.getComputedStyle = () => ({ visibility: 'visible' });
+  const ok = load([hidden]);
+  assert.strictEqual(await ok.focusComposer(), true);
+  assert.strictEqual(ok.composerMatches('hi'), true);
+  const blocked = load([hidden, shown]);
+  await assert.rejects(blocked.focusComposer(), /dialog blocks input/);
+  // a dialog that opens while the composer already holds focus and the right text must still stop the send
+  assert.strictEqual(load([hidden], true).composerMatches('hi'), true);
+  assert.strictEqual(load([hidden, shown], true).composerMatches('hi'), false);
+  console.log('js composer dialog ok');
+
+  // profile -> verified thread: a settings menu whose links load late is already open and must not be
+  // pressed again (that closes it); a Message press made before hydration is ignored and repeated
+  const pt = fs.readFileSync(path.join(__dirname, '../js/profile-thread.js'), 'utf8');
+  const lookup = ({ hydratedAt, linksAfter }) => {
+    let clock = 0, dock = false, menuOpen = false, openedAt = 0, settingsPresses = 0;
+    const el = (attrs, extra = {}) => ({
+      isConnected: true, parentElement: null, innerText: '', getClientRects: () => [{}],
+      getAttribute: k => attrs[k] ?? null, matches: () => true, closest: () => null,
+      querySelectorAll: () => [], ...extra,
+    });
+    const person = el({ href: '/profile.php?id=42' });
+    const trigger = el({ role: 'button', 'aria-label': 'Message' });
+    const settings = el({ role: 'button', 'aria-label': 'Chat settings' }, {
+      getAttribute: k => (k === 'aria-label' ? 'Chat settings' : k === 'role' ? 'button' : null),
+    });
+    const box = el({});
+    const popup = el({}, {
+      querySelectorAll: sel => (sel === '[role=textbox][contenteditable=true]' ? [box] : sel === 'a[href]' ? [person] : []),
+    });
+    settings.parentElement = popup;
+    const link = el({ href: '/messages/e2ee/t/777/' });
+    const menu = el({}, {
+      querySelectorAll: () => (clock - openedAt >= linksAfter ? [person, link] : []),
+    });
+    const F2 = {
+      ...F,
+      sleep: async ms => { clock += ms; },
+      waitFor: async (f, ms) => { const end = clock + ms; for (;;) { const v = f(); if (v) return v; if (clock >= end) return null; clock += 100; } },
+      press: e => {
+        if (e === trigger && clock >= hydratedAt) dock = true;
+        if (e === settings) { settingsPresses++; menuOpen = !menuOpen; if (menuOpen) openedAt = clock; }
+      },
+    };
+    global.window = { __fb: F2 };
+    global.location = { href: 'https://www.facebook.com/someone' };
+    global.getComputedStyle = () => ({ visibility: 'visible' });
+    global.document = {
+      body: {},
+      querySelectorAll: sel => {
+        if (sel.startsWith('[role=main]')) return [trigger];
+        if (sel.startsWith('[role=button][aria-label]')) return dock ? [settings] : [];
+        if (sel === '[role=menu]') return menuOpen ? [menu] : [];
+        return [];
+      },
+    };
+    return new Function('return ' + pt)()('42').then(r => ({ r, settingsPresses }));
+  };
+  assert.deepStrictEqual(await lookup({ hydratedAt: 0, linksAfter: 0 }), { r: '/messages/e2ee/t/777/', settingsPresses: 1 });
+  assert.deepStrictEqual(await lookup({ hydratedAt: 3000, linksAfter: 0 }), { r: '/messages/e2ee/t/777/', settingsPresses: 1 });
+  assert.deepStrictEqual(await lookup({ hydratedAt: 0, linksAfter: 4500 }), { r: '/messages/e2ee/t/777/', settingsPresses: 1 });
+  console.log('js profile thread ok');
 })().catch(e => { console.error(e); process.exit(1); });
+
 
 // post view: each comment's author reference comes only from that comment's own author link
 (async () => {
