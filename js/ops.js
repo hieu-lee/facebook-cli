@@ -228,13 +228,13 @@
  };
  // browsable hub lists (events, pages, places): anchors in main whose
  // canonical path matches the hub's own link shape, gathered like groups
- const hubList=async(n,ready,pathOf,note)=>{
-  const ok=await waitFor(()=>document.querySelector(ready),12000);
+ const hubList=async(n,ready,pathOf,note,anywhere=false)=>{
+  const ok=await waitFor(()=>anywhere?[...document.querySelectorAll('a[href]')].some(a=>pathOf(a.getAttribute('href'))):document.querySelector(ready),12000);
   if(!ok)return {rows:[],note};
   await sleep(600);
   const rows=await gather(n,()=>{
    const byPath=new Map();
-   for(const a of document.querySelectorAll('[role=main] a[href]')){
+   for(const a of document.querySelectorAll(anywhere?'a[href]':'[role=main] a[href]')){
     const p=pathOf(a.getAttribute('href'));if(!p)continue;
     const chunks=vtext(a).map(clean).filter(Boolean);
     if(!chunks.length)continue;
@@ -246,7 +246,7 @@
   });
   return {rows:rows.map(r=>r.v)};
  };
- F.places=async(n)=>hubList(n,'[role=main] a[href*="/places/"]',h=>{const p=stripQ(h);return /^\/places\/[^/?#]+(\/\d+)?\/?$/.test(p)?p:null;},'no places visible');
+ F.places=async(n)=>hubList(n,'[role=main] a[href*="/places/"]',h=>{const p=stripQ(h);return /^\/places\/[^/?#]+(\/\d+)?\/?$/.test(p)?p:null;},'no places visible',true);
  F.groupMembers=async(n)=>{
   const ok=await waitFor(()=>document.querySelector('[role=main] a[href]'),12000);
   if(!ok)return {rows:[],note:'no members visible'};
