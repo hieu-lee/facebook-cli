@@ -9,6 +9,7 @@ READ
   profile [who]                      key<TAB>value lines
   friends [who] [-n 30]              name, ref, mutual friends
   groups [-n 100] [--urls]           groups you have joined: name, ref, privacy and size
+  events [-n 50] [--urls]            events from your events page: name, ref, date and place info
   members <group> [-n 200] [--urls]  people in a group: name, ref, role or join info
   search <q> [--type top|posts|people|friends|photos|videos|pages|places|groups|events|marketplace] [--match text]... [-n 10]   top = All (default); friends = people narrowed by the Friends chip; rows carry a kind (post, profile, page, group, photo, video, event, place, listing); match visible clues
   stories <who> [--out dir] [-n N]  protected downloads, all visible stories by default
