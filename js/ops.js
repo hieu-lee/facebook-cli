@@ -226,6 +226,27 @@
   await sleep(300);scan();
   return {rows:[...acc].slice(0,n).map(([k,g])=>[g.name,k,trunc(g.info.join(' · '),120)])};
  };
+ // browsable hub lists (events, pages, places): anchors in main whose
+ // canonical path matches the hub's own link shape, gathered like groups
+ const hubList=async(n,ready,pathOf,note)=>{
+  const ok=await waitFor(()=>document.querySelector(ready),12000);
+  if(!ok)return {rows:[],note};
+  await sleep(600);
+  const rows=await gather(n,()=>{
+   const byPath=new Map();
+   for(const a of document.querySelectorAll('[role=main] a[href]')){
+    const p=pathOf(a.getAttribute('href'));if(!p)continue;
+    const chunks=vtext(a).map(clean).filter(Boolean);
+    if(!chunks.length)continue;
+    const cur=byPath.get(p)||{name:chunks[0],info:[]};
+    for(const c of chunks.slice(1))if(c!==cur.name&&!cur.info.includes(c))cur.info.push(c);
+    byPath.set(p,cur);
+   }
+   return [...byPath.entries()].map(([p,g])=>({k:p,v:[g.name,p,trunc(g.info.join(' · '),120)]}));
+  });
+  return {rows:rows.map(r=>r.v)};
+ };
+ F.pages=async(n)=>hubList(n,'[role=main] a[href]',h=>profilePath(h),'no pages visible');
  F.groupMembers=async(n)=>{
   const ok=await waitFor(()=>document.querySelector('[role=main] a[href]'),12000);
   if(!ok)return {rows:[],note:'no members visible'};
