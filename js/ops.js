@@ -32,7 +32,9 @@
    const btn=new Set([...a.querySelectorAll('[role=button]')].map(b=>clean(b.innerText)));
    const info=all.slice(1).filter(c=>c!==name&&!btn.has(c)&&c!=='·');
    const url=stripQ(l.href);
-   return {k:url,v:[name,{r:'u',v:url},trunc(info.join(' · '),160)]};
+   // the row's own web address rides along as a fourth field: clients hold
+   // only a ref for the target, and a ref cannot be opened in a browser.
+   return {k:url,v:[name,{r:'u',v:url},trunc(info.join(' · '),160),'https://www.facebook.com'+url]};
   }).filter(Boolean));
   return {rows:rows.map(r=>r.v)};
  };

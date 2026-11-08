@@ -39,6 +39,7 @@ try{
  const failures=[];
  async function check(name,fn){if(process.env.E2E_ONLY&&!name.includes(process.env.E2E_ONLY))return;try{await fn();report.push({check:name,pass:true})}catch(e){failures.push(name);report.push({check:name,pass:false,error:e.message})}}
  await check('profile extraction and obfuscated timestamp',async()=>{const posts=await fb('posts','me','-n','1');assert.match(posts,/^p\w+\t.*Existing profile post/m)});
+ await check('search rows carry their web address as a fourth field',async()=>{const out=await fb('search','fixture');const rows=out.trim().split('\n').map(l=>l.split('\t'));assert.equal(rows.length,3);for(const r of rows)assert.equal(r.length,4);const byName=Object.fromEntries(rows.map(r=>[r[0],r]));assert.equal(byName['Fixture User'][3],'https://www.facebook.com/fixture/posts/100');assert.equal(byName['Friend Person'][3],'https://www.facebook.com/friend-person');assert.equal(byName['Fixture Group'][3],'https://www.facebook.com/groups/111')});
  await check('PIN modal send is single and confirmed in three locales',async()=>{for(const locale of ['en','vi','fr']){
   await evaluate(`localStorage.restored="false";localStorage.locale=JSON.stringify("${locale}");JSON.stringify(true)`);
   assert.match(await fb('send','42','fixture send '+locale),/^sent/);
