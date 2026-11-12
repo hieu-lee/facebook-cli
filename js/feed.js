@@ -1,5 +1,5 @@
 (()=>{
- const {TIME,SPON,shortBadge,vtext,num,postCards,postText,canon,waitFor,clean}=window.__fb;
+ const {TIME,SPON,shortBadge,profileName,vtext,num,postCards,postText,canon,waitFor,clean}=window.__fb;
  let seen=new WeakMap();let seq=0,current=null;
  const timeNode=(u,tt)=>{const w=document.createTreeWalker(u,NodeFilter.SHOW_TEXT);let n;while(n=w.nextNode()){const t=n.nodeValue;if(!t||t.includes('\u034f')||n.parentElement.closest('blockquote'))continue;if(t.replace(/[\u200b-\u200f\u2060\ufeff]/g,'').trim()===tt)return n;}return null;};
  const decode=a=>{
@@ -69,7 +69,7 @@
     const reactions=g(u,'like_button');
     for(const profile of u.querySelectorAll('[data-ad-rendering-role=profile_name]')){
      if(!window.__fb.visible(profile)||profile.closest('blockquote')||(reactions&&!(profile.compareDocumentPosition(reactions)&Node.DOCUMENT_POSITION_FOLLOWING)))continue;
-     const author=shortBadge(clean(profile.innerText));if(author&&!head.includes(author))head.push(author);
+     const author=shortBadge(profileName(profile));if(author&&!head.includes(author))head.push(author);
     }
     const msg=g(u,'story_message');
     /* an unfilled card has no author or text yet: read it again once Facebook renders it */
