@@ -37,7 +37,7 @@
   return ok?true:'no preview';
  };
  // matched against the first line only: "Friends except..." is a different audience from "Friends"
- const AUD={public:/^(Công khai|Public|Publique|Público|Veřejné|Verejné|Publiczne|Öffentlich|Tutti|Openbaar|Herkese Açık|Доступно всем|Публічно|Offentligt|Offentlig|Julkinen)$/i,friends:/^(Bạn bè|Friends|Amis|Amigos|Přátelé|Priatelia|Znajomi|Freunde|Amici|Vrienden|Arkadaşlar|Друзья|Друзі|Vänner|Venner|Kaverit)$/i,me:/^(Chỉ mình tôi|Only me|Moi uniquement|Sólo yo|Solo yo|Somente eu|Jen já|Iba ja|Tylko ja|Nur ich|Solo io|Alleen ik|Sadece ben|Только я|Тільки я|Bara jag|Bare meg|Kun mig|Vain minä)$/i};
+ const AUD={public:/^(Công khai|Public|Publique|Público|Veřejné|Verejné|Publiczne|Öffentlich|Tutti|Openbaar|Herkese Açık|Доступно всем|Публічно|Offentligt|Offentlig|Julkinen)$/i,friends:/^(Bạn bè|Friends|Amis|Amigos|Přátelé|Priatelia|Znajomi|Freunde|Amici|Vrienden|Arkadaşlar|Друзья|Друзі|Vänner|Venner|Kaverit)$/i,me:/^(Chỉ mình tôi|Only me|Moi uniquement|Sólo yo|Solo yo|Somente eu|Jen já|Len ja|Iba ja|Tylko ja|Nur ich|Solo io|Alleen ik|Sadece ben|Только я|Тільки я|Bara jag|Bare meg|Kun mig|Vain minä)$/i};
  F.AUD=AUD;
  const first=t=>clean(t).split('\n')[0].trim();
  F.composeAudience=async(kind)=>{
