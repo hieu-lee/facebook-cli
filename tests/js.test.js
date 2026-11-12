@@ -631,3 +631,24 @@ console.log('js removed-newest ok');
   ]) assert.strictEqual(kindOf(href), kind, href);
   console.log('js search kinds ok');
 })();
+
+(async () => {
+  // feed step: when neither the scrambled-span decode nor the visible chunks
+  // carry a time, the timestamp link's own text is the time
+  const link = { getAttribute: n => (n === 'href' ? 'https://www.facebook.com/alice/posts/999' : null), innerText: 'November 3 at 5:30 PM', focus() {}, blur() {}, compareDocumentPosition: () => 4 };
+  const name = { innerText: 'Alice', querySelector: () => null, closest: () => null };
+  const message = { querySelectorAll: () => [] };
+  const card = {
+    querySelector: sel => (sel.includes('profile_name') ? name : sel.includes('story_message') ? message : null),
+    querySelectorAll: sel => (sel === 'a[href]' ? [link] : sel.includes('profile_name') ? [name] : []),
+    getAttribute: () => null,
+  };
+  const pageWindow = { __fb: { ...F, postCards: () => [card], postText: () => 'Hello', vtext: () => ['Alice', 'Hello'], num: () => '0', visible: () => true } };
+  const pageDocument = { createTreeWalker: () => ({ nextNode: () => null }), querySelectorAll: () => [], querySelector: () => null };
+  // Passed as parameters so the other async checks keep their own page globals.
+  new Function('window', 'document', 'NodeFilter', 'Node', fs.readFileSync(path.join(__dirname, '../js/feed.js'), 'utf8')).call(pageWindow, pageWindow, pageDocument, { SHOW_TEXT: 4 }, { DOCUMENT_POSITION_FOLLOWING: 4 });
+  const posts = await pageWindow.__fbFeed.step();
+  assert.strictEqual(posts.length, 1);
+  assert.strictEqual(posts[0].time, 'November 3 at 5:30 PM');
+  console.log('js feed time fallback ok');
+})().catch(e => { console.error(e); process.exit(1); });
