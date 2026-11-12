@@ -99,7 +99,8 @@
     const info=all.filter(c=>c!==name&&!nameParts.includes(c)&&!btn.has(c)&&c!=='·');
     const kind=F.kindOf(url)||({people:'profile',pages:'page',groups:'group',events:'event',photos:'photo',videos:'video',posts:'post',places:'place'})[type]||'profile';
     const target=['photo','video','event','place','listing'].includes(kind)?'https://www.facebook.com'+url:{r:'u',v:url};
-    const row={k:url,node:a,v:[name,target,trunc(info.join(' · '),160),kind]};
+    // Keep the target and kind columns; clients can open the final URL in a browser.
+    const row={k:url,node:a,v:[name,target,trunc(info.join(' · '),160),kind,'https://www.facebook.com'+url]};
     if(seen.has(url)){if(order(row,seen.get(url))<0)seen.set(url,row);continue}
     added.add(url);found.push(row);
     if((final?found.length:seen.size+found.length)>=n)break;

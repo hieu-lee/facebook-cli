@@ -110,7 +110,7 @@ try{
  });
  await check('search arbitrary clues and limit',async()=>{
   const result=(await fb('search','Alice','--type','people','--match',' paris ','--match','dai hoc','-n','1')).split('\n');
-  assert.equal(result.length,1);assert.match(result[0],/^Alice One\tu[a-z0-9]+\t.*Paris.*Đại học NEOMA\tprofile$/);
+  assert.equal(result.length,1);assert.match(result[0],/^Alice One\tu[a-z0-9]+\t.*Paris.*Đại học NEOMA\tprofile\thttps:\/\/www\.facebook\.com\/[^\t]+$/);
   await assert.rejects(()=>fb('stories',result[0].split('\t')[1]),/unsupported media host/);
   assert.match(await fb('search','Alice','--type','people','--match','Science Academy','-n','1'),/^Alice One\t/);
   assert.match(await fb('search','Alice','--type','people','--match','Mira','-n','1'),/^Mira\t/);
@@ -120,11 +120,11 @@ try{
   assert.equal(await fb('search','Alice','--type','people','--match','Secret University','-n','1'),'');
   assert.equal(await fb('search','Alice','--type','people','--match','Hidden College','-n','1'),'');
   assert.equal(await fb('search','Alice','--type','people','--match','Ghost College','-n','1'),'');
-  assert.match(await fb('search','Sparse','--type','people','--match','Rare University','-n','1'),/^Sparse 16\tu[a-z0-9]+\tRare University\tprofile$/);
+  assert.match(await fb('search','Sparse','--type','people','--match','Rare University','-n','1'),/^Sparse 16\tu[a-z0-9]+\tRare University\tprofile\thttps:\/\/www\.facebook\.com\/[^\t]+$/);
   assert.match(await fb('search','Recycled','--type','people','--match','Rare University','-n','1'),/^Recycled 16\tu[a-z0-9]+\t/);
   assert.match(await fb('search','Reveal','--type','people','--match','Paris','-n','1'),/^Earlier\t/);
   assert.match(await fb('search','Delayed','--type','people','--match','Paris','-n','1'),/^Delayed\t/);
-  assert.match(await fb('search','Alias','--type','people','--match','Paris','-n','1'),/^Marc\tu[a-z0-9]+\t.*\tprofile$/);
+  assert.match(await fb('search','Alias','--type','people','--match','Paris','-n','1'),/^Marc\tu[a-z0-9]+\t.*\tprofile\thttps:\/\/www\.facebook\.com\/[^\t]+$/);
   assert.match(await fb('search','Alias','--type','people','--match','Academy','-n','1'),/^Marc\t/);
   const emptyStart=performance.now();assert.equal(await fb('search','Empty','--type','people','-n','1'),'');assert(performance.now()-emptyStart<10000);
   assert.equal(await fb('search','Ambiguous','--type','people','--match','Alice','-n','1'),'');
@@ -926,6 +926,14 @@ try{
   await fb('page','a','key','Escape');await fb('page','a','scroll','0','100');await fb('page','a','close');await fb('page','b','close');await assert.rejects(()=>fb('page','a','snapshot'));
   await fb('page','restart','open','https://www.facebook.com/fixture');await fb('stop');await assert.rejects(()=>fb('page','restart','snapshot'));
  });
+ await check('search rows carry their web address as a fifth field',async()=>{
+  const rows=(await fb('search','fixture','--type','top')).trim().split('\n').map(l=>l.split('\t'));
+  assert.equal(rows.length,3);for(const row of rows)assert.equal(row.length,5);
+  const byName=Object.fromEntries(rows.map(row=>[row[0],row]));
+  for(const [name,kind,path] of [['Fixture User','post','/fixture/posts/100'],['Friend Person','profile','/friend-person'],['Fixture Group','group','/groups/111']]){
+   assert.match(byName[name][1],/^u[a-z0-9]+$/);assert.equal(byName[name][3],kind);assert.equal(byName[name][4],'https://www.facebook.com'+path);
+  }
+ });
  await check('search types, friends chip and marketplace rows',async()=>{
   assert.match(await fb('search','person','--type','people'),/Friend Person/);
   assert.match(await fb('search','person','--type','people'),/Stranger Person/);
@@ -940,7 +948,7 @@ try{
   assert.match(await fb('search','chair','--type','photos'),/Photo of a chair/);
   const videos=(await fb('search','chair','--type','videos')).split('\n');
   assert.deepEqual(videos.map(r=>r.split('\t')[0]),['Chair assembly video','Chair repair video']);
-  assert.match(videos[0],/\thttps:\/\/www\.facebook\.com\/watch\/\?v=654\t.*\tvideo$/);assert.match(videos[1],/\?v=655\t.*\tvideo$/);
+  assert.match(videos[0],/\thttps:\/\/www\.facebook\.com\/watch\/\?v=654\t.*\tvideo\thttps:\/\/www\.facebook\.com\/[^\t]+$/);assert.match(videos[1],/\?v=655\t.*\tvideo\thttps:\/\/www\.facebook\.com\/[^\t]+$/);
   const market=await fb('search','chair','--type','marketplace');
   assert.match(market,/Wooden chair/);assert.match(market,/\$40.*Vancouver/);
   assert.match(market,/https:\/\/www\.facebook\.com\/marketplace\/item\/555\t.*\tlisting/);
@@ -952,7 +960,7 @@ try{
   assert.match(await fb('search','chair','--type','marketplace','--match','lyon'),/^Chaise basse\thttps:\/\/www\.facebook\.com\/marketplace\/item\/560\tGratuit · Lyon\tlisting$/);
   assert.match(await fb('search','chair','--type','marketplace','--match','ghe go'),/^Ghế gỗ\thttps:\/\/www\.facebook\.com\/marketplace\/item\/559\t40\.000 ₫ · Hà Nội\tlisting$/);
   assert.match(await fb('search','chair','--type','marketplace','--match','Paris'),/^Chaise\thttps:\/\/www\.facebook\.com\/marketplace\/item\/557\t40 € · Paris\tlisting$/);
-  assert.match(await fb('search','Permalink','--type','top'),/^Permalink Author\tu[a-z0-9]+\t.*\tpost$/);
+  assert.match(await fb('search','Permalink','--type','top'),/^Permalink Author\tu[a-z0-9]+\t.*\tpost\thttps:\/\/www\.facebook\.com\/[^\t]+$/);
  });
  await check('group members list every profile link form',async()=>{
   const out=await fb('members','/groups/111','-n','10','--urls');
