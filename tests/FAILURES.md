@@ -48,6 +48,11 @@ or missing URLs while loading. A failed create must never return any old post re
 Reject malformed response, foreign actor, external URL, missing/ambiguous evidence;
 then read the exact created URL and full rendered body back before returning a ref.
 
+Facebook can also publish asynchronously: `story` is null and `story_id` is set, which
+its own composer treats as a pending post. That is acceptance, not failure. Reject a
+foreign actor in the id, wait about a minute for the post's own page to show the body,
+then report `posted`, or `pending` if it has not appeared. Never publish again.
+
 Fill must not change a covered control behind a modal. Check coverage before focus
 or selection. Reject checkbox/radio/file/date/etc. as non-text fill targets rather
 than silently dispatching text that cannot change the control. Use click/CDP for

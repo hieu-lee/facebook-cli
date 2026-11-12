@@ -88,7 +88,7 @@ Run `fb help` for the exact list. `<who>` is `me`, a name, `@vanity`, an id, a U
 
 | Act | |
 |---|---|
-| `post <text> [--img file]... [--video file]... [--to public\|friends\|me]` | verified `posted<TAB>ref<TAB>path` receipt; directly usable by `view`/`delete` |
+| `post <text> [--img file]... [--video file]... [--to public\|friends\|me]` | verified `posted<TAB>ref<TAB>path` receipt; directly usable by `view`/`delete`; `pending<TAB>ref<TAB>path` or `pending` means Facebook accepted it and is still publishing, so do not retry |
 | `comment <post> <text>` | |
 | `react <post> [like\|love\|care\|haha\|wow\|sad\|angry\|none]` | idempotent |
 | `delete <post>` | your own posts |
