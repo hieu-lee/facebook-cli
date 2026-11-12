@@ -161,5 +161,8 @@
   const before=l.slice(sep+2,colon<0?l.length:colon).trim();
   return {t:tm[0],sender:before,text:colon>=0?clean(l.slice(colon+2)):''};
  };
- window.__fb={shortBadge,parseLabel,mergeChunks,press,sleep,clean,vtext,waitFor,visible,enabled,dismissRestore,postCards,postText,canon,groupPath,profilePath,addGroup,TIME,SPON,ACT,trunc,scrollerOf,num};
+ /* a header's profile_name text without its own buttons: a group post's holds
+    "Name · Follow" (FB innerText lines), which read as a second author */
+ const profileName=el=>{const b=new Set([...el.querySelectorAll('[role=button]')].map(x=>clean(x.innerText)));return clean((el.innerText||'').split('\n').filter(l=>!b.has(clean(l))&&!/^[\s·]*$/.test(l)).join(' '))};
+ window.__fb={shortBadge,profileName,parseLabel,mergeChunks,press,sleep,clean,vtext,waitFor,visible,enabled,dismissRestore,postCards,postText,canon,groupPath,profilePath,addGroup,TIME,SPON,ACT,trunc,scrollerOf,num};
 })();
