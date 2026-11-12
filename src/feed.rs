@@ -1,7 +1,7 @@
 use crate::browser::{Browser, Tab};
 use crate::cdp::Res;
 use crate::daemon::{Daemon, Out};
-use crate::messenger::one_line;
+use crate::messenger::push_one_line;
 use crate::ops::Args;
 use serde_json::Value;
 use std::sync::Arc;
@@ -18,27 +18,27 @@ pub struct Post {
     pub ad: bool,
 }
 
-fn format_post(d: &Daemon, p: &Post, full: bool, urls: bool) -> String {
-    let text = one_line(&p.text);
-    let text = if full {
-        text
-    } else {
-        crate::messenger::trunc(&text, 280)
-    };
-    let id = if p.url.is_empty() {
-        "-".to_string()
+pub(crate) fn format_post(refs: &crate::refs::Refs, p: &Post, urls: bool) -> String {
+    let mut line = String::with_capacity(p.url.len() + p.author.len() + p.text.len() + 32);
+    if p.url.is_empty() {
+        line.push('-');
     } else if urls {
-        p.url.clone()
+        line.push_str(&p.url);
     } else {
-        d.refs.put('p', &p.url)
-    };
-    let ad = if p.ad { " [ad]" } else { "" };
-    format!(
-        "{id}\t{}{ad}\t{}\t{}\t{text}",
-        one_line(&p.author),
-        one_line(&p.time),
-        p.stats
-    )
+        refs.put_into('p', &p.url, &mut line);
+    }
+    line.push('\t');
+    push_one_line(&mut line, &p.author);
+    if p.ad {
+        line.push_str(" [ad]");
+    }
+    line.push('\t');
+    push_one_line(&mut line, &p.time);
+    line.push('\t');
+    line.push_str(&p.stats);
+    line.push('\t');
+    push_one_line(&mut line, &p.text);
+    line
 }
 
 /// A wedged Chrome call must end the pump (so the next `fb feed` can start a new one), not hang it.
@@ -59,55 +59,102 @@ async fn wait_main(b: &Browser, t: &Tab) -> Res<()> {
     Ok(())
 }
 
-/// Posts that newly appeared on screen, each resolved to a permalink via a trusted hover
-/// (the page script hands out one post at a time so its hover coordinates stay valid).
+/// Posts that newly appeared on screen. Most arrive with the permalink focus revealed; the rest
+/// resolve via a trusted hover (the page script ends a batch with at most one of those, so its
+/// hover coordinates stay valid).
 async fn step(b: &Browser, t: &Tab) -> Res<Vec<Post>> {
     let mut out = Vec::new();
     loop {
         let raw = b.eval(t, "window.__fbFeed.step()").await?;
-        let Some(p) = raw.as_array().and_then(|a| a.first()).cloned() else {
-            return Ok(out);
+        let batch = match raw {
+            Value::Array(a) => a,
+            _ => Vec::new(),
         };
-        let mut url = String::new();
-        if let Some(h) = p["hover"].as_array()
-            && let (Some(x), Some(y)) = (h[0].as_f64(), h[1].as_f64())
-        {
-            b.hover(t, x, y).await?;
-            tokio::time::sleep(Duration::from_millis(30)).await;
-            let r = b
-                .eval(t, &format!("window.__fbFeed.href({x},{y},{})", p["pos"]))
-                .await?;
-            if r.is_null() {
+        if batch.is_empty() {
+            return Ok(out);
+        }
+        for p in batch {
+            if let Some(post) = resolve(b, t, &p).await? {
+                out.push(post);
+            } else {
                 return Ok(out);
             }
-            url = r.as_str().unwrap_or("").to_string();
         }
-        if !crate::ops::is_post_path(&url) {
-            url = p["alt"].as_str().unwrap_or("").to_string();
-        }
-        if !crate::ops::is_post_path(&url) {
-            url.clear();
-        }
-        let s = |k: &str| p[k].as_str().unwrap_or("").to_string();
-        out.push(Post {
-            author: s("author"),
-            time: s("time"),
-            stats: format!(
-                "{}/{}/{}",
-                p["r"].as_str().unwrap_or("0"),
-                p["c"].as_str().unwrap_or("0"),
-                p["s"].as_str().unwrap_or("0")
-            ),
-            text: s("text"),
-            url,
-            ad: p["ad"] == Value::Bool(true),
-        });
     }
+}
+
+/// Drops what a reload shows again. Posts without a permalink are counted per author and text, so
+/// two different ones in a single load both pass while a replay of either does not.
+#[derive(Default)]
+struct Replays {
+    urls: std::collections::HashSet<String>,
+    /// (posts this load, posts over all loads), per author and text
+    urlless: std::collections::HashMap<(String, String), (usize, usize)>,
+}
+
+impl Replays {
+    fn fresh(&mut self, p: &Post) -> bool {
+        if !p.url.is_empty() {
+            return self.urls.insert(p.url.clone());
+        }
+        let (now, ever) = self
+            .urlless
+            .entry((p.author.clone(), p.text.clone()))
+            .or_default();
+        *now += 1;
+        let new = *now > *ever;
+        *ever = (*ever).max(*now);
+        new
+    }
+
+    fn reload(&mut self) {
+        for (now, _) in self.urlless.values_mut() {
+            *now = 0;
+        }
+    }
+}
+
+/// `None` when the hovered card changed under the pointer; the page script retries it next step.
+async fn resolve(b: &Browser, t: &Tab, p: &Value) -> Res<Option<Post>> {
+    let mut url = p["url"].as_str().unwrap_or("").to_string();
+    if let Some(h) = p["hover"].as_array()
+        && let (Some(x), Some(y)) = (h[0].as_f64(), h[1].as_f64())
+    {
+        b.hover(t, x, y).await?;
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        let r = b
+            .eval(t, &format!("window.__fbFeed.href({x},{y},{})", p["pos"]))
+            .await?;
+        if r.is_null() {
+            return Ok(None);
+        }
+        url = r.as_str().unwrap_or("").to_string();
+    }
+    if !crate::ops::is_post_path(&url) {
+        url = p["alt"].as_str().unwrap_or("").to_string();
+    }
+    if !crate::ops::is_post_path(&url) {
+        url.clear();
+    }
+    let s = |k: &str| p[k].as_str().unwrap_or("").to_string();
+    Ok(Some(Post {
+        author: s("author"),
+        time: s("time"),
+        stats: format!(
+            "{}/{}/{}",
+            p["r"].as_str().unwrap_or("0"),
+            p["c"].as_str().unwrap_or("0"),
+            p["s"].as_str().unwrap_or("0")
+        ),
+        text: s("text"),
+        url,
+        ad: p["ad"] == Value::Bool(true),
+    }))
 }
 
 /// One-shot scroll of any page whose posts use the feed layout (profiles, pages, groups).
 async fn collect(d: &Daemon, b: &Browser, t: &Tab, url: &str, args: &Args, out: &Out) -> Res<()> {
-    let (n, full, urls) = (args.n.unwrap_or(10), args.flag("full"), args.flag("urls"));
+    let (n, urls) = (args.n.unwrap_or(10), args.flag("urls"));
     b.goto(t, url).await?;
     wait_main(b, t).await?;
     let t0 = Instant::now();
@@ -128,7 +175,7 @@ async fn collect(d: &Daemon, b: &Browser, t: &Tab, url: &str, args: &Args, out: 
             .take(n - count)
         {
             count += 1;
-            out.line(format_post(d, &p, full, urls));
+            out.line(format_post(&d.refs, &p, urls));
         }
         b.eval(t, "window.__fbFeed.scroll()").await?;
         tokio::time::sleep(Duration::from_millis(150)).await;
@@ -174,7 +221,7 @@ struct Inner {
     error: Option<String>,
 }
 
-const AHEAD: usize = 25;
+const AHEAD: usize = 60;
 const STALE: Duration = Duration::from_secs(20 * 60);
 
 impl FeedBuf {
@@ -208,14 +255,19 @@ impl FeedBuf {
             return Ok(());
         }
         let t = bounded(60, b.new_tab(None)).await?;
-        let r = async {
+        let open = || {
             bounded(60, async {
                 b.goto(&t, "https://www.facebook.com/").await?;
                 wait_main(b, &t).await
             })
-            .await?;
+        };
+        let r = async {
+            open().await?;
             let mut last = Instant::now();
-            let mut seen_urls = std::collections::HashSet::new();
+            let mut reloads = 0;
+            let mut nudged = Instant::now();
+            let mut seen = Replays::default();
+            let mut frozen = false;
             loop {
                 let notified = self.wake.notified();
                 tokio::pin!(notified);
@@ -227,18 +279,31 @@ impl FeedBuf {
                     }
                     if g.posts.len() - g.cursor >= AHEAD.max(g.want) {
                         drop(g);
+                        // Parked at the read-ahead limit: freeze the page so
+                        // the buffered tab costs no CPU while it waits. The
+                        // wake below is Rust-side and still fires; stepping
+                        // unfreezes first, so a refill is never slowed.
+                        if !frozen {
+                            b.set_lifecycle(&t, true).await?;
+                            frozen = true;
+                        }
                         let _ = tokio::time::timeout(Duration::from_secs(30), notified).await;
                         last = Instant::now();
                         continue;
                     }
                 }
+                if frozen {
+                    b.set_lifecycle(&t, false).await?;
+                    frozen = false;
+                }
                 let posts: Vec<_> = bounded(45, step(b, &t))
                     .await?
                     .into_iter()
-                    .filter(|p| p.url.is_empty() || seen_urls.insert(p.url.clone()))
+                    .filter(|p| seen.fresh(p))
                     .collect();
                 if !posts.is_empty() {
                     last = Instant::now();
+                    reloads = 0;
                     let mut g = self.inner.lock().await;
                     if g.epoch != epoch {
                         return Ok(());
@@ -246,8 +311,23 @@ impl FeedBuf {
                     g.posts.extend(posts);
                     drop(g);
                     self.wake.notify_waiters();
-                } else if last.elapsed() > Duration::from_secs(25) {
-                    return Err("feed stopped loading".into());
+                } else if last.elapsed() > Duration::from_secs(12) {
+                    // Nudging did not help; a fresh load has more posts (Replays drops the repeats),
+                    // so only quit when reloading stops helping too.
+                    if reloads == 2 {
+                        return Err("feed stopped loading".into());
+                    }
+                    reloads += 1;
+                    seen.reload();
+                    open().await?;
+                    last = Instant::now();
+                    continue;
+                } else if last.elapsed() > Duration::from_secs(3)
+                    && nudged.elapsed() > Duration::from_secs(3)
+                {
+                    // Facebook sometimes stops adding posts at the bottom of the page
+                    bounded(10, b.eval(&t, "window.__fbFeed.nudge()")).await?;
+                    nudged = Instant::now();
                 }
                 bounded(10, b.eval(&t, "window.__fbFeed.scroll()")).await?;
                 tokio::time::sleep(Duration::from_millis(150)).await;
@@ -342,9 +422,220 @@ pub async fn feed(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     let a = crate::ops::parse(args, &[], &["refresh", "full", "urls"])?;
     let b = d.browser(out).await?;
     d.feed.start(&b, a.flag("refresh")).await;
-    let (full, urls) = (a.flag("full"), a.flag("urls"));
+    let urls = a.flag("urls");
     for p in d.feed.take(a.n.unwrap_or(10)).await? {
-        out.line(format_post(d, &p, full, urls));
+        out.line(format_post(&d.refs, &p, urls));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn post(author: &str, text: &str, url: &str) -> Post {
+        Post {
+            author: author.into(),
+            time: "2h".into(),
+            stats: "0/0/0".into(),
+            text: text.into(),
+            url: url.into(),
+            ad: false,
+        }
+    }
+
+    #[test]
+    fn post_lines_flatten_whitespace_and_use_refs_or_urls() {
+        let refs = crate::refs::Refs::load(
+            std::env::temp_dir().join(format!("fb-feed-refs-{}", std::process::id())),
+        );
+        let mut p = post(
+            " Page \n One ",
+            "line one\n\n  line\ttwo ",
+            "/a/posts/pfbid0X",
+        );
+        p.time = "2 h".into();
+        p.stats = "1/2/3".into();
+        p.ad = true;
+        let short = refs.put('p', "/a/posts/pfbid0X");
+        assert_eq!(
+            format_post(&refs, &p, false),
+            format!("{short}\tPage One [ad]\t2 h\t1/2/3\tline one line two")
+        );
+        assert_eq!(
+            format_post(&refs, &p, true),
+            "/a/posts/pfbid0X\tPage One [ad]\t2 h\t1/2/3\tline one line two"
+        );
+        p.url.clear();
+        p.ad = false;
+        assert_eq!(
+            format_post(&refs, &p, false),
+            "-\tPage One\t2 h\t1/2/3\tline one line two"
+        );
+    }
+
+    #[test]
+    fn replays_after_a_reload_are_dropped_but_distinct_urlless_posts_pass() {
+        let mut seen = Replays::default();
+        let sale = post("Shop", "Sale", "");
+        assert!(seen.fresh(&sale));
+        assert!(
+            seen.fresh(&sale),
+            "a second identical post in one load is distinct"
+        );
+        assert!(seen.fresh(&post("x", "y", "/a/posts/1")));
+        seen.reload();
+        assert!(!seen.fresh(&post("x", "y", "/a/posts/1")));
+        assert!(!seen.fresh(&sale));
+        assert!(!seen.fresh(&sale));
+        assert!(seen.fresh(&sale), "a third copy after the reload is new");
+        assert!(seen.fresh(&post("Shop", "Other", "")));
+    }
+
+    /// Fake Chrome that serves one 60-post feed batch per tab and withholds
+    /// the reply to one kind of lifecycle request. Returns the log of
+    /// `method:detail` calls it saw.
+    async fn feed_chrome_withholding(
+        io: tokio::io::DuplexStream,
+        withheld_state: &'static str,
+    ) -> Arc<std::sync::Mutex<Vec<String>>> {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message;
+        let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = log.clone();
+        tokio::spawn(async move {
+            let mut ws = tokio_tungstenite::accept_async(io).await.unwrap();
+            let (mut created, mut batch_sent) = (0, false);
+            while let Some(Ok(Message::Text(text))) = ws.next().await {
+                let req: Value = serde_json::from_str(text.as_str()).unwrap();
+                let method = req["method"].as_str().unwrap();
+                let result = match method {
+                    "Target.createTarget" => {
+                        created += 1;
+                        batch_sent = false;
+                        serde_json::json!({"targetId": format!("T{created}")})
+                    }
+                    "Target.attachToTarget" => serde_json::json!({"sessionId": "S"}),
+                    "Page.setWebLifecycleState" => {
+                        let state = req["params"]["state"].as_str().unwrap();
+                        seen.lock().unwrap().push(format!("{method}:{state}"));
+                        if state == withheld_state {
+                            continue;
+                        }
+                        serde_json::json!({})
+                    }
+                    "Target.closeTarget" => {
+                        let target = req["params"]["targetId"].as_str().unwrap();
+                        seen.lock().unwrap().push(format!("{method}:{target}"));
+                        serde_json::json!({})
+                    }
+                    "Runtime.evaluate" => {
+                        let expr = req["params"]["expression"].as_str().unwrap();
+                        let value = match expr {
+                            "!!document.querySelector('[role=main]')" => serde_json::json!(true),
+                            "window.__fbFeed.step()" if !batch_sent => {
+                                batch_sent = true;
+                                Value::Array(
+                                    (0..AHEAD)
+                                        .map(|n| {
+                                            serde_json::json!({
+                                                "author": "A", "text": format!("post {n}"),
+                                                "url": format!("/a/posts/{n}"), "time": "now",
+                                            })
+                                        })
+                                        .collect(),
+                                )
+                            }
+                            "window.__fbFeed.step()" => serde_json::json!([]),
+                            _ => serde_json::json!(false),
+                        };
+                        serde_json::json!({"result": {"value": value}})
+                    }
+                    _ => serde_json::json!({}),
+                };
+                let reply = serde_json::json!({"id": req["id"], "result": result});
+                ws.send(Message::text(reply.to_string())).await.unwrap();
+            }
+        });
+        log
+    }
+
+    async fn settle() {
+        for _ in 0..40 {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    /// Chrome keeps the connection open but never answers one lifecycle
+    /// request: the pump must give the tab up, so `--refresh` gets a new one.
+    async fn refresh_recovers_when_chrome_ignores(stuck_state: &'static str) {
+        let (client_io, server_io) = tokio::io::duplex(1 << 20);
+        let log = feed_chrome_withholding(server_io, stuck_state).await;
+        let cdp = crate::cdp::Cdp::connect(client_io, "ws://fixture.local/")
+            .await
+            .unwrap();
+        let browser = Browser::new(cdp.clone());
+        let buf = Arc::new(FeedBuf::default());
+        buf.start(&browser, false).await;
+        for _ in 0..100 {
+            settle().await;
+            if buf.inner.lock().await.posts.len() >= AHEAD {
+                break;
+            }
+            tokio::time::advance(Duration::from_millis(50)).await;
+        }
+        assert_eq!(buf.inner.lock().await.posts.len(), AHEAD);
+        for _ in 0..100 {
+            settle().await;
+            if log
+                .lock()
+                .unwrap()
+                .contains(&"Page.setWebLifecycleState:frozen".to_string())
+            {
+                break;
+            }
+            tokio::time::advance(Duration::from_millis(50)).await;
+        }
+        assert!(
+            log.lock()
+                .unwrap()
+                .contains(&"Page.setWebLifecycleState:frozen".to_string()),
+            "the parked pump must reach the freeze request"
+        );
+        if stuck_state == "active" {
+            // let the reader take a post so the parked pump has to thaw
+            assert_eq!(buf.take(1).await.unwrap().len(), 1);
+        }
+        for _ in 0..60 {
+            tokio::time::advance(Duration::from_secs(1)).await;
+            settle().await;
+        }
+        assert!(
+            !buf.inner.lock().await.running,
+            "pump must end after the unanswered {stuck_state} request"
+        );
+        assert!(
+            log.lock()
+                .unwrap()
+                .contains(&"Target.closeTarget:T1".to_string()),
+            "the tab with unknown lifecycle state must be closed"
+        );
+        buf.start(&browser, true).await;
+        for _ in 0..30 {
+            tokio::time::advance(Duration::from_secs(1)).await;
+            settle().await;
+        }
+        assert_eq!(buf.inner.lock().await.posts.len(), AHEAD);
+        cdp.close();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn refresh_recovers_when_chrome_ignores_the_freeze() {
+        refresh_recovers_when_chrome_ignores("frozen").await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn refresh_recovers_when_chrome_ignores_the_thaw() {
+        refresh_recovers_when_chrome_ignores("active").await;
+    }
 }

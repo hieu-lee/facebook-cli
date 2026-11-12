@@ -2,7 +2,7 @@
 
 Facebook and Messenger for LLM agents, as a single fast Rust CLI.
 
-`fb` drives a dedicated Chrome profile that stays logged in to your Facebook account. It reads the feed, profiles, friends and search. It reads and sends Messenger messages and images. It posts, comments, reacts and deletes. Output is built for models: one record per line, tab separated, short refs instead of long URLs, no decoration.
+`fb` drives a dedicated Chrome profile that stays logged in to your Facebook account. It reads the feed, profiles, friends, joined groups and search. It reads and sends Messenger messages and images. It posts, comments, reacts and deletes. Output is built for models: one record per line, tab separated, short refs instead of long URLs, no decoration.
 
 ```
 $ fb feed -n 3
@@ -27,7 +27,7 @@ sent
 - **One daemon, many tabs.** The first `fb` call starts a daemon that owns one Chrome connection. Every later call is a ~1 ms client that talks to it over a unix socket. Each command runs in its own tab, so commands run in parallel. Post twice while chatting with a friend by running the commands at the same time, or use `fb batch "post ..." "post ..." "send ana hi"`.
 - **Warm pages.** Messenger tabs stay open and switch chats in place. The feed is read ahead in the background, so the second `fb feed` returns in about a second. Chat names resolve from a cached list.
 - **Headless Chrome, no windows.** Your session is copied once into a dedicated profile. Nothing appears on screen and nothing steals focus.
-- **Token-lean output.** TSV records, no headers, no JSON envelopes. Posts, chats and profiles get 5-character refs (`p3k9a`, `c8x2f`, `u1abc`) that every command accepts back. Long text is truncated unless you pass `--full`. `fb help` is about 450 tokens.
+- **Token-lean output.** TSV records, no headers, no JSON envelopes. Posts, chats and profiles get 5-character refs (`p3k9a`, `c8x2f`, `u1abc`) that every command accepts back. Post lists expand and include full text; `--full` remains accepted for compatibility. `fb help` is about 450 tokens.
 - **Structural selectors, localized actions.** Reading mostly uses structure (`role`, `data-ad-rendering-role`, layout geometry). Publish, audience, delete and PIN actions recognize English, Vietnamese and French labels; use the browser primitives for other UI languages or controls.
 
 ## Install (for people and for AI agents)
@@ -62,16 +62,20 @@ Cookies stay on your machine, in that profile, exactly like a browser session. A
 
 ## Commands
 
-Run `fb help` for the exact list. `<who>` is `me`, a name, `@vanity`, an id, a URL or a ref. `<chat>` is a name, ref, id or `@person`. `send` and `unsend` need the exact chat name (or a ref/id, or `--fuzzy`), because a partial name could match the wrong chat. `<post>` is a ref, a `/path` or a URL.
+Run `fb help` for the exact list. `<who>` is `me`, a name, `@vanity`, an id, a URL or a ref. `<chat>` is a Messenger nickname, exact Facebook friend name, chat/profile ref, thread id, `@handle` or profile/thread URL. Messenger nicknames can differ from Facebook names. If no chat name matches, an exact, unique friend name from a completed friend-list scan is used. Profile targets follow Facebook's own verified Open in Messenger link: encrypted thread IDs are not Facebook user IDs. Duplicate names or incomplete scans fail closed; use the profile ref or `@handle` to disambiguate. Existing chat-name matches take precedence; partial chat names still need a ref or `--fuzzy` for `send`/`unsend`. `<post>` is a ref, a `/path` or a URL.
 
 | Read | |
 |---|---|
-| `feed [-n 10] [--refresh] [--full] [--urls]` | next posts, ref, author, time, react/comment/share, text. A background tab reads ahead, so repeated calls keep scrolling and answer from memory; `--refresh` starts over |
+| `feed [-n 10] [--refresh] [--full] [--urls]` | next posts, ref, author, time, react/comment/share, text. A background tab reads ahead, so repeated calls keep scrolling and answer from memory; `--refresh` starts over. A shared post shows the sharer and the original author as `A / B`; a share without a caption shows its attachment text |
 | `posts [who] [-n]` | the same for a profile, page or group |
 | `view <post> [-n 10]` | post body and comments |
 | `profile [who]` | key/value lines |
 | `friends [who] [-n 30]` | name, ref, mutual friends |
-| `search <q> [--type people\|pages\|groups\|posts\|events]` | name, ref, info |
+| `groups [-n 100] [--urls]` | groups you have joined: name, ref (or URL with `--urls`), privacy and size |
+| `members <group> [-n 200] [--urls]` | people in a group: name, ref (or URL with `--urls`), role or join info |
+| `search <q> [--type top\|posts\|people\|friends\|photos\|videos\|pages\|places\|groups\|events\|marketplace] [--match text]... [-n 10]` | name, ref (or full URL for photos, videos, events, places and listings), visible info, kind; `top` (All) is the default, `friends` is people narrowed by the Friends chip |
+| `stories <who> [--out dir] [-n N]` | download visible stories in a protected session |
+| `photos <who> [--out dir] [-n 10 \| --all]` | download visible profile photos in a protected session |
 | `notifs [-n]` | time, unread flag, text, ref |
 
 | Messenger | |
@@ -84,10 +88,14 @@ Run `fb help` for the exact list. `<who>` is `me`, a name, `@vanity`, an id, a U
 
 | Act | |
 |---|---|
-| `post <text> [--img file]... [--to public\|friends\|me]` | verified `posted<TAB>ref<TAB>path` receipt; directly usable by `view`/`delete` |
+| `post <text> [--img file]... [--video file]... [--to public\|friends\|me]` | verified `posted<TAB>ref<TAB>path` receipt; directly usable by `view`/`delete` |
 | `comment <post> <text>` | |
 | `react <post> [like\|love\|care\|haha\|wow\|sad\|angry\|none]` | idempotent |
 | `delete <post>` | your own posts |
+| `group-join <group>` | idempotent; reports joined or requested; membership questions come back as `questions<TAB>n` then `q<TAB>text` lines |
+| `group-apply <group> <answer>...` | join by answering the membership questions in displayed order; a choice question takes the option text |
+| `group-leave <group>` | idempotent; a pending request is left alone |
+| `friend-add <ref\|url\|@handle\|id>` | idempotent; reports existing friends or a pending request; plain names are refused (search first, use the ref) |
 
 | Other | |
 |---|---|
@@ -125,6 +133,63 @@ Named pages never enter the normal command pool. Up to six names can be open;
 different names run independently, commands for one name serialize. Names live
 until close or daemon shutdown. Reopen after reconnect, account change, or an
 uncertain action failure. No action is automatically replayed.
+
+### Stories (experimental)
+
+Use the account commands for downloads:
+
+```sh
+fb search 'Alex Example' --match Paris --match University -n 5
+fb stories u1abc --out ./stories
+fb photos u1abc --out ./photos -n 10
+```
+
+Search accepts arbitrary repeated `--match` clues; all must occur in the visible
+result text, without regard to case or accents. Facebook may omit information
+from a result, so a missing match does not prove it is wrong. Search for names,
+then use a ref, profile URL, ID, `me`, or `@handle` for media commands. `-n` limits results; stories default to all
+available cards, and photos default to ten. A specific story URL starts at that card.
+`photos --all` follows the account's
+visible collection, up to 1,000 photos; incomplete pagination is an error.
+Stories also report incomplete if Facebook does not provide evidence that all
+cards were loaded; any downloaded files remain available. Facebook may not expose every photo. For large
+collections, increase `FB_TIMEOUT` before starting the daemon if needed.
+
+Media output is `d<TAB>directory`, followed by numbered filenames as files finish,
+potentially out of order. Join each filename to the directory. Existing files are never
+overwritten; the output filesystem must support hard links. A failed command may leave completed files. Original media can omit
+Facebook overlays or separately played music.
+
+```sh
+fb page stories stories                     # open the Facebook story tray
+fb page stories snapshot                    # find a story's control
+fb page stories click e...                  # use a ref from the snapshot
+fb page stories shot story.jpg              # view the current frame
+fb page stories record story.webm 15 0 --force  # record up to 30 seconds, starting at 0
+fb page stories close
+```
+
+Use `fb page stories stories https://www.facebook.com/stories/...` to open a
+specific story. For GraphQL, the page permits only a known story-bucket query ID.
+It blocks other POSTs and non-GET/HEAD methods, including the known story-seen
+mutation; GET/HEAD requests outside GraphQL remain allowed. Other queries are blocked,
+so the story tray or viewer may fail to load, especially if Facebook changes its
+query IDs. Profile-photo sessions allow a separate known pagination query and
+report incomplete results if its ID changes. They also disable workers and
+sockets and restrict actions that could
+disable those protections. **This is not a guarantee of anonymity:** Facebook
+can record views by other means or change its protocol, even though one user
+reported a successful live check. The blue unread border can
+change locally, so it is not proof that Facebook did or did not record a view.
+Each story page uses a temporary browser context with a copy of the Facebook
+cookies from the CLI's profile; Chrome removes it when the page closes or the
+CLI disconnects. Other browser storage is not copied.
+Omit the optional offset to record from the video's current position.
+The opening response is compact; `snapshot` returns the full bounded page view.
+WebM recordings contain the underlying video and audio only. Captions, stickers,
+and other page overlays are not included. Inspect a screenshot before recording:
+`--force` is required because it can record a hidden video. With multiple videos,
+the command selects the foremost one only when their order is clear.
 
 Snapshots contain bounded text and TSV-safe control labels. Native form values and text-editor
 contents are omitted (`[redacted]`) regardless of labels; use a targeted `eval` when
@@ -180,6 +245,7 @@ State lives in `~/.cache/fb` (`%LOCALAPPDATA%\fb` on native Windows): `refs.tsv`
 ```sh
 cargo test                  # unit tests, including a fake-Chrome CDP test
 node tests/js.test.js       # pure-function tests for the injected page scripts
+node tests/media.test.js    # story and photo metadata extraction
 node tests/e2e-isolation.mjs          # isolated real Chrome + CLI; never calls the real Facebook network
 scripts/smoke.sh            # live read-only check against your logged-in profile
 ```

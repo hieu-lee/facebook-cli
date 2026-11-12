@@ -96,9 +96,17 @@ impl Args {
     }
 }
 
-fn cell(d: &Daemon, c: &Value) -> String {
+/// Appends one TSV cell: text with tabs/newlines flattened, or the short ref of an `{r, v}` object.
+fn push_cell(refs: &crate::refs::Refs, c: &Value, line: &mut String) {
     match c {
-        Value::String(s) => s.replace(['\t', '\n'], " "),
+        Value::String(s) => {
+            for (i, part) in s.split(['\t', '\n']).enumerate() {
+                if i > 0 {
+                    line.push(' ');
+                }
+                line.push_str(part);
+            }
+        }
         Value::Object(o) => {
             let kind = o
                 .get("r")
@@ -107,10 +115,12 @@ fn cell(d: &Daemon, c: &Value) -> String {
                 .chars()
                 .next()
                 .unwrap_or('p');
-            d.refs
-                .put(kind, o.get("v").and_then(Value::as_str).unwrap_or(""))
+            refs.put_into(kind, o.get("v").and_then(Value::as_str).unwrap_or(""), line);
         }
-        other => other.to_string(),
+        other => {
+            use std::fmt::Write;
+            let _ = write!(line, "{other}");
+        }
     }
 }
 
@@ -123,35 +133,59 @@ pub async fn run_js(
     call: &str,
     n: usize,
 ) -> Res<()> {
+    run_expression(
+        d,
+        b,
+        out,
+        url,
+        &format!("window.__fb.{call}({n}).then(JSON.stringify)"),
+    )
+    .await
+}
+
+async fn run_expression(
+    d: &Daemon,
+    b: &std::sync::Arc<Browser>,
+    out: &Out,
+    url: &str,
+    expression: &str,
+) -> Res<()> {
     let t = b.acquire().await?;
     let r = async {
         b.goto(&t, url).await?;
-        let v = b
-            .eval(&t, &format!("window.__fb.{call}({n}).then(JSON.stringify)"))
-            .await?;
+        let v = b.eval(&t, expression).await?;
         let v: Value =
             serde_json::from_str(v.as_str().unwrap_or("{}")).map_err(|e| e.to_string())?;
         if let Some(e) = v["err"].as_str() {
             return Err(e.to_string());
         }
-        for row in v["rows"].as_array().cloned().unwrap_or_default() {
-            let cells: Vec<String> = row
-                .as_array()
-                .map(|r| r.iter().map(|c| cell(d, c)).collect())
-                .unwrap_or_default();
-            out.line(cells.join("\t"));
-        }
-        for l in v["lines"].as_array().cloned().unwrap_or_default() {
-            out.line(l.as_str().unwrap_or(""));
-        }
-        if let Some(note) = v["note"].as_str() {
-            out.err(format!("{note}\n"));
-        }
+        print_result(&d.refs, &v, out);
         Ok(())
     }
     .await;
     b.release(t).await;
     r
+}
+
+/// A page script's `{rows, lines, note}` as TSV lines (ref cells become short refs) plus the note on stderr.
+fn print_result(refs: &crate::refs::Refs, v: &Value, out: &Out) {
+    let mut line = String::new();
+    for row in v["rows"].as_array().into_iter().flatten() {
+        line.clear();
+        for (i, c) in row.as_array().into_iter().flatten().enumerate() {
+            if i > 0 {
+                line.push('\t');
+            }
+            push_cell(refs, c, &mut line);
+        }
+        out.line(&line);
+    }
+    for l in v["lines"].as_array().into_iter().flatten() {
+        out.line(l.as_str().unwrap_or(""));
+    }
+    if let Some(note) = v["note"].as_str() {
+        out.err(format!("{note}\n"));
+    }
 }
 
 /// Facebook path from a url or a `/path`. Rejects every other host, including userinfo tricks
@@ -238,7 +272,38 @@ pub async fn profile_path(d: &Daemon, b: &std::sync::Arc<Browser>, who: &str) ->
     {
         return Ok(format!("/{who}"));
     }
-    // free-text name: take the first people result
+    person_path(b, who).await
+}
+
+pub async fn profile_path_explicit(
+    d: &Daemon,
+    b: &std::sync::Arc<Browser>,
+    who: &str,
+) -> Res<String> {
+    let name = who.trim_start_matches('@');
+    if name.is_empty() {
+        return Err("invalid account".into());
+    }
+    if who.starts_with('@')
+        && !name
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'-')
+    {
+        return Err("invalid account handle".into());
+    }
+    if who == "me"
+        || who.starts_with('@')
+        || d.refs.get(who).is_some()
+        || who.bytes().all(|c| c.is_ascii_digit())
+        || who.starts_with('/')
+        || who.starts_with("http")
+    {
+        return profile_path(d, b, who).await;
+    }
+    Err("search for the name and use a profile ref".into())
+}
+
+async fn person_path(b: &std::sync::Arc<Browser>, who: &str) -> Res<String> {
     let t = b.acquire().await?;
     let r = async {
         b.goto(
@@ -261,18 +326,80 @@ pub async fn profile_path(d: &Daemon, b: &std::sync::Arc<Browser>, who: &str) ->
     r
 }
 
+/// A group spec (ref, url, path, vanity or id) → "/groups/<id>".
+pub fn group_path(d: &Daemon, spec: &str) -> Res<String> {
+    let path = if let Some(p) = d.refs.get(spec) {
+        p
+    } else if spec.starts_with('/') || spec.starts_with("http") {
+        fb_path(spec).ok_or_else(|| format!("not a facebook url: {spec}"))?
+    } else {
+        format!("/groups/{}", spec.trim_start_matches('@'))
+    };
+    group_base(&path).ok_or_else(|| format!("'{spec}' is not a group"))
+}
+
 pub async fn search(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
-    let a = parse(args, &["type"], &[])?;
+    let a = parse(args, &["type", "match"], &[])?;
     let q = a.pos.join(" ");
     if q.is_empty() {
         return Err(
-            "usage: search <query> [--type people|pages|groups|posts|events] [-n N]".into(),
+            "usage: search <query> [--type top|posts|people|friends|photos|videos|pages|places|groups|events|marketplace] [--match text] [-n N]"
+                .into(),
         );
     }
-    let ty = a.opt("type").unwrap_or("people");
+    let ty = a.opt("type").unwrap_or("top");
+    if ![
+        "top",
+        "posts",
+        "people",
+        "friends",
+        "photos",
+        "videos",
+        "pages",
+        "places",
+        "groups",
+        "events",
+        "marketplace",
+    ]
+    .contains(&ty)
+    {
+        return Err("invalid search type".into());
+    }
+    let clues = a.opts_all("match");
+    if clues.iter().any(|clue| clue.trim().is_empty()) {
+        return Err("--match needs text".into());
+    }
     let b = d.browser(out).await?;
-    let url = format!("https://www.facebook.com/search/{ty}/?q={}", enc(&q));
-    run_js(d, &b, out, &url, "search", a.n.unwrap_or(10)).await
+    let n = a.n.unwrap_or(10);
+    let clues = serde_json::json!(clues);
+    let (url, call) = match ty {
+        // friends is the people tab narrowed by its own Friends chip
+        "friends" => (
+            format!("https://www.facebook.com/search/people/?q={}", enc(&q)),
+            format!("searchFriends({n},{clues})"),
+        ),
+        // marketplace search lives on its own surface with listing cards
+        "marketplace" => (
+            format!(
+                "https://www.facebook.com/marketplace/search/?query={}",
+                enc(&q)
+            ),
+            format!("marketSearch({n},{clues})"),
+        ),
+        // the All tab and every other vertical share the /search/<type>/ surface
+        _ => (
+            format!("https://www.facebook.com/search/{ty}/?q={}", enc(&q)),
+            format!("search({n},{clues},{})", serde_json::json!(ty)),
+        ),
+    };
+    run_expression(
+        d,
+        &b,
+        out,
+        &url,
+        &format!("window.__fb.{call}.then(JSON.stringify)"),
+    )
+    .await
 }
 
 pub async fn friends(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
@@ -289,6 +416,131 @@ pub async fn friends(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
         )
     };
     run_js(d, &b, out, &url, "friends", a.n.unwrap_or(30)).await
+}
+
+/// The groups the user has joined, from the joined-groups list page
+/// (facebook.com/groups/joins) — not the groups feed, whose links mix in
+/// suggestions and only cover groups with recently rendered posts.
+/// Rows: name, ref (or the group URL with --urls), privacy/size info.
+pub async fn groups(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
+    let a = parse(args, &[], &["urls"])?;
+    let b = d.browser(out).await?;
+    let t = b.acquire().await?;
+    let r = async {
+        b.goto(&t, "https://www.facebook.com/groups/joins").await?;
+        let v = b
+            .eval(
+                &t,
+                &format!(
+                    "window.__fb.groups({}).then(JSON.stringify)",
+                    a.n.unwrap_or(100)
+                ),
+            )
+            .await?;
+        let v: Value =
+            serde_json::from_str(v.as_str().unwrap_or("{}")).map_err(|e| e.to_string())?;
+        if let Some(e) = v["err"].as_str() {
+            return Err(e.to_string());
+        }
+        for row in v["rows"].as_array().into_iter().flatten() {
+            let get = |i: usize| row.get(i).and_then(Value::as_str).unwrap_or("");
+            let path = get(1);
+            let id = if a.flag("urls") {
+                format!("https://www.facebook.com{path}")
+            } else {
+                d.refs.put('u', path)
+            };
+            out.line(format!(
+                "{}\t{id}\t{}",
+                get(0).replace(['\t', '\n'], " "),
+                get(2).replace(['\t', '\n'], " ")
+            ));
+        }
+        if let Some(note) = v["note"].as_str() {
+            out.err(format!("{note}\n"));
+        }
+        Ok(())
+    }
+    .await;
+    b.release(t).await;
+    r
+}
+/// `/groups/<id>` from any path under a group, ignoring query and fragment.
+fn group_base(path: &str) -> Option<String> {
+    let path = path.split(['?', '#']).next().unwrap_or("");
+    let seg = path
+        .strip_prefix("/groups/")?
+        .split('/')
+        .next()
+        .filter(|s| {
+            !s.is_empty()
+                && !matches!(
+                    *s,
+                    "feed" | "discover" | "joins" | "create" | "search" | "yourgroups"
+                )
+        })?;
+    Some(format!("/groups/{seg}"))
+}
+
+/// The members of one group, from its members page
+/// (facebook.com/groups/<id>/members), gathered with scrolling like the
+/// joined-groups list. Rows: name, ref (or the profile URL with --urls),
+/// role / join info.
+pub async fn members(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
+    let a = parse(args, &[], &["urls"])?;
+    let spec = a
+        .pos
+        .first()
+        .ok_or("usage: members <group> [-n N] [--urls]")?;
+    let b = d.browser(out).await?;
+    let group = group_path(d, spec)?;
+    let t = b.acquire().await?;
+    let r = async {
+        b.goto(&t, &format!("https://www.facebook.com{group}/members"))
+            .await?;
+        let v = b
+            .eval(
+                &t,
+                &format!(
+                    "window.__fb.groupMembers({}).then(JSON.stringify)",
+                    a.n.unwrap_or(200)
+                ),
+            )
+            .await?;
+        let v: Value =
+            serde_json::from_str(v.as_str().unwrap_or("{}")).map_err(|e| e.to_string())?;
+        if let Some(e) = v["err"].as_str() {
+            return Err(e.to_string());
+        }
+        for row in v["rows"].as_array().cloned().unwrap_or_default() {
+            let cells: Vec<Value> = row.as_array().cloned().unwrap_or_default();
+            let get = |i: usize| cells.get(i).and_then(Value::as_str).unwrap_or("");
+            let (id, info) = match cells.get(1) {
+                Some(Value::Object(o)) => {
+                    let p = o.get("v").and_then(Value::as_str).unwrap_or("");
+                    let id = if a.flag("urls") {
+                        format!("https://www.facebook.com{p}")
+                    } else {
+                        d.refs.put('u', p)
+                    };
+                    (id, get(2))
+                }
+                _ => (get(1).to_owned(), get(2)),
+            };
+            out.line(format!(
+                "{}\t{id}\t{}",
+                get(0).replace(['\t', '\n'], " "),
+                info.replace(['\t', '\n'], " ")
+            ));
+        }
+        if let Some(note) = v["note"].as_str() {
+            out.err(format!("{note}\n"));
+        }
+        Ok(())
+    }
+    .await;
+    b.release(t).await;
+    r
 }
 
 pub async fn profile(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
@@ -495,6 +747,35 @@ mod tests {
     }
 
     #[test]
+    fn group_base_ignores_query_fragment_and_subpaths() {
+        for (path, want) in [
+            ("/groups/123", Some("/groups/123")),
+            ("/groups/123/", Some("/groups/123")),
+            ("/groups/123?ref=share", Some("/groups/123")),
+            ("/groups/123/?ref=share", Some("/groups/123")),
+            ("/groups/123#about", Some("/groups/123")),
+            (
+                "/groups/hikers.uk/members/?a=1#b",
+                Some("/groups/hikers.uk"),
+            ),
+            ("/groups/feed", None),
+            ("/groups/feed/?x=1", None),
+            ("/groups/yourgroups/", None),
+            ("/groups/?ref=share", None),
+            ("/groups/", None),
+            ("/some.user", None),
+        ] {
+            assert_eq!(group_base(path).as_deref(), want, "{path}");
+        }
+        assert_eq!(
+            fb_path("https://www.facebook.com/groups/123?ref=share")
+                .and_then(|p| group_base(&p))
+                .as_deref(),
+            Some("/groups/123")
+        );
+    }
+
+    #[test]
     fn fb_path_accepts_only_facebook_hosts() {
         assert_eq!(
             fb_path("https://www.facebook.com/a/posts/1?x=1").as_deref(),
@@ -522,6 +803,43 @@ mod tests {
         ] {
             assert_eq!(fb_path(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn script_results_print_as_tsv_with_short_refs() {
+        let f = std::env::temp_dir().join(format!("fb-ops-refs-{}", std::process::id()));
+        let _ = std::fs::remove_file(&f);
+        let refs = crate::refs::Refs::load(f.clone());
+        let (out, mut rx) = Out::channel();
+        let v = serde_json::json!({
+            "rows": [
+                ["a\tb\nc", {"r": "u", "v": "/x"}, 7, null, true, {"v": "/y"}],
+                "not a row",
+                [],
+            ],
+            "lines": ["l1", "l2\tkept"],
+            "note": "n",
+        });
+        print_result(&refs, &v, &out);
+        drop(out);
+        let mut frames = Vec::new();
+        while let Ok(f) = rx.try_recv() {
+            frames.push((f[0], String::from_utf8(f[5..].to_vec()).unwrap()));
+        }
+        let (u, p) = (refs.put('u', "/x"), refs.put('p', "/y"));
+        let line = |s: &str| (crate::proto::OUT, s.to_string());
+        assert_eq!(
+            frames,
+            [
+                line(&format!("a b c\t{u}\t7\tnull\ttrue\t{p}\n")),
+                line("\n"),
+                line("\n"),
+                line("l1\n"),
+                line("l2\tkept\n"),
+                (crate::proto::ERR, "n\n".to_string()),
+            ]
+        );
+        let _ = std::fs::remove_file(f);
     }
 
     #[test]

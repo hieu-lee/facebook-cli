@@ -1,58 +1,260 @@
 (()=>{
  const F=window.__fb;
- const {sleep,clean,vtext,waitFor,canon,TIME,SPON,ACT,trunc,scrollerOf,num}=F;
+ const {sleep,clean,vtext,waitFor,canon,groupPath,profilePath,addGroup,TIME,SPON,ACT,trunc,scrollerOf,num}=F;
  const main=()=>document.querySelector('[role=main]');
  const tab=s=>String(s==null?'':s).replace(/[\t\r\n]+/g,' ');
  const abs=h=>{try{const u=new URL(h,location.href);return u.pathname+u.search}catch(e){return h}};
  // canonical path; keeps the query only where it identifies the target (profile.php?id=, permalink.php?story_fbid=&id=, photo?fbid=)
  const stripQ=h=>{const c=canon(h);return c.includes('?')?c:(c.replace(/\/$/,'')||'/');};
  // scroll the page until `collect()` yields n rows or growth stalls
- const gather=async(n,collect,ms=25000,sc=null)=>{
+ const gather=async(n,collect,ms=25000,sc=null,progress=null,finalize=null,order=null)=>{
   const t0=Date.now();let last=0,stall=0;const map=new Map();
   while(Date.now()-t0<ms){
-   for(const r of collect())if(!map.has(r.k))map.set(r.k,r);
+   for(const r of collect(map))if(!map.has(r.k))map.set(r.k,r);
    if(map.size>=n)break;
-   if(map.size===last){if(++stall>=14)break;}else{stall=0;last=map.size;}
+   const current=progress?progress():map.size;
+   if(current===last){if(++stall>=14)break;}else{stall=0;last=current;}
    const el=typeof sc==='function'?sc():sc;
    if(el)el.scrollTop+=el.clientHeight*0.8;else window.scrollBy(0,innerHeight*0.8);
    await sleep(220);
   }
-  return [...map.values()].slice(0,n);
+  if(finalize?.())for(const r of collect(map,true))if(!map.has(r.k))map.set(r.k,r);
+  const rows=[...map.values()];if(order)rows.sort(order);return rows.slice(0,n);
  };
- F.search=async(n)=>{
-  const feed=await waitFor(()=>document.querySelector('[role=main] [role=feed] [role=article]')&&document.querySelector('[role=main] [role=feed]'),12000);
-  if(!feed){const m=main();return {rows:[],note:m&&/không tìm thấy|no results|aucun résultat/i.test(m.innerText)?'no results':'no results loaded'};}
-  const rows=await gather(n,()=>[...feed.querySelectorAll('[role=article]')].map(a=>{
-   const links=[...a.querySelectorAll('a[href]')];
-   const l=links.find(x=>/\/posts\/|pfbid|\/permalink|\/videos\/|\/reel\/|fbid=/.test(x.getAttribute('href')))||links[0];
-   if(!l)return null;
-   const all=vtext(a);
-   const img=l.querySelector('img');
-   const name=all[0]||clean((img&&img.alt)||'');
-   const btn=new Set([...a.querySelectorAll('[role=button]')].map(b=>clean(b.innerText)));
-   const info=all.slice(1).filter(c=>c!==name&&!btn.has(c)&&c!=='·');
-   const url=stripQ(l.href);
-   // the row's own web address rides along as a fourth field: clients hold
-   // only a ref for the target, and a ref cannot be opened in a browser.
-   return {k:url,v:[name,{r:'u',v:url},trunc(info.join(' · '),160),'https://www.facebook.com'+url]};
-  }).filter(Boolean));
-  return {rows:rows.map(r=>r.v)};
+ const normalize=s=>s.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[đĐ]/g,'d').toLowerCase();
+ // what a result link IS, so callers can offer the right actions. Exact route
+ // segments and query keys only: /photoshop is a profile, story_fbid is a post.
+ F.kindOf=h=>{
+  let u;try{u=new URL(h,'https://www.facebook.com')}catch(e){return null}
+  const segs=u.pathname.split('/').filter(Boolean),has=x=>segs.includes(x);
+  if(has('posts')||has('permalink')||segs[0]==='permalink.php'||segs.some(x=>/^pfbid/.test(x)))return 'post';
+  if(segs[0]==='groups'&&segs.length===2)return 'group';
+  if(segs[0]==='marketplace'&&segs[1]==='item')return 'listing';
+  if(segs[0]==='events'&&/^\d+$/.test(segs[1]||''))return 'event';
+  if(['photo','photo.php'].includes(segs[0])||has('photos')||u.searchParams.has('fbid'))return 'photo';
+  if(['watch','reel'].includes(segs[0])||has('videos')||has('video'))return 'video';
+  return null;
+ };
+ F.search=async(n,clues=[],type='people')=>{
+  clues=clues.map(c=>normalize(c.trim()));
+  const exposed=e=>{for(;e;e=e.parentElement){const s=getComputedStyle(e);if(e.hidden||s.display==='none'||s.visibility!=='visible'||Number(s.opacity)===0)return false}return true};
+  const state=await waitFor(()=>{
+   const f=document.querySelector('[role=main] [role=feed]');if(f?.querySelector('[role=article]')&&exposed(f))return {feed:f};
+   const m=main();if(m&&exposed(m)&&!m.querySelector('[role=article]')&&/không tìm thấy|no results|aucun résultat/i.test(m.innerText))return {empty:true};
+   return null;
+  },12000);
+  if(!state?.feed)return {rows:[],note:state?.empty?'no results':'no results loaded'};
+  const feed=state.feed;
+  const pending=new Set(),dirty=new Set(),observed=new WeakSet(),signatures=new Set();let progress=0,signatureBytes=0,lastProgress=0,idle=0;
+  const queue=a=>{if(!observed.has(a)){observed.add(a);progress++}pending.add(a)};
+  const scan=node=>{if(node.nodeType!==1)return;if(node.matches('[role=article]'))queue(node);for(const a of node.querySelectorAll('[role=article]'))queue(a)};
+  scan(feed);
+  const observer=new MutationObserver(records=>{for(const record of records){
+   const target=record.target.nodeType===1?record.target:record.target.parentElement,closest=target?.closest('[role=article]'),article=closest&&feed.contains(closest)?closest:null;
+   if(article)queue(article);
+   if(record.type==='childList')for(const node of record.addedNodes)scan(node);
+   else if(record.type==='attributes'&&!article){
+    const key=record.attributeName;
+    if(key==='style'){
+     const old=document.createElement('span');old.setAttribute('style',record.oldValue||'');
+     if(['display','visibility','opacity','content-visibility'].some(p=>old.style.getPropertyValue(p)!==target.style.getPropertyValue(p)))dirty.add(feed.contains(target)?target:feed);
+    }else if(['class','id','hidden','aria-hidden'].includes(key))dirty.add(feed.contains(target)?target:feed);
+   }
+  }});
+  observer.observe(feed,{subtree:true,childList:true,characterData:true,attributes:true,attributeOldValue:true});
+  for(let e=feed.parentElement;e;e=e.parentElement)observer.observe(e,{attributes:true,attributeOldValue:true});
+  const shown=x=>x.checkVisibility?x.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}):x.getClientRects().length;
+  const content=x=>['post','photo','video'].includes(F.kindOf(x.href));
+  const person=x=>{const u=new URL(x.href);return (u.hostname==='facebook.com'||u.hostname.endsWith('.facebook.com'))&&/^\/(?:profile\.php|people\/[^/]+\/\d+|[a-z0-9.%_-]+)\/?$/i.test(u.pathname)&&!content(x)&&u.pathname!=='/search'};
+  const nameText=(link,parts)=>{const rendered=clean(link.innerText||'');return rendered&&normalize(rendered).replace(/\s+/g,'')===normalize(parts.join('')).replace(/\s+/g,'')?rendered:clean(parts.join(' '))};
+  const compareNodes=(a,b)=>{const p=a.compareDocumentPosition(b);return p&Node.DOCUMENT_POSITION_DISCONNECTED?0:p&Node.DOCUMENT_POSITION_FOLLOWING?-1:p&Node.DOCUMENT_POSITION_PRECEDING?1:0};
+  const order=(a,b)=>compareNodes(a.node,b.node);
+  try{
+   const rows=await gather(n,(seen,final=false)=>{
+    if(progress===lastProgress)idle++;else{lastProgress=progress;idle=0}
+    if(idle>=12&&dirty.size){for(const node of dirty)scan(node);dirty.clear()}
+    const found=[],added=new Set(),cards=final?[...pending].sort(compareNodes):pending;for(const a of cards){
+    pending.delete(a);if(!a.isConnected||!feed.contains(a))continue;
+    const rawLinks=[...a.querySelectorAll('a[href]')];let signature='';for(const link of rawLinks){const url=stripQ(link.href);if(signature.length+url.length+1>8192){signature='';break}signature+=url+'\n'}
+    if(signature&&signature.length<=8192&&signatureBytes+signature.length<=4*1024*1024&&!signatures.has(signature)){signatures.add(signature);signatureBytes+=signature.length;progress++}
+    const all=vtext(a,true,true),label=all[0]||'';
+    const visibleLinks=rawLinks.filter(x=>!x.closest('[hidden]')&&(shown(x)||getComputedStyle(x).display==='contents'&&(vtext(x,true,true).length||[...x.querySelectorAll('img,svg')].some(shown))));
+    const links=visibleLinks.filter(x=>!x.closest('[aria-hidden="true"]'));
+    let l,nameParts=[];if(type==='people'){
+     const candidates=visibleLinks.filter(person),accessible=links.filter(person);
+     const headed=candidates.filter(x=>x.closest('[role=heading],h1,h2,h3,h4,h5,h6')&&accessible.some(y=>stripQ(x.href)===stripQ(y.href)));
+     const choices=headed.length?headed:accessible;if(new Set(choices.map(x=>stripQ(x.href))).size!==1)continue;
+     const url=stripQ(choices[0].href),group=candidates.filter(x=>stripQ(x.href)===url),names=group.map(x=>({link:x,parts:vtext(x,true,true)})).filter(x=>x.parts.length);
+     const paired=names.find(x=>x.link.closest('[aria-hidden="true"]')&&accessible.some(y=>{if(stripQ(y.href)!==url)return false;const label=normalize(clean(y.getAttribute('aria-label')||y.querySelector('img')?.alt||'')),name=normalize(nameText(x.link,x.parts));return label===name||label.endsWith(' '+name)}));
+     const chosen=names.find(x=>headed.includes(x.link))||paired||names.find(x=>!x.link.closest('[aria-hidden="true"]'));
+     if(chosen){l=chosen.link;nameParts=chosen.parts;if(l.closest('[aria-hidden="true"]')&&chosen!==paired)continue}
+     else {l=choices[0];const alt=clean(l.querySelector('img')?.alt||'');if(alt)nameParts=[alt]}
+     if(!nameParts.length||(!headed.length&&!paired&&!nameParts.some(t=>normalize(t)===normalize(label))))continue;
+    }else l=visibleLinks.find(content)||links[0];
+    if(!l)continue;
+    const url=stripQ(l.href);if((seen.has(url)&&!final)||added.has(url))continue;
+    const name=type==='people'?nameText(l,nameParts):(label||clean(l.querySelector('img')?.alt||''));
+    if(clues.length){const text=normalize([name,...all].join(' '));if(!clues.every(c=>text.includes(c))){const raw=normalize(vtext(a,true,true,true).join(''));if(!clues.every(c=>text.includes(c)||raw.includes(c)))continue}}
+    const btn=new Set([...a.querySelectorAll('[role=button]')].map(b=>clean(b.innerText)));
+    const info=all.filter(c=>c!==name&&!nameParts.includes(c)&&!btn.has(c)&&c!=='·');
+    const kind=F.kindOf(url)||({people:'profile',pages:'page',groups:'group',events:'event',photos:'photo',videos:'video',posts:'post',places:'place'})[type]||'profile';
+    const target=['photo','video','event','place','listing'].includes(kind)?'https://www.facebook.com'+url:{r:'u',v:url};
+    // Keep the target and kind columns; clients can open the final URL in a browser.
+    const row={k:url,node:a,v:[name,target,trunc(info.join(' · '),160),kind,'https://www.facebook.com'+url]};
+    if(seen.has(url)){if(order(row,seen.get(url))<0)seen.set(url,row);continue}
+    added.add(url);found.push(row);
+    if((final?found.length:seen.size+found.length)>=n)break;
+   }return found;},25000,null,()=>progress,()=>{for(const node of dirty)scan(node);dirty.clear();return pending.size>0},order);
+   return {rows:rows.map(r=>r.v),...(!rows.length&&clues.length?{note:'no matching results'}:{})};
+  }finally{observer.disconnect()}
+ };
+ // people search narrowed by the page's own Friends filter chip; when the
+ // chip is not offered, fall back to plain people results and say so
+ F.searchFriends=async(n,clues=[])=>{
+  const chip=await waitFor(()=>[...document.querySelectorAll('[role=main] [role=button],[role=main] [role=switch],[role=main] [role=checkbox]')].filter(b=>!b.closest('[role=feed],[role=article]')).find(b=>/^(Friends|Bạn bè|Amis)$/i.test(clean(b.innerText||b.getAttribute('aria-label')||''))),10000);
+  let note;
+  if(chip){chip.click();await sleep(1800);}else note='friends filter not offered by facebook here; showing all people';
+  const r=await F.search(n,clues,'people');
+  if(note&&!r.err)r.note=r.note?r.note+'; '+note:note;
+  return r;
+ };
+ // marketplace search: listing cards link to /marketplace/item/<id>; the
+ // card text is title, price and location in no guaranteed order, so the
+ // price is the chunk that looks like money
+ F.marketSearch=async(n,clues=[])=>{
+  clues=clues.map(c=>normalize(c.trim()));
+  const ok=await waitFor(()=>document.querySelector('[role=main] a[href*="/marketplace/item/"]'),12000);
+  if(!ok)return {rows:[],note:'no listings loaded'};
+  await sleep(500);
+  const loaded=new Set();
+  const rows=await gather(n,()=>{
+   const byPath=new Map();
+   for(const a of document.querySelectorAll('[role=main] a[href*="/marketplace/item/"]')){
+    const p=stripQ(a.getAttribute('href'));
+    const chunks=vtext(a,true,true).map(clean).filter(Boolean);
+    if(!chunks.length)continue;
+    const money=c=>/^[A-Z]{0,3}[$€£¥₫]\s*\d[\d.,\s]*$|^\d[\d.,\s]*[$€£¥₫đ]$|^(Free|Gratuit|Miễn phí)$/i.test(c);
+    const price=chunks.find(money)||'';
+    const rest=chunks.filter(c=>!money(c));
+    if(!byPath.has(p)&&clues.every(c=>normalize(chunks.join(' ')).includes(c)))byPath.set(p,{title:rest[0]||'',price,loc:rest.slice(1).join(' · ')});
+   }
+   return [...byPath.entries()].map(([p,g])=>({k:p,v:[g.title,'https://www.facebook.com'+p,trunc([g.price,g.loc].filter(Boolean).join(' · '),120),'listing']}));
+  },25000,null,()=>{for(const a of document.querySelectorAll('[role=main] a[href*="/marketplace/item/"]'))loaded.add(stripQ(a.getAttribute('href')));return loaded.size});
+  return {rows:rows.map(r=>r.v),...(!rows.length&&clues.length?{note:'no matching results'}:{})};
  };
  F.friends=async(n)=>{
   const ok=await waitFor(()=>document.querySelector('[role=main] a[href*="friends_mutual"]')||document.querySelector('[role=main] [role=tablist]'),12000);
-  if(!ok)return {rows:[],note:'no friends visible'};
+  if(!ok)return {rows:[],complete:false,note:'no friends visible'};
   await sleep(600);
-  const rows=await gather(n,()=>{
-   const out=[];
-   for(const m of document.querySelectorAll('[role=main] a[href*="friends_mutual"]')){
-    const base=stripQ(m.href.replace(/\/friends_mutual.*/,''));
-    const link=[...document.querySelectorAll('[role=main] a[href]')].find(a=>a!==m&&clean(a.innerText)&&stripQ(a.href)===base);
-    if(!link)continue;
-    out.push({k:base,v:[clean(link.innerText),{r:'u',v:base},clean(m.innerText)]});
+  const more=/^(?:More options for|Lựa chọn khác cho|Plus d.options pour) (.+)$/i;
+  // Use the section's own heading, not a row/grid inferred from the number of cards.
+  const friendRoot=()=>{
+   const roots=new Set();
+   for(const a of document.querySelectorAll('[role=main] a[href]')){
+    if(!/\/friends\/?$/.test(new URL(a.href).pathname)||!/^(Friends|Bạn bè|Amis)$/i.test(clean(a.innerText)))continue;
+    for(let p=a.parentElement;p&&p!==main();p=p.parentElement){if(p.querySelector('a[href*="friends_mutual"]')){roots.add(p);break}}
    }
+   const inner=[...roots].filter(r=>![...roots].some(other=>other!==r&&r.contains(other)));
+   return inner.length===1?inner[0]:null;
+  };
+  let bottomSince=null,lastSignature='',hasCards=false,listRoot=null;const unparsed=new Set();
+  const rows=await gather(n,()=>{
+   listRoot||=friendRoot();const scope=listRoot||main();
+   const out=[];
+   /* the first two named links per target (m itself can be one of them): one pass instead of a scan per row */
+   const named=new Map();
+   for(const a of scope.querySelectorAll('a[href]')){
+    const text=clean(a.innerText);if(!text)continue;
+    const k=stripQ(a.href),l=named.get(k);
+    if(!l)named.set(k,[{a,text}]);else if(l.length<2)l.push({a,text});
+   }
+   for(const m of scope.querySelectorAll('a[href*="friends_mutual"]')){
+    const base=stripQ(m.href.replace(/\/friends_mutual.*/,''));
+    const link=named.get(base)?.find(x=>x.a!==m);
+    if(!link)continue;
+    out.push({k:base,v:[link.text,{r:'u',v:base},clean(m.innerText)]});
+   }
+   const have=new Set(out.map(r=>r.k));
+   // Mutual-friend links are absent on some cards; their own options control still identifies them.
+   for(const b of (listRoot||main()).querySelectorAll('[role=button][aria-label],button[aria-label]')){
+    const match=more.exec(clean(b.getAttribute('aria-label')||''));if(!match)continue;
+    const name=match[1];let found=false;
+    for(let p=b.parentElement;p&&p!==main();p=p.parentElement){
+     const navigation=[...p.querySelectorAll('a[href]')];
+     if(navigation.length&&navigation.every(a=>/\/friends\/?$/.test(new URL(a.href).pathname))){found=true;break}
+     if([...p.querySelectorAll('[aria-label]')].filter(e=>more.test(e.getAttribute('aria-label')||'')).length>1)break;
+     if(!p.querySelector('a[href]')&&clean(p.innerText)===name){
+      const k='unavailable:'+name;if(!have.has(k)){have.add(k);out.push({k,v:[name,null,'profile unavailable']})}
+      hasCards=true;found=true;break;
+     }
+     const links=[...p.querySelectorAll('a[href]')].filter(a=>clean(a.innerText)===name),paths=new Set(links.map(a=>stripQ(a.href)));
+     if(paths.size!==1)continue;
+     const k=[...paths][0];
+     if(!/\/friends(?:_all)?\/?$/.test(k.split('?')[0])){
+      hasCards=true;if(!have.has(k)){have.add(k);out.push({k,v:[name,{r:'u',v:k},'']})}
+     }
+     found=true;break;
+    }
+    if(found)unparsed.delete(b);else unparsed.add(b);
+   }
+   if(listRoot)for(const b of unparsed)if(!listRoot.contains(b))unparsed.delete(b);
+   const el=document.scrollingElement,signature=out.map(r=>r.k).join('\n')+'|'+(listRoot?.scrollHeight||el?.scrollHeight);
+   const bottom=listRoot?listRoot.getBoundingClientRect().bottom<=innerHeight+2:el&&el.scrollTop+el.clientHeight>=el.scrollHeight-2;
+   if(bottom&&signature===lastSignature)bottomSince??=Date.now();else bottomSince=null;
+   lastSignature=signature;
    return out;
   });
-  return {rows:rows.map(r=>r.v)};
+  return {rows:rows.map(r=>r.v),complete:!!listRoot&&listRoot.isConnected&&main()?.contains(listRoot)&&friendRoot()===listRoot&&hasCards&&!unparsed.size&&rows.length<n&&bottomSince!==null&&Date.now()-bottomSince>=2500&&!(listRoot||main())?.querySelector('[aria-busy="true"],[role=progressbar]')};
+ };
+ const linkShown=a=>{const s=getComputedStyle(a);return s.visibility==='visible'&&(a.getClientRects().length>0||s.display==='contents'&&!!clean(a.innerText))};
+ F.groups=async(n)=>{
+  const ok=await waitFor(()=>document.querySelector('[role=main] a[href*="/groups/"]'),12000);
+  if(!ok)return {rows:[],note:'no groups visible'};
+  await sleep(600);
+  /* details can render on a later scroll pass than the name, so merge every pass into one entry per group */
+  const acc=new Map();
+  const scan=()=>{
+   for(const a of document.querySelectorAll('[role=main] a[href]')){
+    const p=groupPath(a.getAttribute('href'));if(!p||!linkShown(a))continue;
+    let lines=(a.innerText||'').split('\n').map(clean).filter(Boolean);
+    if(!lines.length)lines=[clean(a.getAttribute('aria-label')||a.querySelector('img[alt]')?.alt||'')].filter(Boolean);
+    if(lines.length)addGroup(acc,p,lines);
+   }
+   return [...acc.keys()].map(k=>({k}));
+  };
+  await gather(n,scan);
+  /* the limit can be reached before the last link of a group renders: let it settle once */
+  await sleep(300);scan();
+  return {rows:[...acc].slice(0,n).map(([k,g])=>[g.name,k,trunc(g.info.join(' · '),120)])};
+ };
+ F.groupMembers=async(n)=>{
+  const ok=await waitFor(()=>document.querySelector('[role=main] a[href]'),12000);
+  if(!ok)return {rows:[],note:'no members visible'};
+  await sleep(600);
+  /* role / join details can render on a later scroll pass than the name, so merge every pass into one entry per member */
+  const acc=new Map();
+  const scan=()=>{
+   const owner=new Map();
+   for(const a of document.querySelectorAll('[role=main] a[href]')){
+    const p=profilePath(a.getAttribute('href'));if(!p||!linkShown(a))continue;
+    const nm=clean(a.innerText||'');if(!nm||nm.length>80)continue;
+    const card=a.closest('[role=listitem]')||a.closest('[role=article]');
+    /* a card belongs to its first profile link; later ones ("Added by Bob") are details, not members */
+    if(card&&owner.has(card)&&owner.get(card)!==p)continue;
+    if(card)owner.set(card,p);
+    const block=card||(a.parentElement&&a.parentElement.parentElement);
+    const own=new Set(vtext(a,true).map(clean));
+    const chunks=(block?vtext(block,true):[nm]).map(clean).filter(Boolean);
+    const cur=acc.get(p)||{name:nm,info:[]};
+    for(const c of chunks)if(c!==nm&&c!==cur.name&&!own.has(c)&&!cur.info.includes(c)&&!/^(Add friend|Message|Follow|Friends|See all)$/i.test(c))cur.info.push(c);
+    acc.set(p,cur);
+   }
+   return [...acc.keys()].map(k=>({k}));
+  };
+  await gather(n,scan);
+  /* the limit can be reached before the details of the last member render: let them settle once */
+  await sleep(300);scan();
+  return {rows:[...acc].slice(0,n).map(([p,m])=>[m.name,{r:'u',v:p},trunc(m.info.join(' · '),120)])};
  };
  F.notifs=async(n)=>{
   const ok=await waitFor(()=>document.querySelector('[role=main] [role=list] [role=listitem] a[href]')||document.querySelector('[role=list] [role=listitem] a[href]'),12000);
@@ -122,9 +324,13 @@
    const body=c.slice(ti<0?1:ti+1,end<0?c.length:end).filter(x=>!/^(của tác giả|Author|Auteur|Top fan|Người hâm mộ.*)$/i.test(x)).join(' ');
    const lab=a.getAttribute('aria-label')||'';
    const nested=!!a.parentElement.closest('[role=article][aria-label]');
-   return {k:lab+body,v:[(nested?'  ↳':'')+c[0],ti>=0?c[ti]:'',trunc(body,300)]};
+   const own=[...a.querySelectorAll('a[href]')].filter(x=>x.closest('[role=article][aria-label]')===a);
+   const stamp=own.find(x=>TIME.test(vtext(x)[0]||''));
+   const author=stamp&&own.find(x=>vtext(x)[0]===c[0]&&(x.compareDocumentPosition(stamp)&Node.DOCUMENT_POSITION_FOLLOWING));
+   const ref=author?profilePath(author.getAttribute('href'))||'':'';
+   return {k:lab+body,ref,v:[(nested?'  ↳':'')+c[0],ti>=0?c[ti]:'',trunc(body,300)]};
   }),20000,scEl);
-  for(const c of com)lines.push('c\t'+c.v.map(tab).join('\t'));
+  for(const c of com){if(c.ref)lines.push('cu\t'+tab(c.ref));lines.push('c\t'+c.v.map(tab).join('\t'));}
   return {lines};
  };
 })();

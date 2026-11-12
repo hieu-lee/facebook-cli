@@ -45,7 +45,9 @@
   get(ref);if(action==='fill'&&document.activeElement!==e)throw Error('element lost focus');
   if(action==='fill'&&commit){
    let full;
-   if(e.isContentEditable){const expected=document.createRange();expected.selectNodeContents(e);const s=getSelection(),actual=s.rangeCount===1?s.getRangeAt(0):null;full=actual&&actual.compareBoundaryPoints(Range.START_TO_START,expected)===0&&actual.compareBoundaryPoints(Range.END_TO_END,expected)===0}
+   // Editors such as Lexical move a select-all into their own paragraphs (an empty one keeps a caret
+   // inside <p><br></p>), so require only that no text in the editor is left outside the selection.
+   if(e.isContentEditable){const s=getSelection(),actual=s.rangeCount===1?s.getRangeAt(0):null;const outside=(sc,so,ec,eo)=>{const r=document.createRange();r.setStart(sc,so);r.setEnd(ec,eo);return r.toString()};full=actual&&e.contains(actual.commonAncestorContainer)&&!outside(e,0,actual.startContainer,actual.startOffset)&&!outside(actual.endContainer,actual.endOffset,e,e.childNodes.length)}
    else full=e.selectionStart===null?String(getSelection())===e.value:e.selectionStart===0&&e.selectionEnd===e.value.length;
    if(!full)throw Error('replacement selection changed; take a new snapshot');
   }

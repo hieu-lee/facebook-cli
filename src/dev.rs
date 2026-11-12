@@ -110,25 +110,25 @@ pub async fn ax(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     }
     .await;
     b.release(t).await;
-    let nodes = r?["nodes"].as_array().cloned().unwrap_or_default();
-    let mut byid: Nodes = HashMap::new();
+    let nodes = match r?.get_mut("nodes").map(Value::take) {
+        Some(Value::Array(nodes)) => nodes,
+        _ => Vec::new(),
+    };
+    let root = nodes
+        .first()
+        .map(|n| n["nodeId"].as_str().unwrap_or("").to_string());
+    let mut byid: Nodes = HashMap::with_capacity(nodes.len());
     let mut kids: HashMap<String, Vec<String>> = HashMap::new();
-    for n in &nodes {
+    for n in nodes {
         let id = n["nodeId"].as_str().unwrap_or("").to_string();
         if let Some(p) = n["parentId"].as_str() {
             kids.entry(p.to_string()).or_default().push(id.clone());
         }
-        byid.insert(id, n.clone());
+        byid.insert(id, n);
     }
     let mut text = String::new();
-    if let Some(root) = nodes.first() {
-        walk(
-            root["nodeId"].as_str().unwrap_or(""),
-            0,
-            &byid,
-            &kids,
-            &mut text,
-        );
+    if let Some(root) = root {
+        walk(&root, 0, &byid, &kids, &mut text);
     }
     out.out(text);
     Ok(())

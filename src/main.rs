@@ -1,4 +1,6 @@
 mod act;
+#[cfg(all(test, target_os = "linux"))]
+mod bench;
 mod browser;
 mod cdp;
 mod client;
@@ -16,6 +18,8 @@ mod page;
 mod proto;
 mod refs;
 mod session;
+mod stories;
+mod media;
 
 fn main() {
     let argv: Vec<String> = std::env::args().skip(1).collect();

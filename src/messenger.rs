@@ -1,7 +1,9 @@
 use crate::browser::{Browser, Tab};
 use crate::cdp::Res;
 use crate::daemon::{Daemon, Out};
+use serde::Deserialize;
 use serde_json::{Value, json};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[derive(Clone, Debug)]
@@ -42,6 +44,63 @@ fn flags(c: &Chat) -> String {
     f
 }
 
+/// The page's `{chats,complete}` (or `{err}`) answer.
+fn parse_chats(json: &str) -> Res<(Vec<Chat>, bool)> {
+    /// A string field; anything else reads as empty.
+    fn text<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+        Ok(match Value::deserialize(d)? {
+            Value::String(s) => s,
+            _ => String::new(),
+        })
+    }
+    /// Only a literal `true` counts.
+    fn flag<'de, D: serde::Deserializer<'de>>(d: D) -> Result<bool, D::Error> {
+        Ok(Value::deserialize(d)? == Value::Bool(true))
+    }
+    #[derive(Deserialize)]
+    struct Row {
+        #[serde(default, rename = "href", deserialize_with = "text")]
+        path: String,
+        #[serde(default, deserialize_with = "text")]
+        name: String,
+        #[serde(default, deserialize_with = "text")]
+        preview: String,
+        #[serde(default, deserialize_with = "text")]
+        time: String,
+        #[serde(default, deserialize_with = "flag")]
+        unread: bool,
+        #[serde(default, deserialize_with = "flag")]
+        group: bool,
+    }
+    #[derive(Deserialize)]
+    struct Page {
+        #[serde(default)]
+        err: Value,
+        #[serde(default)]
+        chats: Option<Vec<Row>>,
+        #[serde(default, deserialize_with = "flag")]
+        complete: bool,
+    }
+    let page: Page = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    if let Some(e) = page.err.as_str() {
+        return Err(e.to_string());
+    }
+    let list = page
+        .chats
+        .unwrap_or_default()
+        .into_iter()
+        .map(|r| Chat {
+            path: r.path,
+            name: r.name,
+            preview: r.preview,
+            time: r.time,
+            unread: r.unread,
+            group: r.group,
+        })
+        .collect();
+    Ok((list, page.complete))
+}
+
 /// `complete`: the scan actually reached the end of the chat list (not just a time budget or a
 /// stall that gave up partway). Only then may "fewer rows than asked for" be read as "that is everything".
 async fn fetch_chats(b: &std::sync::Arc<Browser>, n: usize) -> Res<(Vec<Chat>, bool)> {
@@ -53,27 +112,7 @@ async fn fetch_chats(b: &std::sync::Arc<Browser>, n: usize) -> Res<(Vec<Chat>, b
         let v = b
             .eval(&t, &format!("window.__fb.chats({n}).then(JSON.stringify)"))
             .await?;
-        let v: Value =
-            serde_json::from_str(v.as_str().unwrap_or("{}")).map_err(|e| e.to_string())?;
-        if let Some(e) = v["err"].as_str() {
-            return Err(e.to_string());
-        }
-        let list = v["chats"]
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .map(|c| Chat {
-                        path: c["href"].as_str().unwrap_or("").to_string(),
-                        name: c["name"].as_str().unwrap_or("").to_string(),
-                        preview: c["preview"].as_str().unwrap_or("").to_string(),
-                        time: c["time"].as_str().unwrap_or("").to_string(),
-                        unread: c["unread"] == Value::Bool(true),
-                        group: c["group"] == Value::Bool(true),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        Ok((list, v["complete"] == Value::Bool(true)))
+        parse_chats(v.as_str().unwrap_or("{}"))
     }
     .await;
     b.release_as(t, if r.is_ok() { "messages" } else { "" })
@@ -90,7 +129,7 @@ pub struct ChatCache {
     n: usize,
     /// the scan reached the true end of the chat list (see `fetch_chats`)
     complete: bool,
-    list: Vec<Chat>,
+    list: Arc<Vec<Chat>>,
 }
 
 impl ChatCache {
@@ -119,7 +158,8 @@ impl ChatCache {
                     preview: f[5].into(),
                 })
             })
-            .collect();
+            .collect::<Vec<_>>()
+            .into();
         Some(ChatCache {
             uid,
             at: Instant::now().checked_sub(age).unwrap_or_else(Instant::now),
@@ -134,17 +174,25 @@ impl ChatCache {
             "#uid={}\n#n={}\n#complete={}\n",
             self.uid, self.n, self.complete as u8
         );
-        for c in &self.list {
-            let clean = |x: &str| x.replace(['\t', '\n'], " ");
-            s.push_str(&format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\n",
-                c.path,
-                clean(&c.name),
-                clean(&c.time),
-                c.unread as u8,
-                c.group as u8,
-                clean(&c.preview)
-            ));
+        // a tab or newline inside a field would split the record
+        let clean = |out: &mut String, x: &str| {
+            out.extend(
+                x.chars()
+                    .map(|c| if matches!(c, '\t' | '\n') { ' ' } else { c }),
+            )
+        };
+        s.reserve(self.list.len() * 128);
+        for c in self.list.iter() {
+            s.push_str(&c.path);
+            s.push('\t');
+            clean(&mut s, &c.name);
+            s.push('\t');
+            clean(&mut s, &c.time);
+            s.push_str(if c.unread { "\t1\t" } else { "\t0\t" });
+            s.push(if c.group { '1' } else { '0' });
+            s.push('\t');
+            clean(&mut s, &c.preview);
+            s.push('\n');
         }
         let _ = std::fs::write(path, s);
     }
@@ -157,7 +205,7 @@ async fn chat_list(
     b: &std::sync::Arc<Browser>,
     n: usize,
     max_age: Duration,
-) -> Res<(Vec<Chat>, bool)> {
+) -> Res<(Arc<Vec<Chat>>, bool)> {
     let requested = Instant::now();
     let uid = crate::ops::uid(d, b).await?;
     let usable = |c: &ChatCache, extra_fresh: bool| {
@@ -180,6 +228,7 @@ async fn chat_list(
     }
     let generation = b.generation.load(std::sync::atomic::Ordering::SeqCst);
     let (list, complete) = fetch_chats(b, n).await?;
+    let list = Arc::new(list);
     if b.generation.load(std::sync::atomic::Ordering::SeqCst) != generation {
         return Err("the account changed while chats were being read; try again".into());
     }
@@ -197,7 +246,19 @@ async fn chat_list(
 
 /// One TSV field: tabs and newlines would split a record.
 pub fn one_line(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
+    let mut o = String::with_capacity(s.len());
+    push_one_line(&mut o, s);
+    o
+}
+
+/// `one_line`, appended to `out`.
+pub fn push_one_line(out: &mut String, s: &str) {
+    for (i, w) in s.split_whitespace().enumerate() {
+        if i > 0 {
+            out.push(' ');
+        }
+        out.push_str(w);
+    }
 }
 
 pub fn trunc(s: &str, n: usize) -> String {
@@ -221,7 +282,7 @@ pub async fn chats(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     };
     let (list, _complete) = chat_list(d, &b, want, Duration::ZERO).await?;
     let mut shown = 0;
-    for c in list {
+    for c in list.iter() {
         if only_unread && !c.unread {
             continue;
         }
@@ -237,7 +298,7 @@ pub async fn chats(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
         out.line(format!(
             "{}\t{}\t{}\t{}\t{}",
             d.refs.put('c', &c.path),
-            flags(&c),
+            flags(c),
             one_line(&c.time),
             one_line(&c.name),
             trunc(&one_line(&c.preview), 80)
@@ -262,23 +323,97 @@ fn is_thread_path(p: &str) -> bool {
     })
 }
 
-/// profile path (/vanity or /profile.php?id=N) -> messenger thread path
-fn thread_of_profile(p: &str) -> String {
-    if p.starts_with("/messages/") {
-        return p.to_string();
+/// Profile loads tried before giving up on a verified thread link.
+const PROFILE_THREAD_ATTEMPTS: usize = 3;
+
+/// Follow Facebook's profile-owned chat link: encrypted thread IDs are not user IDs.
+async fn profile_thread(b: &std::sync::Arc<Browser>, profile: &str) -> Res<Resolved> {
+    let path = crate::ops::fb_path(profile).ok_or("not a Facebook profile")?;
+    let url = reqwest::Url::parse(&format!("https://www.facebook.com{path}"))
+        .map_err(|_| "not a Facebook profile")?;
+    let segments: Vec<_> = url.path().trim_matches('/').split('/').collect();
+    let valid = match segments.as_slice() {
+        ["profile.php"] => {
+            url.query_pairs().filter(|(k, _)| k == "id").count() == 1
+                && url.query_pairs().any(|(k, v)| {
+                    k == "id" && !v.is_empty() && v.bytes().all(|c| c.is_ascii_digit())
+                })
+        }
+        ["people", _, id] => !id.is_empty() && id.bytes().all(|c| c.is_ascii_digit()),
+        [vanity] => {
+            !vanity.is_empty()
+                && !crate::ops::is_dot_segment(vanity)
+                && vanity
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'-' || c == b'_')
+        }
+        _ => false,
+    };
+    if !valid || crate::ops::is_post_path(&path) {
+        return Err("need a profile ref, @handle or profile URL, not a post".into());
     }
-    if let Some(id) = p.strip_prefix("/profile.php?id=") {
-        return format!("/messages/t/{}/", id.split('&').next().unwrap_or(id));
+    let t = b.acquire().await?;
+    let result = async {
+        // Facebook sometimes leaves the profile's chat popup half-loaded, which hides the settings menu
+        // that carries the thread link. A fresh load of the profile recovers, so look a few times.
+        for _ in 0..PROFILE_THREAD_ATTEMPTS {
+            b.goto(&t, url.as_str()).await?;
+            let info = b
+                .eval(
+                    &t,
+                    &format!("({})()", include_str!("../js/media-profile.js")),
+                )
+                .await?;
+            let owner = info["owner"]
+                .as_str()
+                .filter(|id| !id.is_empty() && id.len() <= 32 && id.bytes().all(|c| c.is_ascii_digit()))
+                .ok_or("profile identity unavailable; cannot resolve a verified Messenger thread")?;
+            let value = b
+                .eval(
+                    &t,
+                    &format!(
+                        "({})({})",
+                        include_str!("../js/profile-thread.js"),
+                        json!(owner)
+                    ),
+                )
+                .await?;
+            if let Some(path) = value.as_str().filter(|p| is_thread_path(p)) {
+                return Resolved::path(path.to_string());
+            }
+        }
+        Err("could not resolve a verified Messenger thread from this profile; use a chat ref".into())
     }
-    // /people/Name-Slug/61512345678901/ -> the numeric id
-    if let Some(rest) = p.strip_prefix("/people/")
-        && let Some(id) = rest.trim_matches('/').rsplit('/').next()
-        && !id.is_empty()
-        && id.bytes().all(|c| c.is_ascii_digit())
-    {
-        return format!("/messages/t/{id}/");
-    }
-    format!("/messages/t/{}/", p.trim_matches('/'))
+    .await;
+    b.release(t).await;
+    result
+}
+
+/// Only an exact friend name from an exhausted list is safe to use as a recipient.
+async fn friend_thread(d: &Daemon, b: &std::sync::Arc<Browser>, spec: &str) -> Res<Resolved> {
+    let uid = crate::ops::uid(d, b).await?;
+    let t = b.acquire().await?;
+    let result = async {
+        b.goto(&t, &format!("https://www.facebook.com/profile.php?id={uid}&sk=friends_all")).await?;
+        let value = b.eval(&t, "window.__fb.friends(5000).then(JSON.stringify)").await?;
+        let value: Value = serde_json::from_str(value.as_str().unwrap_or("null")).map_err(|e| e.to_string())?;
+        if value["complete"] != Value::Bool(true) {
+            return Err("could not finish scanning your friend list; use a profile ref or @handle".into());
+        }
+        let q = spec.to_lowercase();
+        let hits: Vec<_> = value["rows"].as_array().into_iter().flatten()
+            .filter(|r| r[0].as_str().is_some_and(|name| name.to_lowercase() == q))
+            .collect();
+        match hits.as_slice() {
+            [] => Err(format!("no chat or exact friend matches '{spec}' (Messenger nicknames can differ; try `fb friends me` or use @handle)")),
+            [row] => row[1]["v"].as_str().map(String::from).ok_or("friend profile unavailable; use a different recipient".into()),
+            _ => Err(format!("ambiguous friend name '{spec}': {}", hits.iter().take(6).map(|r| r[1]["v"].as_str().map(|p| d.refs.put('u', p)).unwrap_or_else(|| "profile unavailable".into())).collect::<Vec<_>>().join(", "))),
+        }
+    }.await;
+    b.release(t).await;
+    let mut target = profile_thread(b, &result?).await?;
+    target.name = Some(spec.to_string());
+    Ok(target)
 }
 
 /// Messages go to people: a substring match may be the wrong chat (the chat list loads lazily, so
@@ -312,34 +447,55 @@ impl Resolved {
     }
 }
 
+/// Chats whose lowercased name is `q` (exact) or contains it. `trustworthy`: the scan proved it
+/// reached the true end of the list, so a unique exact match cannot be hiding a duplicate further
+/// down that was never seen (a capped scan proves nothing). Returns None when there is exactly one
+/// exact match but that could not be confirmed unique.
+fn find_chats(list: &[Chat], q: &str, trustworthy: bool) -> Option<(Vec<Chat>, bool)> {
+    let (mut exact, mut partial) = (Vec::new(), Vec::new());
+    for c in list {
+        let name = c.name.to_lowercase();
+        if name == q {
+            exact.push(c);
+        }
+        if name.contains(q) {
+            partial.push(c);
+        }
+    }
+    if exact.len() == 1 {
+        return trustworthy.then(|| (vec![exact[0].clone()], true));
+    }
+    Some((partial.into_iter().cloned().collect(), false))
+}
+
 pub async fn resolve(d: &Daemon, b: &std::sync::Arc<Browser>, spec: &str) -> Res<Resolved> {
     if let Some(p) = d.refs.get(spec) {
-        return Resolved::path(thread_of_profile(&p));
+        return if is_thread_path(&p) {
+            Resolved::path(p)
+        } else {
+            profile_thread(b, &p).await
+        };
     }
     if let Some(who) = spec.strip_prefix('@') {
-        let path = thread_of_profile(&crate::ops::profile_path(d, b, who).await?);
-        // `@.`/`@..` would normalize to the inbox: only a real thread path is a target
-        if !is_thread_path(&path) {
-            return Err(format!("not a valid person: @{who}"));
-        }
-        // `@vanity` / `@id` name exactly one account; `@First Last` is just the first search hit
-        let direct = !who.is_empty()
-            && who
+        if who.is_empty()
+            || !who
                 .bytes()
-                .all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'-');
-        return Ok(Resolved {
-            path,
-            name: Some(format!("@{who}")),
-            exact: direct,
-        });
+                .all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'-' || c == b'_')
+        {
+            return Err("use an @handle or profile ref, not a person's search name".into());
+        }
+        let profile = if who.bytes().all(|c| c.is_ascii_digit()) {
+            format!("/profile.php?id={who}")
+        } else {
+            format!("/{who}")
+        };
+        return profile_thread(b, &profile).await;
     }
     if spec.starts_with('/') || spec.starts_with("http") {
         let p = crate::ops::fb_path(spec).ok_or_else(|| format!("not a facebook url: {spec}"))?;
         // a profile or post page also has a comment box: never type a message into one
         if !is_thread_path(&p) {
-            return Err(format!(
-                "not a Messenger thread: {spec} (use a chat name, ref, id or @person)"
-            ));
+            return profile_thread(b, &p).await;
         }
         // navigate to the bare thread path (a query could change what opens)
         let bare = p.split(['?', '#']).next().unwrap_or("").to_string();
@@ -349,45 +505,24 @@ pub async fn resolve(d: &Daemon, b: &std::sync::Arc<Browser>, spec: &str) -> Res
         return Resolved::path(format!("/messages/t/{spec}/"));
     }
     let q = spec.to_lowercase();
-    // `trustworthy`: the scan proved it reached the true end of the list, so a unique exact match
-    // cannot be hiding a duplicate further down that was never seen (a capped scan proves nothing).
-    // Returns None when there is exactly one exact match but that could not be confirmed unique.
-    let find = |list: &[Chat], trustworthy: bool| -> Option<(Vec<Chat>, bool)> {
-        let exact: Vec<Chat> = list
-            .iter()
-            .filter(|c| c.name.to_lowercase() == q)
-            .cloned()
-            .collect();
-        if exact.len() == 1 {
-            return if trustworthy {
-                Some((exact, true))
-            } else {
-                None
-            };
-        }
-        Some((
-            list.iter()
-                .filter(|c| c.name.to_lowercase().contains(&q))
-                .cloned()
-                .collect(),
-            false,
-        ))
-    };
     // the deep list: an exact name may sit below a partial match ("Alice Work" vs "Alice")
     let (list1, complete1) = chat_list(d, b, RESOLVE_DEPTH, RESOLVE_TTL).await?;
+    let mut complete = complete1;
     let trustworthy1 = complete1;
-    let mut found = find(&list1, trustworthy1);
+    let mut found = find_chats(&list1, &q, trustworthy1);
     if matches!(&found, Some((hits, _)) if hits.is_empty()) || found.is_none() {
         let (list2, complete2) = chat_list(d, b, RESOLVE_DEPTH, Duration::ZERO).await?;
+        complete = complete2;
         let trustworthy2 = complete2;
-        found = find(&list2, trustworthy2);
+        found = find_chats(&list2, &q, trustworthy2);
     }
     // never guess at uniqueness: fail closed instead of risking the wrong recipient
     let (hits, exact) = found.ok_or_else(|| {
         format!("could not finish scanning your chat list to confirm '{spec}' is unique; try again, or use a ref/id")
     })?;
     match hits.len() {
-        0 => Err(format!("no chat matches '{spec}' (try `fb chats`)")),
+        0 if !complete => Err(format!("could not finish scanning your chat list before resolving '{spec}'; use a profile ref or @handle")),
+        0 => friend_thread(d, b, spec).await,
         1 => Ok(Resolved {
             path: hits[0].path.clone(),
             name: Some(hits[0].name.clone()),
@@ -432,6 +567,28 @@ async fn open_thread(b: &std::sync::Arc<Browser>, t: &Tab, path: &str) -> Res<()
     Ok(())
 }
 
+/// One output line of `read`: a date header or `time sender: text`.
+fn message_line(m: &Value) -> String {
+    if let Some(dt) = m["d"].as_str() {
+        return format!("# {dt}");
+    }
+    let mut text = m["text"].as_str().unwrap_or("").replace('\n', " ⏎ ");
+    let att = m["att"].as_str().unwrap_or("");
+    if !att.is_empty() {
+        text = format!("[{att}] {text}").trim_end().to_string();
+    }
+    let re = m["re"].as_str().unwrap_or("");
+    if !re.is_empty() {
+        text.push_str(&format!(" {{{re}}}"));
+    }
+    format!(
+        "{} {}: {}",
+        m["t"].as_str().unwrap_or(""),
+        m["from"].as_str().unwrap_or("?"),
+        text
+    )
+}
+
 pub async fn read(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     let a = crate::ops::parse(args, &[], &[])?;
     let n = a.n.unwrap_or(20);
@@ -460,26 +617,12 @@ pub async fn read(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
         if let Some(e) = v["err"].as_str() {
             return Err(e.to_string());
         }
-        for m in v["msgs"].as_array().cloned().unwrap_or_default() {
-            if let Some(dt) = m["d"].as_str() {
-                out.line(format!("# {dt}"));
-                continue;
-            }
-            let mut text = m["text"].as_str().unwrap_or("").replace('\n', " ⏎ ");
-            let att = m["att"].as_str().unwrap_or("");
-            if !att.is_empty() {
-                text = format!("[{att}] {text}").trim_end().to_string();
-            }
-            let re = m["re"].as_str().unwrap_or("");
-            if !re.is_empty() {
-                text.push_str(&format!(" {{{re}}}"));
-            }
-            out.line(format!(
-                "{} {}: {}",
-                m["t"].as_str().unwrap_or(""),
-                m["from"].as_str().unwrap_or("?"),
-                text
-            ));
+        let msgs = v["msgs"].as_array().map(Vec::as_slice).unwrap_or_default();
+        if msgs.is_empty() {
+            out.err("note: no messages loaded; the conversation is empty or Facebook has not rendered it (retry, or open the chat from the profile with `fb page`)\n");
+        }
+        for m in msgs {
+            out.line(message_line(m));
         }
         Ok(())
     }
@@ -575,8 +718,36 @@ async fn submit(
     Ok(())
 }
 
+/// `reply` is `send` that must quote a message: without a selector it would
+/// silently become an ordinary send, so refuse before any browser work.
+fn require_reply_selector(args: &[String]) -> Res<()> {
+    let a = crate::ops::parse(args, &["file", "img", "match", "nth"], &["dry", "fuzzy"])?;
+    if a.opt("match").is_none_or(|m| m.trim().is_empty()) {
+        return Err("usage: reply <chat> <text> --match text [--nth n] [--file path]...".into());
+    }
+    Ok(())
+}
+
+pub async fn reply(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> {
+    require_reply_selector(args)?;
+    send(d, args, cwd, out).await
+}
+
+/// `--nth N`: which duplicate `--match` names, counting from the newest
+/// (0 = the newest match). Lets a client that shows the user a list act
+/// on the exact copy the user picked.
+fn nth_of(a: &crate::ops::Args) -> Res<usize> {
+    match a.opt("nth") {
+        None => Ok(0),
+        Some(v) => v
+            .parse::<usize>()
+            .map_err(|_| "--nth must be a whole number".to_string()),
+    }
+}
+
 pub async fn send(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> {
-    let a = crate::ops::parse(args, &["file", "img"], &["dry", "fuzzy"])?;
+    let a = crate::ops::parse(args, &["file", "img", "match", "nth"], &["dry", "fuzzy"])?;
+    let nth = nth_of(&a)?;
     let dry = a.flag("dry");
     // `--img` is the older name of `--file`; both attach any file, in the order given. Only the
     // metadata is checked here; each file is read when its turn comes (memory stays bounded).
@@ -624,6 +795,22 @@ pub async fn send(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> 
             b.eval(&t, "window.__fb.clearDraft()").await?;
             return Ok(());
         }
+        // `fb reply` is send with --match: quote the matched message above
+        // the composer first; everything after is the ordinary send path.
+        // The quote rides on the first message submitted (a file, if any).
+        let mut replied = String::new();
+        if let Some(m) = a.opt("match") {
+            let info = b
+                .eval(
+                    &t,
+                    &format!("window.__fb.msgReplyOpen({}, {})", json!(m), nth),
+                )
+                .await?;
+            match &info {
+                Value::String(e) => return Err(e.clone()),
+                v => replied = v["text"].as_str().unwrap_or("").to_string(),
+            }
+        }
         // One message per file, then the text: every step must show up as exactly its own new outgoing
         // message, so a missing attachment can never be confirmed by another message.
         for (k, (name, path)) in files.iter().enumerate() {
@@ -652,6 +839,9 @@ pub async fn send(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> 
                     format!("{e} (the files were already sent)")
                 }
             })?;
+        }
+        if !replied.is_empty() {
+            out.line(format!("replied\t{}", one_line(&replied)));
         }
         match &target.name {
             Some(n) => out.line(format!("sent\t{n}")),
@@ -748,7 +938,14 @@ fn read_attachment(path: &str) -> Res<Vec<u8>> {
     use std::io::Read;
     let mut bytes = Vec::new();
     std::fs::File::open(path)
-        .and_then(|f| f.take(MAX_ATTACHMENT as u64 + 1).read_to_end(&mut bytes))
+        .and_then(|f| {
+            // sized up front: growing by doubling would copy a 25MB file several times
+            let len = f
+                .metadata()
+                .map_or(0, |m| m.len().min(MAX_ATTACHMENT as u64));
+            bytes.reserve_exact(len as usize + 1);
+            f.take(MAX_ATTACHMENT as u64 + 1).read_to_end(&mut bytes)
+        })
         .map_err(|e| format!("{path}: {e}"))?;
     if bytes.is_empty() || bytes.len() > MAX_ATTACHMENT {
         return Err(format!(
@@ -758,16 +955,25 @@ fn read_attachment(path: &str) -> Res<Vec<u8>> {
     Ok(bytes)
 }
 
-async fn attach(b: &std::sync::Arc<Browser>, t: &Tab, name: &str, bytes: &[u8]) -> Res<()> {
+/// Hands `bytes` to the page as base64 chunks (`window.__fbUp`), one CDP call each. Each call carries
+/// CHUNK base64 characters (3 raw bytes encode to 4), encoded into one reused buffer; base64 and a
+/// single-quoted literal need no JSON escaping.
+pub(crate) async fn upload(b: &Browser, t: &Tab, bytes: &[u8]) -> Res<()> {
     use base64::Engine;
-    let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
     b.eval(t, "window.__fb.upBegin()").await?;
-    for chunk in b64.as_bytes().chunks(CHUNK) {
-        // base64 is ASCII: the chunk is valid UTF-8 and needs no escaping beyond the JSON string
-        let piece = std::str::from_utf8(chunk).unwrap_or_default();
-        b.eval(t, &format!("window.__fb.upChunk({})", json!(piece)))
-            .await?;
+    let mut js = String::with_capacity(CHUNK + 32);
+    for raw in bytes.chunks(CHUNK / 4 * 3) {
+        js.clear();
+        js.push_str("window.__fb.upChunk('");
+        base64::engine::general_purpose::STANDARD.encode_string(raw, &mut js);
+        js.push_str("')");
+        b.eval_unescaped(t, &js).await?;
     }
+    Ok(())
+}
+
+async fn attach(b: &std::sync::Arc<Browser>, t: &Tab, name: &str, bytes: &[u8]) -> Res<()> {
+    upload(b, t, bytes).await?;
     let js = format!(
         "window.__fb.attach({},{})",
         json!(name),
@@ -791,23 +997,56 @@ pub async fn unlock(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     let t = b.acquire().await?;
     let r = async {
         b.goto(&t, "https://www.facebook.com/messages/t/").await?;
-        match b.eval(&t, "window.__fb.pinFocus()").await? {
-            Value::Bool(true) => {}
-            Value::String(s) => return Err(s),
-            _ => return Err("unexpected".into()),
+        if b.eval(&t, "window.__fb.pinFocus(20000)").await? != Value::Bool(true) {
+            // The restore prompt is summoned by the messages page itself
+            // (verified on the user's account, 2026-10-31: it reappears on
+            // a fresh load even after being closed). One reload re-summons
+            // it when the first load raced or the prompt was mid-dismissal.
+            // facebook.com/secure-storage is NOT a fallback: on a real
+            // account it redirects to an unrelated business Page.
+            b.goto(&t, "https://www.facebook.com/messages/t/").await?;
+            match b.eval(&t, "window.__fb.pinFocus(20000)").await? {
+                Value::Bool(true) => {}
+                Value::String(s) => return Err(s),
+                _ => return Err("unexpected".into()),
+            }
         }
-        b.insert_text(&t, pin).await?;
-        match b.eval(&t, "window.__fb.pinDone()").await? {
-            Value::Bool(true) => {}
-            Value::String(s) => return Err(s),
-            _ => return Err("unexpected".into()),
+        // Type the PIN as real keystrokes, one digit at a time. A single
+        // Input.insertText lands in only the first box of the surfaces that
+        // give each digit its own field, and their per-box handlers advance
+        // on key events insertText never sends — the PIN never arrived whole.
+        for c in pin.chars() {
+            let d = c as u32 - '0' as u32;
+            b.key(&t, &c.to_string(), &format!("Digit{c}"), 48 + d, 0)
+                .await?;
         }
-        out.line("unlocked (history restores in the background)");
-        Ok(())
+        // Wait for the restore to actually finish (budget 4 minutes, covered
+        // by the unlock command's own allowance in cmd.rs): the PIN
+        // auto-submits into a "Verifying your PIN" state, and reporting
+        // success early would hide a restore that is still running.
+        // 'VERIFYING' at budget end is not an error: the PIN was accepted,
+        // Facebook is still working.
+        match b.eval(&t, "window.__fb.pinDone(240000)").await? {
+            Value::Bool(true) => {
+                out.line("unlocked");
+                Ok(false)
+            }
+            Value::String(s) if s == "VERIFYING" => {
+                out.line("PIN accepted; Facebook is still restoring your chat history — it finishes in the background as long as the browser stays open");
+                Ok(true)
+            }
+            Value::String(s) => Err(s),
+            _ => Err("unexpected".into()),
+        }
     }
     .await;
-    b.release(t).await;
-    r
+    // the restore runs inside this page: keep a still-verifying one awake
+    if r == Ok(true) {
+        b.park_busy(t).await;
+    } else {
+        b.release(t).await;
+    }
+    r.map(|_| ())
 }
 
 /// Remove (for everyone) your most recent message in a chat, optionally the latest one containing `--match`.
@@ -873,6 +1112,82 @@ pub async fn unsend(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     r.map(|_| ())
 }
 
+/// React to one message in a chat (the newest, or the newest containing
+/// --match text). Mirrors unsend's shape: resolve, open, one JS step that
+/// finds the message's toolbar and picks the emoji, verify by re-reading
+/// the message's reactions inside that same step.
+pub async fn msgreact(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
+    let a = crate::ops::parse(args, &["match", "nth"], &["fuzzy"])?;
+    let nth = nth_of(&a)?;
+    let (spec, reaction) = match a.pos.split_first() {
+        Some((s, rest)) if rest.len() == 1 => (s.as_str(), rest[0].as_str()),
+        _ => {
+            return Err(
+                "usage: msgreact <chat> <like|love|care|haha|wow|sad|angry> [--match text] [--nth n]".into(),
+            );
+        }
+    };
+    if !matches!(
+        reaction,
+        "like" | "love" | "care" | "haha" | "wow" | "sad" | "angry"
+    ) {
+        return Err(format!("unknown reaction: {reaction}"));
+    }
+    let b = d.browser(out).await?;
+    let gen0 = b.generation.load(std::sync::atomic::Ordering::SeqCst);
+    let _account = d.account.read().await;
+    if b.generation.load(std::sync::atomic::Ordering::SeqCst) != gen0 {
+        return Err(
+            "the account changed while this command waited; nothing was done, try again".into(),
+        );
+    }
+    let target = resolve(d, &b, spec).await?;
+    require_exact(d, &target, spec, a.flag("fuzzy"))?;
+    let t = b.acquire_kind("messages").await?;
+    if b.generation.load(std::sync::atomic::Ordering::SeqCst) != gen0 {
+        return Err(
+            "the account changed while this command waited; nothing was done, try again".into(),
+        );
+    }
+    let r = async {
+        open_thread(&b, &t, &target.path).await?;
+        let m = a.opt("match").unwrap_or("");
+        // find the message and open its picker first; the click that applies
+        // the reaction is the one step a cancelled client must still stop
+        let open = b
+            .eval(
+                &t,
+                &format!(
+                    "window.__fb.msgReactOpen({}, {}, {})",
+                    json!(m),
+                    json!(reaction),
+                    nth
+                ),
+            )
+            .await?;
+        if let Value::String(e) = &open {
+            return Err(e.clone());
+        }
+        if out.cancelled() {
+            return Err("cancelled by client; nothing was reacted".into());
+        }
+        let info = b.eval(&t, "window.__fb.msgReactConfirm()").await?;
+        let text = match &info {
+            Value::String(e) => return Err(e.clone()),
+            v => v["text"].as_str().unwrap_or("").to_string(),
+        };
+        out.line(format!("reacted\t{}", one_line(&text)));
+        Ok(true)
+    }
+    .await;
+    if matches!(r, Ok(true)) {
+        b.release_as(t, "messages").await;
+    } else {
+        b.close(t).await;
+    }
+    r.map(|_| ())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -929,28 +1244,10 @@ mod tests {
         assert!(!is_thread_path("/messages/t/1/2"));
         assert!(!is_thread_path("/messages/t/111\\..\\222"));
         assert!(!is_thread_path("/messages/t/1\t/2"));
-        assert!(!is_thread_path(&thread_of_profile("/.")));
-        assert!(!is_thread_path(&thread_of_profile("/..")));
         assert!(is_thread_path("/messages/t/123/?ref=x"));
         assert!(!is_thread_path("/messages/"));
         assert!(!is_thread_path("/messages/e2ee/t/"));
         assert!(!is_thread_path("/profile.php?id=1"));
-    }
-
-    #[test]
-    fn thread_paths_from_profiles() {
-        assert_eq!(
-            thread_of_profile("/profile.php?id=123&sk=friends"),
-            "/messages/t/123/"
-        );
-        assert_eq!(
-            thread_of_profile("/some.vanity"),
-            "/messages/t/some.vanity/"
-        );
-        assert_eq!(
-            thread_of_profile("/messages/e2ee/t/9/"),
-            "/messages/e2ee/t/9/"
-        );
     }
 
     #[test]
@@ -981,4 +1278,204 @@ mod tests {
         assert_eq!(flags(&c("/messages/e2ee/t/1/", true, false)), "!e");
         assert_eq!(flags(&c("/messages/t/1/", false, true)), "g");
     }
+
+    fn chat(path: &str, name: &str) -> Chat {
+        Chat {
+            path: path.into(),
+            name: name.into(),
+            preview: String::new(),
+            time: String::new(),
+            unread: false,
+            group: false,
+        }
+    }
+
+    #[test]
+    fn page_answers_parse_leniently() {
+        let (list, complete) = parse_chats(
+            r#"{"chats":[{"href":"/messages/t/1/","name":"Ann","preview":"hi","time":"2h","unread":true,"group":"yes"},{"href":7,"extra":1}],"complete":true}"#,
+        )
+        .unwrap();
+        assert!(complete);
+        assert_eq!(list.len(), 2);
+        assert_eq!(
+            (
+                list[0].path.as_str(),
+                list[0].name.as_str(),
+                list[0].preview.as_str()
+            ),
+            ("/messages/t/1/", "Ann", "hi")
+        );
+        assert_eq!(list[0].time, "2h");
+        assert!(list[0].unread && !list[0].group);
+        assert_eq!(list[1].path, "");
+        let (none, complete) = parse_chats("{}").unwrap();
+        assert!(none.is_empty() && !complete);
+        assert_eq!(
+            parse_chats(r#"{"err":"no chat list"}"#).unwrap_err(),
+            "no chat list"
+        );
+        assert!(parse_chats("not json").is_err());
+    }
+
+    #[test]
+    fn name_lookup_prefers_a_confirmed_unique_exact_match() {
+        let list = [
+            chat("/a", "Alice Work"),
+            chat("/b", "Alice"),
+            chat("/c", "ÉLODIE"),
+            chat("/d", "Bob"),
+        ];
+        let paths = |r: Option<(Vec<Chat>, bool)>| {
+            r.map(|(hits, exact)| (hits.into_iter().map(|c| c.path).collect::<Vec<_>>(), exact))
+        };
+        assert_eq!(
+            paths(find_chats(&list, "alice", true)),
+            Some((vec!["/b".into()], true))
+        );
+        assert_eq!(paths(find_chats(&list, "alice", false)), None);
+        assert_eq!(
+            paths(find_chats(&list, "ali", true)),
+            Some((vec!["/a".into(), "/b".into()], false))
+        );
+        assert_eq!(
+            paths(find_chats(&list, "élodie", true)),
+            Some((vec!["/c".into()], true))
+        );
+        assert_eq!(
+            paths(find_chats(&list, "nobody", true)),
+            Some((vec![], false))
+        );
+    }
+
+    #[test]
+    fn chat_cache_round_trips_and_flattens_separators() {
+        let file = std::env::temp_dir().join(format!("fb-chats-{}.tsv", std::process::id()));
+        let mut c = chat("/messages/t/1/", "A\tB\nC");
+        c.preview = "x\ty".into();
+        c.time = "1h".into();
+        c.unread = true;
+        let cache = ChatCache {
+            uid: "9".into(),
+            at: Instant::now(),
+            n: 5,
+            complete: true,
+            list: vec![c, chat("/messages/e2ee/t/2/", "Zed")].into(),
+        };
+        cache.save(&file);
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "#uid=9\n#n=5\n#complete=1\n/messages/t/1/\tA B C\t1h\t1\t0\tx y\n/messages/e2ee/t/2/\tZed\t\t0\t0\t\n"
+        );
+        let back = ChatCache::load(&file).unwrap();
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!((back.uid.as_str(), back.n, back.complete), ("9", 5, true));
+        assert_eq!(back.list.len(), 2);
+        assert_eq!(
+            (back.list[0].name.as_str(), back.list[0].preview.as_str()),
+            ("A B C", "x y")
+        );
+        assert!(back.list[0].unread && !back.list[0].group && back.list[1].e2ee());
+    }
+
+    #[test]
+    fn reply_needs_a_nonblank_match_selector() {
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let usage = "usage: reply <chat> <text> --match text [--nth n] [--file path]...";
+        assert_eq!(
+            require_reply_selector(&args(&["42", "answer"])),
+            Err(usage.into())
+        );
+        assert_eq!(
+            require_reply_selector(&args(&["42", "answer", "--match", "  "])),
+            Err(usage.into())
+        );
+        assert_eq!(
+            require_reply_selector(&args(&["42", "answer", "--match=lunch"])),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn read_lines_show_dates_attachments_and_reactions() {
+        let line = |v: Value| message_line(&v);
+        assert_eq!(line(json!({"d": "Today"})), "# Today");
+        assert_eq!(
+            line(json!({"t": "10:00", "from": "me", "text": "a\nb", "att": "img", "re": "👍2"})),
+            "10:00 me: [img] a ⏎ b {👍2}"
+        );
+        assert_eq!(line(json!({"att": "file"})), " ?: [file]");
+    }
+
+    /// A fake Chrome that records every `Runtime.evaluate` expression and answers `true`.
+    async fn recording_chrome() -> (u16, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message;
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        tokio::spawn(async move {
+            let (s, _) = l.accept().await.unwrap();
+            let ws = tokio_tungstenite::accept_async(s).await.unwrap();
+            let (mut tx, mut rx) = ws.split();
+            while let Some(Ok(Message::Text(t))) = rx.next().await {
+                let v: Value = serde_json::from_str(t.as_str()).unwrap();
+                if v["method"] == "Runtime.evaluate" {
+                    assert_eq!(v["params"]["awaitPromise"], true);
+                    assert_eq!(v["sessionId"], "S");
+                    log.lock()
+                        .unwrap()
+                        .push(v["params"]["expression"].as_str().unwrap().to_string());
+                }
+                let reply = json!({"id": v["id"], "result": {"targetId": "T", "sessionId": "S", "result": {"value": true}}});
+                let _ = tx.send(Message::text(reply.to_string())).await;
+            }
+        });
+        (port, seen)
+    }
+
+    #[tokio::test]
+    async fn attachments_reach_the_page_as_independently_decodable_chunks() {
+        use base64::Engine;
+        let (port, seen) = recording_chrome().await;
+        let stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        let cdp = crate::cdp::Cdp::connect(stream, &format!("ws://127.0.0.1:{port}/"))
+            .await
+            .unwrap();
+        let b = Browser::new(cdp);
+        let t = b.acquire().await.unwrap();
+        // a bit over two chunks, with a size that is not a multiple of 3
+        let data: Vec<u8> = (0..CHUNK / 4 * 3 * 2 + 1001)
+            .map(|i| (i * 7 + i / 251) as u8)
+            .collect();
+        attach(&b, &t, "a \"b\".pdf", &data).await.unwrap();
+        let exprs = seen.lock().unwrap().clone();
+        assert_eq!(exprs[0], "window.__fb.upBegin()");
+        assert_eq!(exprs.len(), 5);
+        let mut decoded = Vec::new();
+        for e in &exprs[1..4] {
+            let b64 = e
+                .strip_prefix("window.__fb.upChunk('")
+                .and_then(|r| r.strip_suffix("')"))
+                .unwrap();
+            assert!(b64.len() <= CHUNK);
+            decoded.extend(
+                base64::engine::general_purpose::STANDARD
+                    .decode(b64)
+                    .unwrap(),
+            );
+        }
+        assert_eq!(decoded, data);
+        assert_eq!(
+            exprs[4],
+            r#"window.__fb.attach("a \"b\".pdf","application/pdf")"#
+        );
+        b.close(t).await;
+    }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod bench;
