@@ -442,6 +442,17 @@ try{
    await fb('page','expanded','close');
   }finally{await evaluate(`localStorage.posts=JSON.stringify(${JSON.stringify(saved)});for(const k of ['collapsedBody','expandDelay','expandLabel'])localStorage.removeItem(k);JSON.stringify(true)`)}
  });
+ await check('feed skips posts with no openable link',async()=>{
+  // BlindFB #21: sponsored/suggested cards carry no post permalink, so in
+  // the app they listed as rows Enter could never open. They are not posts
+  // the user can act on and must not be listed at all.
+  await evaluate('localStorage.linklessFeed="true";JSON.stringify(true)');
+  try{
+   const output=await fb('feed','--refresh','-n','5');
+   assert(!output.includes('Sponsored fixture post'),'link-less card is not listed');
+   assert(output.trim().length>0,'ordinary posts still list');
+  }finally{await evaluate('localStorage.removeItem("linklessFeed");JSON.stringify(true)')}
+ });
  await check('PIN modal send is single and confirmed in three locales',async()=>{for(const locale of ['en','vi','fr']){
   await evaluate(`localStorage.restored="false";localStorage.removeItem("unlocked");localStorage.locale=JSON.stringify("${locale}");JSON.stringify(true)`);
   // While history is locked a send must report blocked, never clear the
