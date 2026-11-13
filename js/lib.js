@@ -87,7 +87,7 @@
  /* a group's name is the first line of its first link; the other lines of all its links are details */
  const addGroup=(m,p,lines)=>{const cur=m.get(p);if(!cur){m.set(p,{name:lines[0],info:lines.slice(1)});return}for(const l of lines)if(l!==cur.name&&!cur.info.includes(l))cur.info.push(l)};
  const TIME=/^(\d+\s*(giây|phút|giờ|ngày|tuần|tháng|năm)(\s*trước)?|Hôm qua.*|Vừa xong|Yesterday.*|Just now|\d+\s*(s|m|h|d|w|y|hr|hrs|min|mins)|\d+\s+(seconds?|minutes?|hours?|days?|weeks?|months?|years?)(\s+ago)?|\d{1,2}\s+tháng\s+\d{1,2}.*|(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2}.*|il y a .*|hier.*|\d{1,2} (janv|févr|mars|avr|mai|juin|juil|août|sept|oct|nov|déc).*)$/i;
- const SPON=/^(Được tài trợ|Sponsored|Sponsorisé|Gesponsert|Patrocinado|Ad$)/i;
+ const SPON=/^(Được tài trợ|Sponsored|Sponsorisé|Gesponsert|Patrocinado)/i;
  const ACT=/^(Thích|Like|J'aime|Trả lời|Reply|Répondre|Chia sẻ|Share|Partager|Đã chỉnh sửa|Edited|Modifié|Dịch|See translation|Xem bản dịch)$/i;
  const trunc=(s,n)=>{if(!s)return s;const a=Array.from(s);return a.length>n?a.slice(0,n).join('')+'…':s;};
  const scrollerOf=el=>{let p=el;while(p&&p!==document.body&&p!==document.documentElement){if(p.scrollHeight>p.clientHeight+20&&/auto|scroll/.test(getComputedStyle(p).overflowY))return p;p=p.parentElement;}return null;};

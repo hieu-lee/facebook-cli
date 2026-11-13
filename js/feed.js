@@ -77,7 +77,7 @@
        linked heading (h3 on a profile, h4 in the feed) whose first link is the name. */
     for(const h of u.querySelectorAll('h2,h3,h4')){
      const a=h.querySelector('a[href]');
-     if(!a||!window.__fb.visible(h)||h.closest('blockquote,[data-ad-rendering-role=profile_name]')||h.querySelector('[data-ad-rendering-role=profile_name]')||(reactions&&!(h.compareDocumentPosition(reactions)&Node.DOCUMENT_POSITION_FOLLOWING)))continue;
+     if(!a||!window.__fb.visible(h)||h.closest('blockquote,[data-ad-rendering-role=profile_name],[data-ad-rendering-role=story_message]')||h.querySelector('[data-ad-rendering-role=profile_name]')||(reactions&&!(h.compareDocumentPosition(reactions)&Node.DOCUMENT_POSITION_FOLLOWING)))continue;
      const author=shortBadge(clean(a.innerText));if(author&&!head.includes(author))head.push(author);
     }
     const msg=g(u,'story_message');
@@ -92,7 +92,7 @@
     const svg=svgText(tlk);
     out.push({pos,url,alt:alt?canon(alt):'',author:head.join(' / '),time:dt&&dt.text?dt.text:(svg||(ti<0?'':ch[ti])),text:postText(msg)||attached(u),
       r:num(g(u,'like_button')),c:num(g(u,'comment_button')),s:num(g(u,'share_button')),
-      ad:SPON.test(svg)||ch.slice(0,12).some(c=>SPON.test(c)),hover});
+      ad:SPON.test(svg)||/^Ad$/.test(svg)||ch.slice(0,12).some(c=>SPON.test(c)),hover});
     if(url||!hover)continue;
     current={pos,u,render:render(u),name,msg};
     break;

@@ -664,4 +664,32 @@ console.log('js removed-newest ok');
     assert.strictEqual(post.ad, true);
     console.log('js feed shared author and svg ad label ok');
   }
+  // an ordinary post: a linked heading inside its message names no author,
+  // and a bare "Ad" in its text (not Facebook's SVG label) is no ad
+  {
+    const timeAnchor = {
+      getAttribute: n => (n === 'href' ? 'https://www.facebook.com/brandon/posts/998' : null),
+      innerText: '2h', focus() {}, blur() {}, scrollIntoView() {}, compareDocumentPosition: () => 4,
+      querySelector: () => null,
+    };
+    const mentioned = { innerText: 'Mentioned Person', getAttribute: n => (n === 'href' ? 'https://www.facebook.com/mentioned' : null) };
+    const heading = {
+      querySelector: sel => (sel === 'a[href]' ? mentioned : null),
+      closest: sel => (sel.includes('story_message') ? {} : null), compareDocumentPosition: () => 4,
+    };
+    const profileEl = { innerText: 'Brandon Bracey', querySelector: () => null, closest: () => null, compareDocumentPosition: () => 4 };
+    const msgEl = { querySelectorAll: () => [] };
+    const card = {
+      querySelector: sel => (sel.includes('profile_name') ? profileEl : sel.includes('story_message') ? msgEl : null),
+      querySelectorAll: sel => (sel === 'a[href]' ? [timeAnchor] : sel.includes('profile_name') ? [profileEl] : sel === 'h2,h3,h4' ? [heading] : []),
+      getAttribute: () => null,
+    };
+    const document = { createTreeWalker: () => ({ nextNode: () => null }), querySelectorAll: () => [], querySelector: () => null, getElementById: () => null };
+    const window = { __fb: { ...F, postCards: () => [card], postText: () => 'Ad', vtext: () => ['Brandon Bracey', '2h', 'Ad'], num: () => '0', visible: () => true } };
+    require('vm').runInNewContext(fs.readFileSync(path.join(__dirname, '../js/feed.js'), 'utf8'), { window, document, Node: { DOCUMENT_POSITION_FOLLOWING: 4 }, NodeFilter: { SHOW_TEXT: 4 } });
+    const [post] = await window.__fbFeed.step();
+    assert.strictEqual(post.author, 'Brandon Bracey');
+    assert.strictEqual(post.ad, false);
+    console.log('js feed message heading and text Ad ok');
+  }
 })().catch(e => { console.error(e); process.exit(1); });
