@@ -59,8 +59,10 @@
  };
  /* the filled card must link the post itself before anything is pressed on it */
  const linksTo=async(u,want)=>{
-  const t=timeLink(u);
+  const t=timeLink(u),before=key(u);
   if(t&&/^\?/.test(t.getAttribute('href'))){t.focus({preventScroll:true});await waitFor(()=>!/^\?/.test(t.getAttribute('href')||''),1500,50);t.blur()}
+  /* Facebook may swap the timestamp, or reuse the card for another post, during that wait */
+  if(key(u)!==before||(t&&(!t.isConnected||!u.contains(t)||timeLink(u)!==t)))return false;
   /* the card's OWN permalink, picked the way step() picked it: its timestamp link when that is a
      post link, else its first post link. Any other link (a share, a quote, a link in the text)
      may point at another post. */

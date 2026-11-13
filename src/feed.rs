@@ -288,7 +288,13 @@ impl FeedBuf {
                         let (expr, mut done) = g.actions.remove(0);
                         drop(g);
                         if frozen {
-                            let _ = b.set_lifecycle(&t, false).await;
+                            // a tab that will not thaw is retired like on the normal path
+                            if let Err(e) = b.set_lifecycle(&t, false).await {
+                                let _ = done.send(Err(format!(
+                                    "the feed tab could not be woken ({e}); nothing was pressed"
+                                )));
+                                return Err(e);
+                            }
                             frozen = false;
                         }
                         // a caller that gives up mid-walk (its timeout) stops the remaining presses
