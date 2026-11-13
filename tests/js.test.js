@@ -552,7 +552,7 @@ console.log('js removed-newest ok');
   console.log('js search kinds ok');
 })();
 
-// places: hidden links never count toward n, a name split across spans stays whole,
+// places: hidden links never count toward n, a labelled action link is no detail, a name split across spans stays whole,
 // a second link's first line is a detail, and details that render later are merged in
 (async () => {
   const vm = require('vm');
@@ -563,6 +563,7 @@ console.log('js removed-newest ok');
   const anchors = [
     link('/places/Hidden/999', ['Hidden Item'], true),
     link('/places/City-Library/111', ['City Library']),
+    Object.assign(link('/places/City-Library/111', ['View']), { getAttribute: k => (k === 'href' ? '/places/City-Library/111' : k === 'aria-label' ? 'View' : null) }),
     link('/places/Jazz-Night/222', ['Jazz Night']),
   ];
   let pass = 0;
