@@ -420,9 +420,12 @@ impl FeedBuf {
             g.actions.push((expr, done));
         }
         self.wake.notify_waiters();
+        // past the deadline the walk may already have pressed something: report that, never let
+        // the caller replay the presses on the post page (dropping rx stops the rest of the walk)
         match tokio::time::timeout(Duration::from_secs(120), rx).await {
             Ok(Ok(r)) => Some(r),
-            _ => None,
+            _ => Some(Err("the feed tab did not finish within 120 s; some presses may have happened, check the post before trying again"
+                .into())),
         }
     }
 
@@ -475,6 +478,15 @@ pub async fn feed(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     Ok(())
 }
 
+const CANCELLED: &str = "cancelled by client; presses after that point were not made";
+
+/// Resolves once the client went away (Ctrl-C, its timeout, a closed connection).
+async fn client_gone(out: &Out) {
+    while !out.cancelled() {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
 /// Close whatever menus and dialogs post-menu left open (Escape needs trusted key presses).
 async fn close_layers(b: &Browser, t: &Tab) {
     for _ in 0..3 {
@@ -505,7 +517,12 @@ pub async fn post_menu(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
         );
     }
     let card = format!("window.__fbFeed.menu({},{path})", Value::from(url.as_str()));
-    let (from, r) = match d.feed.act(card).await {
+    let feed = tokio::select! {
+        r = d.feed.act(card) => r,
+        // dropping the action's receiver makes the feed tab stop the walk before its next press
+        _ = client_gone(out) => return Err(CANCELLED.into()),
+    };
+    let (from, r) = match feed {
         Some(Ok(r)) if r["gone"] != Value::Bool(true) => ("feed", r),
         Some(Err(e)) => return Err(e),
         card => {
@@ -524,7 +541,14 @@ pub async fn post_menu(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
             let r = async {
                 b.goto(&t, &page).await?;
                 wait_main(&b, &t).await?;
-                bounded(90, b.eval(&t, &format!("window.__fbFeed.postMenu({path})"))).await
+                let walk = format!("window.__fbFeed.postMenu({path})");
+                tokio::select! {
+                    r = bounded(90, b.eval(&t, &walk)) => r,
+                    _ = client_gone(out) => {
+                        let _ = bounded(10, b.eval(&t, "window.__fbFeed.stop()")).await;
+                        Err(CANCELLED.into())
+                    }
+                }
             }
             .await;
             close_layers(&b, &t).await;

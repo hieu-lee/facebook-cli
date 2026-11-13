@@ -61,10 +61,14 @@
  const linksTo=async(u,want)=>{
   const t=timeLink(u);
   if(t&&/^\?/.test(t.getAttribute('href'))){t.focus({preventScroll:true});await waitFor(()=>!/^\?/.test(t.getAttribute('href')||''),1500,50);t.blur()}
-  /* the card's OWN permalink, picked the way step() picked it: its timestamp link, else its first
-     post link. Any other link (a share, a quote, a link in the text) may point at another post. */
-  const own=t?t.getAttribute('href'):[...u.querySelectorAll('a[href]')].map(a=>a.getAttribute('href')).find(h=>POST.test(h)&&!/comment_id/.test(h));
-  return !!own&&!/^\?/.test(own)&&canon(own)===want;
+  /* the card's OWN permalink, picked the way step() picked it: its timestamp link when that is a
+     post link, else its first post link. Any other link (a share, a quote, a link in the text)
+     may point at another post. */
+  const real=t?.getAttribute('href')||'';
+  const viaTime=!/^\?/.test(real)&&POST.test(real)&&!/comment_id/.test(real)?canon(real):'';
+  if(viaTime)return viaTime===want;
+  const alt=[...u.querySelectorAll('a[href]')].map(a=>a.getAttribute('href')).find(h=>POST.test(h)&&!/comment_id/.test(h));
+  return !!alt&&canon(alt)===want;
  };
  const timeNode=(u,tt)=>{const w=document.createTreeWalker(u,NodeFilter.SHOW_TEXT);let n;while(n=w.nextNode()){const t=n.nodeValue;if(!t||t.includes('\u034f')||n.parentElement.closest('blockquote'))continue;if(t.replace(/[\u200b-\u200f\u2060\ufeff]/g,'').trim()===tt)return n;}return null;};
  const decode=a=>{
