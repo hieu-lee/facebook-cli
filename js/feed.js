@@ -26,6 +26,8 @@
  const linkId=u=>permalink(timeLink(u));
  const unread=u=>{const s=seen.get(u);if(!s)return true;const l=linkId(u);if(s.k!==key(u)||(s.l&&s.l!==l))return true;s.l=l;return false};
  const mark=u=>seen.set(u,{k:key(u),l:linkId(u)});
+ /* every message block of a card: a shared post's own text, then the original post's */
+ const msgs=u=>[...u.querySelectorAll('[data-ad-rendering-role=story_message]')].filter(m=>window.__fb.visible(m));
  /* a share or reel without a message of its own: its attachment title, else a photo description.
     Attachment fields can hold scrambled single-word tokens instead of text, so require a space. */
  const attached=u=>{
@@ -43,7 +45,7 @@
    for(const u of postCards()){
     const name=g(u,'profile_name');
     if(!name)continue;
-    if(more(g(u,'story_message')).length)continue;
+    if(msgs(u).some(m=>more(m).length))continue;
     /* skip read cards before any waiting: ads never reveal, so waiting on every mounted card
        each step made one page of posts take a minute */
     if(!unread(u))continue;
@@ -80,7 +82,7 @@
     if(url)hover=null;
     else if(!hover){const tn=ti<0?null:timeNode(u,ch[ti]);if(tn){tn.parentElement.scrollIntoView({block:'center'});const rg=document.createRange();rg.selectNodeContents(tn);const r=rg.getBoundingClientRect();if(r.width>0)hover=[r.x+r.width/2,r.y+r.height/2];}}
     const alt=[...u.querySelectorAll('a[href]')].map(a=>a.getAttribute('href')).find(h=>POST.test(h)&&!/comment_id/.test(h));
-    out.push({pos,url,alt:alt?canon(alt):'',author:head.join(' / '),time:dt&&dt.text?dt.text:(ti<0?'':ch[ti]),text:postText(msg)||attached(u),
+    out.push({pos,url,alt:alt?canon(alt):'',author:head.join(' / '),time:dt&&dt.text?dt.text:(ti<0?'':ch[ti]),text:msgs(u).map(postText).filter(Boolean).reduce((all,t)=>all?all+(/[.!?…:]$/.test(all)?'\n\n':'.\n\n')+t:t,'')||attached(u),
       r:num(g(u,'like_button')),c:num(g(u,'comment_button')),s:num(g(u,'share_button')),
       ad:ch.slice(0,12).some(c=>SPON.test(c)),hover});
     if(url||!hover)continue;
@@ -100,8 +102,7 @@
   async expand(){
    const pending=[];
    for(const card of postCards()){
-    const msg=g(card,'story_message');if(!msg)continue;
-    for(const b of more(msg)){
+    for(const msg of msgs(card))for(const b of more(msg)){
      pending.push(msg);window.__fb.press(b);
     }
    }
