@@ -240,6 +240,8 @@
     const p=pathOf(a.getAttribute('href'));if(!p||!linkShown(a))continue;
     /* rendered lines, not text nodes: a name split across inline spans stays whole */
     const lines=(a.innerText||'').split('\n').map(clean).filter(Boolean);
+    /* a labelled action on an item already named ("View group": aria-label = its text) is not a detail */
+    const label=clean(a.getAttribute('aria-label')||'');if(acc.has(p)&&label&&label===lines.join(' '))continue;
     if(lines.length)addGroup(acc,p,lines);
    }
    return [...acc.keys()].map(k=>({k}));
