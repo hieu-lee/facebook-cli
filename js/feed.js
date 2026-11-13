@@ -78,7 +78,18 @@
     const tlk=timeLink(u);
     if(tlk){if(!url)tlk.scrollIntoView({block:'center'});dt=decode(tlk);if(dt)hover=[dt.x,dt.y];}
     if(url)hover=null;
-    else if(!hover){const tn=ti<0?null:timeNode(u,ch[ti]);if(tn){tn.parentElement.scrollIntoView({block:'center'});const rg=document.createRange();rg.selectNodeContents(tn);const r=rg.getBoundingClientRect();if(r.width>0)hover=[r.x+r.width/2,r.y+r.height/2];}}
+    else if(!hover){
+     /* Suggested cards carry no TIME-shaped chunk (their header says
+        "Suggested for you" instead of a time) and a plain-text timestamp
+        link decodes to nothing, so both hover sources above miss them and
+        the post ships with no link at all. The timestamp link's own
+        rectangle is a hover target in its own right. It comes last: the
+        timestamp text is the surer target, and timeLink() can pick an
+        earlier query-only anchor that is not the timestamp. */
+     const tn=ti<0?null:timeNode(u,ch[ti]);if(tn){tn.parentElement.scrollIntoView({block:'center'});const rg=document.createRange();rg.selectNodeContents(tn);const r=rg.getBoundingClientRect();if(r.width>0)hover=[r.x+r.width/2,r.y+r.height/2];}
+     const rc=!hover&&tlk&&tlk.getBoundingClientRect&&tlk.getBoundingClientRect();
+     if(rc&&rc.width>0)hover=[rc.x+rc.width/2,rc.y+rc.height/2];
+    }
     const alt=[...u.querySelectorAll('a[href]')].map(a=>a.getAttribute('href')).find(h=>POST.test(h)&&!/comment_id/.test(h));
     out.push({pos,url,alt:alt?canon(alt):'',author:head.join(' / '),time:dt&&dt.text?dt.text:(ti<0?'':ch[ti]),text:postText(msg)||attached(u),
       r:num(g(u,'like_button')),c:num(g(u,'comment_button')),s:num(g(u,'share_button')),
