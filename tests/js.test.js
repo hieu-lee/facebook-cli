@@ -631,3 +631,42 @@ console.log('js removed-newest ok');
   ]) assert.strictEqual(kindOf(href), kind, href);
   console.log('js search kinds ok');
 })();
+
+// places: hidden links never count toward n, a labelled action link is no detail, a name split across spans stays whole,
+// a second link's first line is a detail, and details that render later are merged in
+(async () => {
+  const vm = require('vm');
+  const link = (href, lines, hidden = false) => ({ href, lines, hidden,
+    getAttribute: k => (k === 'href' ? href : null),
+    get innerText() { return this.lines.join('\n'); },
+    getClientRects() { return this.hidden ? [] : [{}]; } });
+  const anchors = [
+    link('/places/Hidden/999', ['Hidden Item'], true),
+    link('/places/City-Library/111', ['City Library']),
+    Object.assign(link('/places/City-Library/111', ['View']), { getAttribute: k => (k === 'href' ? '/places/City-Library/111' : k === 'aria-label' ? 'View' : null) }),
+    link('/places/Jazz-Night/222', ['Jazz Night']),
+    // image-only: no rendered text; the name is the link's aria-label
+    Object.assign(link('/places/Riverside-Books/333', []), { getAttribute: k => (k === 'href' ? '/places/Riverside-Books/333' : k === 'aria-label' ? 'Riverside Books' : null), querySelector: () => null }),
+  ];
+  let pass = 0;
+  const scroll = () => {
+    pass++;
+    if (pass === 1) anchors.push(link('/places/Jazz-Night/222', ['Sat, Nov 14', 'Town Hall']));
+    if (pass === 2) anchors[1].lines.push('Library · 1K followers');
+  };
+  const doc = { querySelector: () => anchors[0], querySelectorAll: () => anchors };
+  const ctx = vm.createContext({ window: { scrollBy: scroll }, document: doc, location: { href: 'https://www.facebook.com/' }, URL, setTimeout, Date, innerHeight: 800,
+    getComputedStyle: () => ({ visibility: 'visible', display: 'block' }) });
+  vm.runInContext(src, ctx);
+  const G = ctx.window.__fb;
+  // text nodes, as vtext() returns them: "City" and "Library" are two pieces of one name
+  Object.assign(G, { sleep: async () => {}, waitFor: async f => f(), vtext: e => e.lines.flatMap(l => l.split(' ')) });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/ops.js'), 'utf8'), ctx);
+  const one = JSON.parse(JSON.stringify((await G.places(1)).rows));
+  assert.strictEqual(one[0][0], 'City Library', 'a hidden link must not fill -n 1: ' + JSON.stringify(one));
+  const rows = JSON.parse(JSON.stringify((await G.places(10)).rows));
+  assert.deepStrictEqual(rows.map(r => r[0]), ['City Library', 'Jazz Night', 'Riverside Books']);
+  assert.strictEqual(rows[0][2], 'Library · 1K followers', 'later details merge in');
+  assert.strictEqual(rows[1][2], 'Sat, Nov 14 · Town Hall', 'a second link keeps its first line');
+  console.log('js places hub ok');
+})().catch(e => { console.error(e); process.exit(1); });
