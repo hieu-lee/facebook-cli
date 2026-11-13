@@ -161,5 +161,25 @@
   const before=l.slice(sep+2,colon<0?l.length:colon).trim();
   return {t:tm[0],sender:before,text:colon>=0?clean(l.slice(colon+2)):''};
  };
- window.__fb={shortBadge,parseLabel,mergeChunks,press,sleep,clean,vtext,waitFor,visible,enabled,dismissRestore,postCards,postText,canon,groupPath,profilePath,addGroup,TIME,SPON,ACT,trunc,scrollerOf,num};
+ /* The browsable links inside one comment: real targets behind Facebook's
+    redirect wrapper, minus people (the author channel), comment permalinks,
+    hashtags and anchors whose target Facebook has not revealed yet. */
+ const commentLinks=list=>{
+  const found=new Map();
+  for(const a of list||[]){
+   if(!a.raw||a.raw.startsWith('?')||a.raw.startsWith('#'))continue;
+   let url;try{url=new URL(a.href)}catch{continue}
+   if(url.hostname==='l.facebook.com'&&url.searchParams.get('u')){try{url=new URL(url.searchParams.get('u'))}catch{continue}}
+   if(!/^https?:$/.test(url.protocol))continue;
+   // Facebook's own UI links only: an external page may use the same words
+   const fb=/(^|\.)facebook\.com$/i.test(url.hostname);
+   if(fb&&(/\/hashtag\//.test(url.pathname)||url.searchParams.has('comment_id')||url.searchParams.has('reply_comment_id')))continue;
+   if(profilePath(url.href))continue;
+   for(const k of[...url.searchParams.keys()])if(/^(__cft__|__tn__|fbclid)/.test(k))url.searchParams.delete(k);
+   if(!found.has(url.href))found.set(url.href,{label:clean(a.text||'')||url.hostname,url:url.href});
+   if(found.size>=10)break;
+  }
+  return[...found.values()];
+ };
+ window.__fb={shortBadge,parseLabel,mergeChunks,press,sleep,clean,vtext,waitFor,visible,enabled,dismissRestore,postCards,postText,canon,groupPath,profilePath,commentLinks,addGroup,TIME,SPON,ACT,trunc,scrollerOf,num};
 })();

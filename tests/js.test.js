@@ -127,6 +127,31 @@ assert.strictEqual(F.groupPath('https://www.facebook.com/somepage'), null);
  F.addGroup(m,'/groups/2',['Solo']);
  assert.deepStrictEqual([...m],[['/groups/1',{name:'Paris Hikers',info:['Public group · 2K members','Private group','2K members']}],['/groups/2',{name:'Solo',info:[]}]]);}
 console.log('js groupPath ok');
+// Comment links: unwrap the redirect, drop people/permalinks/hashtags and
+// unrevealed targets, strip trackers, dedupe.
+assert.deepStrictEqual(F.commentLinks([
+  {href: 'https://l.facebook.com/l.php?u=https%3A%2F%2Fexample.com%2Fstory%3Fa%3D1&h=xyz', raw: 'https://l.facebook.com/l.php?u=x', text: 'example.com/story'},
+  {href: 'https://othersite.org/page?fbclid=zz&keep=1', raw: 'https://othersite.org/page?fbclid=zz&keep=1', text: 'Other Site'},
+  {href: 'https://othersite.org/page?keep=1', raw: 'https://othersite.org/page?keep=1', text: 'dupe'},
+  {href: 'https://www.facebook.com/some.user', raw: '/some.user', text: 'Some User'},
+  {href: 'https://www.facebook.com/fixture/posts/100?comment_id=555', raw: '/fixture/posts/100?comment_id=555', text: '2h'},
+  {href: 'https://www.facebook.com/hashtag/news', raw: '/hashtag/news', text: '#news'},
+  {href: 'https://www.facebook.com/fixture/posts/100?__cft__[0]=q', raw: '?__cft__[0]=q', text: 'unrevealed'},
+  {href: 'https://www.facebook.com/photo/?fbid=99&__cft__[0]=z', raw: '/photo/?fbid=99', text: ''},
+]), [
+  {label: 'example.com/story', url: 'https://example.com/story?a=1'},
+  {label: 'Other Site', url: 'https://othersite.org/page?keep=1'},
+  {label: 'www.facebook.com', url: 'https://www.facebook.com/photo/?fbid=99'},
+]);
+// The UI-link filters apply to Facebook only: external pages keep these shapes.
+assert.deepStrictEqual(F.commentLinks([
+  {href: 'https://l.facebook.com/l.php?u=https%3A%2F%2Fexample.org%2Fstory%3Fcomment_id%3D42&h=x', raw: 'https://l.facebook.com/l.php?u=x', text: 'story'},
+  {href: 'https://www.tiktok.com/hashtag/cats', raw: 'https://www.tiktok.com/hashtag/cats', text: '#cats on TikTok'},
+]), [
+  {label: 'story', url: 'https://example.org/story?comment_id=42'},
+  {label: '#cats on TikTok', url: 'https://www.tiktok.com/hashtag/cats'},
+]);
+console.log('js commentLinks ok');
 assert.strictEqual(F.trunc('abcdef', 3), 'abc…');
 assert(F.ACT.test('Thích') && F.ACT.test('Reply') && !F.ACT.test('Hello'));
 console.log('js ok');

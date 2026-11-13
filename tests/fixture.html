@@ -37,7 +37,8 @@ function postNode(p){
  if(!read('decoyToolbar'))document.getElementById('decoyBar')?.remove();
  return s;
 }
-function render(){main.querySelectorAll('section').forEach(x=>x.remove());const id=location.pathname.match(/\/posts\/(\d+)/)?.[1];for(const p of posts.filter(p=>(!id||p.id===id)&&!(read('oldUnmounted')&&p.id==='100'&&!read('publishAttempted'))))main.append(postNode(p));}
+function commentNode(){const a=document.createElement('div');a.setAttribute('role','article');a.setAttribute('aria-label','Comment by Commenter One');const author=document.createElement('a');author.href='/commenter';author.textContent='Commenter One';const time=document.createElement('a');time.href='/fixture/posts/100?comment_id=555';time.textContent='2h';const body=document.createElement('div');body.dir='auto';body.append('Great post, see ');const l1=document.createElement('a');l1.href='https://l.facebook.com/l.php?u=https%3A%2F%2Fexample.com%2Fstory%3Fa%3D1&h=xyz';l1.textContent='example.com/story';body.append(l1,' and ');const l2=document.createElement('a');l2.href='https://othersite.org/page?fbclid=zz';l2.textContent='Other Site';body.append(l2);a.append(author,time,body,button('Like',()=>{}),button('Reply',()=>{}));return a}
+function render(){main.querySelectorAll('section').forEach(x=>x.remove());main.querySelectorAll('[role=article]').forEach(x=>x.remove());const id=location.pathname.match(/\/posts\/(\d+)/)?.[1];for(const p of posts.filter(p=>(!id||p.id===id)&&!(read('oldUnmounted')&&p.id==='100'&&!read('publishAttempted'))))main.append(postNode(p));if(id==='100')main.append(commentNode());}
 function composer(){
  const d=dialog(),tb=document.createElement('div');tb.role='textbox';tb.contentEditable='true';d.append(tb);let aud='friends';
  if(read('composerDraftText')!==null)tb.addEventListener('beforeinput',e=>{e.preventDefault();tb.innerText=read('composerDraftText')});
