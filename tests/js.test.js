@@ -92,6 +92,22 @@ for (const t of ['3 giờ trước', '22 phút', 'Hôm qua lúc 14:00', '17 Thá
 for (const t of ['Thích', 'Hieu Lee', '22 bình luận', 'Trả lời'])
   assert(!F.TIME.test(t), 'TIME should not match: ' + t);
 
+// A French Facebook account (labels seen live on one).
+for (const t of ['il y a 10 heures', '8 h', '1 j', '1 sem.', '7 sem.', '2 ans', 'À l’instant', 'Aujourd’hui à 14:05', 'Hier à 9:00', 'lundi à 10:00', '1er janv.', '12 mars 2024'])
+  assert(F.TIME.test(t), 'TIME should match: ' + t);
+for (const t of ['J’aime', "J'aime", 'Répondre', 'Partager', 'Modifié', 'Voir la traduction'])
+  assert(F.ACT.test(t), 'ACT should match: ' + t);
+assert.strictEqual(F.shortBadge('Oh My Mag Les comptes avec un badge Vérifié ont été authentifiés. Il peut s’agir d’abonnés Meta Verified ou de personnes ou de marques notables.'), 'Oh My Mag Verified');
+assert.strictEqual(F.clean('4\u202f890\u00a0€'), '4 890 €');
+const count = text => F.num({parentElement: {parentElement: {innerText: text}}});
+for (const t of ['28', '1.2K', '1,9 K', '40,1\u00a0K', '4\u202f890']) assert.strictEqual(count(t), t, 'count ' + t);
+// a newline or tab inside a counter would split TSV records: not a count
+for (const t of ['1,9\nK', '4\t890']) assert.strictEqual(count(t), '0', 'count ' + JSON.stringify(t));
+// an author named like a weekday or "today" is not a timestamp
+for (const t of ['Lundi Matin', 'Aujourd’hui en France', 'Dimanche soir']) assert(!F.TIME.test(t), 'TIME must not match: ' + t);
+assert.strictEqual(count('28 réactions'), '0');
+console.log('js french ok');
+
 assert.strictEqual(F.canon('https://www.facebook.com/groups/123/?multi_permalinks=456&hoisted=1&__cft__[0]=abc'), '/groups/123/posts/456');
 assert.strictEqual(F.canon('https://www.facebook.com/page/posts/pfbid0X?__cft__[0]=zz&__tn__=%2CO'), '/page/posts/pfbid0X');
 assert.strictEqual(F.canon('https://www.facebook.com/photo/?fbid=99&set=a.1&__cft__[0]=z'), '/photo/?fbid=99&set=a.1');
@@ -243,6 +259,28 @@ console.log('js removed-newest ok');
   const lazy = await run(mk(40, true), 400);
   assert.strictEqual(lazy.chats.length, 40); // pagination that lands after reaching the bottom is awaited
   assert.strictEqual(lazy.complete, true);
+  // French presence text is metadata only ahead of the title: a message or
+  // a thread actually named "En ligne" keeps its text
+  const fixed = texts => {
+    const rows = texts.map((text, i) => ({
+      text,
+      querySelector: q => (q.includes('a[') ? { getAttribute: k => (k === 'href' ? '/t/' + (2000 + i) + '/' : null) } : null),
+    }));
+    return {
+      parentElement: null, scrollHeight: rows.length * 100, clientHeight: 500, scrollTop: 0,
+      querySelector: () => true, querySelectorAll: () => rows,
+    };
+  };
+  const pres = await run(fixed([
+    ['Alice', 'En ligne', '·', '1 min'],
+    ['En ligne', 'Bob', 'salut', '·', '2 min'],
+    ['En ligne', '·', '3 min'],
+  ]), 10);
+  assert.strictEqual(pres.chats[0].name, 'Alice');
+  assert.strictEqual(pres.chats[0].preview, 'En ligne');
+  assert.strictEqual(pres.chats[1].name, 'Bob');
+  assert.strictEqual(pres.chats[1].preview, 'salut');
+  assert.strictEqual(pres.chats[2].name, 'En ligne');
   console.log('js chats ok');
 
   // composer focus: Facebook keeps a hidden notifications dialog mounted, which must not block input;
