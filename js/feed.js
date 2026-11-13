@@ -10,6 +10,8 @@
   const L=Math.min(...cs.map(c=>c.r.left)),R=Math.max(...cs.map(c=>c.r.right)),T=Math.min(...cs.map(c=>c.r.top)),B=Math.max(...cs.map(c=>c.r.bottom));
   return {text:cs.map(c=>c.t).join('').trim(),x:(L+R)/2,y:(T+B)/2};
  };
+ /* Facebook draws some timestamps, and an ad's label, as SVG text behind a chain of <use> references */
+ const svgText=a=>{let u=a?.querySelector?.('svg use'),s=null;for(let i=0;u&&i<12;i++){s=document.getElementById((u.getAttribute('href')||u.getAttribute('xlink:href')||'').slice(1));u=s&&s.querySelector('use')}return s&&s.tagName.toLowerCase()==='text'?clean(s.textContent):''};
  const timeLink=u=>[...u.querySelectorAll('a[href]')].find(a=>/^(\?|.*(?:\/posts\/|story_fbid|\/permalink))/.test(a.getAttribute('href')));
  const g=(u,r)=>u.querySelector('[data-ad-rendering-role='+r+']');
  const more=msg=>msg?[...msg.querySelectorAll('[role=button],button')].filter(b=>window.__fb.visible(b)&&/^(See more|Xem thêm|Voir plus|Afficher la suite)$/i.test(clean(b.innerText))):[];
@@ -71,6 +73,13 @@
      if(!window.__fb.visible(profile)||profile.closest('blockquote')||(reactions&&!(profile.compareDocumentPosition(reactions)&Node.DOCUMENT_POSITION_FOLLOWING)))continue;
      const author=shortBadge(clean(profile.innerText));if(author&&!head.includes(author))head.push(author);
     }
+    /* A shared post's original author heads its own header without the profile_name marker: a
+       linked heading (h3 on a profile, h4 in the feed) whose first link is the name. */
+    for(const h of u.querySelectorAll('h2,h3,h4')){
+     const a=h.querySelector('a[href]');
+     if(!a||!window.__fb.visible(h)||h.closest('blockquote,[data-ad-rendering-role=profile_name],[data-ad-rendering-role=story_message]')||h.querySelector('[data-ad-rendering-role=profile_name]')||(reactions&&!(h.compareDocumentPosition(reactions)&Node.DOCUMENT_POSITION_FOLLOWING)))continue;
+     const author=shortBadge(clean(a.innerText));if(author&&!head.includes(author))head.push(author);
+    }
     const msg=g(u,'story_message');
     /* an unfilled card has no author or text yet: read it again once Facebook renders it */
     if(!head.length&&!postText(msg)){seen.delete(u);continue}
@@ -80,9 +89,10 @@
     if(url)hover=null;
     else if(!hover){const tn=ti<0?null:timeNode(u,ch[ti]);if(tn){tn.parentElement.scrollIntoView({block:'center'});const rg=document.createRange();rg.selectNodeContents(tn);const r=rg.getBoundingClientRect();if(r.width>0)hover=[r.x+r.width/2,r.y+r.height/2];}}
     const alt=[...u.querySelectorAll('a[href]')].map(a=>a.getAttribute('href')).find(h=>POST.test(h)&&!/comment_id/.test(h));
-    out.push({pos,url,alt:alt?canon(alt):'',author:head.join(' / '),time:dt&&dt.text?dt.text:(ti<0?'':ch[ti]),text:postText(msg)||attached(u),
+    const svg=svgText(tlk);
+    out.push({pos,url,alt:alt?canon(alt):'',author:head.join(' / '),time:dt&&dt.text?dt.text:(svg||(ti<0?'':ch[ti])),text:postText(msg)||attached(u),
       r:num(g(u,'like_button')),c:num(g(u,'comment_button')),s:num(g(u,'share_button')),
-      ad:ch.slice(0,12).some(c=>SPON.test(c)),hover});
+      ad:SPON.test(svg)||/^Ad$/.test(svg)||ch.slice(0,12).some(c=>SPON.test(c)),hover});
     if(url||!hover)continue;
     current={pos,u,render:render(u),name,msg};
     break;
