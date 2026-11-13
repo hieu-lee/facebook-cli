@@ -9,9 +9,12 @@
  const NEXT=/^(Next|Tiếp|Tiếp tục|Suivant|Siguiente|Próximo|Seguinte|Weiter|Avanti|Volgende|Dalej|Další|Ďalej|İleri|Далее|Далі|Nästa|Næste|Neste|Seuraava)$/i;
  const actionLabel=b=>clean(b.getAttribute('aria-label')||btnText(b));
  const actionControls=d=>[...d.querySelectorAll('[role=button],button')];
- // What the screen shows when a step fails: labels only, never draft text.
+ // What the screen shows when a step fails: labels only, never draft text. A control in or
+ // around an editor keeps only its aria-label: its innerText would carry the draft.
+ const EDITABLE='[contenteditable]:not([contenteditable=false]),textarea,[role=textbox]';
+ const safeLabel=b=>clean(b.getAttribute('aria-label')||(b.closest(EDITABLE)||b.querySelector?.(EDITABLE)?'':btnText(b)));
  const composerState=d=>{
-  const labels=d?[...new Set(actionControls(d).filter(F.visible).map(b=>actionLabel(b).slice(0,40)).filter(Boolean))].slice(0,14).join(' | '):'';
+  const labels=d?[...new Set(actionControls(d).filter(F.visible).map(b=>safeLabel(b).slice(0,40)).filter(Boolean))].slice(0,14).join(' | '):'';
   const title=d?clean(d.querySelector('[role=heading],h2')?.innerText).slice(0,50):'';
   return ` (dialog "${title}", page language ${document.documentElement?.lang||'unknown'}, buttons: ${labels||'none'})`;
  };

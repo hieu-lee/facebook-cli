@@ -58,6 +58,15 @@ const F = global.window.__fb;
   assert.match(await G.composePrepare(), /Post button not found/);
   buttons = [button('div', 'Share note')];
   assert.match(await G.composePrepare(), /Post button not found.*Share note.*nothing was posted/, 'the error names what is on screen');
+  // a control wrapping an editor names no draft text in the diagnostics
+  const wrapper = Object.assign(button('div', 'Public action PRIVATE_NESTED_DRAFT'), {
+    getAttribute(name) { return name === 'role' ? 'button' : null; },
+    querySelector: sel => (sel.includes('contenteditable') ? {} : null),
+  });
+  buttons = [button('div', 'Share note'), wrapper];
+  const nested = await G.composePrepare();
+  assert.match(nested, /Share note/);
+  assert(!nested.includes('PRIVATE_NESTED_DRAFT'), 'diagnostics must not expose a nested draft: ' + nested);
   buttons = [];
   buttons = [button()]; buttons[0].disabled = true;
   assert.match(await G.composePrepare(), /Post button.*disabled/);
