@@ -259,6 +259,28 @@ console.log('js removed-newest ok');
   const lazy = await run(mk(40, true), 400);
   assert.strictEqual(lazy.chats.length, 40); // pagination that lands after reaching the bottom is awaited
   assert.strictEqual(lazy.complete, true);
+  // French presence text is metadata only ahead of the title: a message or
+  // a thread actually named "En ligne" keeps its text
+  const fixed = texts => {
+    const rows = texts.map((text, i) => ({
+      text,
+      querySelector: q => (q.includes('a[') ? { getAttribute: k => (k === 'href' ? '/t/' + (2000 + i) + '/' : null) } : null),
+    }));
+    return {
+      parentElement: null, scrollHeight: rows.length * 100, clientHeight: 500, scrollTop: 0,
+      querySelector: () => true, querySelectorAll: () => rows,
+    };
+  };
+  const pres = await run(fixed([
+    ['Alice', 'En ligne', '·', '1 min'],
+    ['En ligne', 'Bob', 'salut', '·', '2 min'],
+    ['En ligne', '·', '3 min'],
+  ]), 10);
+  assert.strictEqual(pres.chats[0].name, 'Alice');
+  assert.strictEqual(pres.chats[0].preview, 'En ligne');
+  assert.strictEqual(pres.chats[1].name, 'Bob');
+  assert.strictEqual(pres.chats[1].preview, 'salut');
+  assert.strictEqual(pres.chats[2].name, 'En ligne');
   console.log('js chats ok');
 
   // composer focus: Facebook keeps a hidden notifications dialog mounted, which must not block input;
