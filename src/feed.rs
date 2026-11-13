@@ -1,12 +1,12 @@
 use crate::browser::{Browser, Tab};
 use crate::cdp::Res;
 use crate::daemon::{Daemon, Out};
-use crate::messenger::push_one_line;
+use crate::messenger::{one_line, push_one_line};
 use crate::ops::Args;
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{Mutex, Notify, oneshot};
 
 #[derive(Clone, Debug, Default)]
 pub struct Post {
@@ -219,9 +219,14 @@ struct Inner {
     epoch: u64,
     started: Option<Instant>,
     error: Option<String>,
+    /// page scripts `fb post-menu` runs in this tab, where the listed posts' cards live
+    actions: Vec<(String, oneshot::Sender<Res<Value>>)>,
 }
 
-const AHEAD: usize = 60;
+/// Read-ahead beyond what callers asked for. Small on purpose: Facebook keeps only the last
+/// 10-25 posts of a scrolled feed mounted, and post-menu needs the cards of the posts being
+/// read still there.
+const AHEAD: usize = 5;
 const STALE: Duration = Duration::from_secs(20 * 60);
 
 impl FeedBuf {
@@ -273,9 +278,21 @@ impl FeedBuf {
                 tokio::pin!(notified);
                 notified.as_mut().enable();
                 {
-                    let g = self.inner.lock().await;
+                    let mut g = self.inner.lock().await;
                     if g.epoch != epoch {
                         return Ok(());
+                    }
+                    if let Some((expr, done)) = g.actions.pop() {
+                        drop(g);
+                        if frozen {
+                            let _ = b.set_lifecycle(&t, false).await;
+                            frozen = false;
+                        }
+                        let r = bounded(90, b.eval(&t, &expr)).await;
+                        close_layers(b, &t).await;
+                        let _ = done.send(r);
+                        last = Instant::now();
+                        continue;
                     }
                     if g.posts.len() - g.cursor >= AHEAD.max(g.want) {
                         drop(g);
@@ -380,6 +397,23 @@ impl FeedBuf {
         }
     }
 
+    /// Run `expr` in the feed tab between pump steps; `None` when no feed tab is open.
+    async fn act(&self, expr: String) -> Option<Res<Value>> {
+        let (done, rx) = oneshot::channel();
+        {
+            let mut g = self.inner.lock().await;
+            if !g.running {
+                return None;
+            }
+            g.actions.push((expr, done));
+        }
+        self.wake.notify_waiters();
+        match tokio::time::timeout(Duration::from_secs(120), rx).await {
+            Ok(Ok(r)) => Some(r),
+            _ => None,
+        }
+    }
+
     async fn take(&self, n: usize) -> Res<Vec<Post>> {
         let deadline = Instant::now() + Duration::from_secs(60);
         loop {
@@ -425,6 +459,78 @@ pub async fn feed(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     let urls = a.flag("urls");
     for p in d.feed.take(a.n.unwrap_or(10)).await? {
         out.line(format_post(&d.refs, &p, urls));
+    }
+    Ok(())
+}
+
+/// Close whatever menus and dialogs post-menu left open (Escape needs trusted key presses).
+async fn close_layers(b: &Browser, t: &Tab) {
+    for _ in 0..3 {
+        let _ = b.key(t, "Escape", "Escape", 27, 0).await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+}
+
+/// `fb post-menu <post> [--press <label>]...`: a post's "Actions for this post" menu. Each
+/// `--press` presses that label in what the previous press showed (a submenu, a dialog such as
+/// Report), and the output describes what shows after the last one. A post `fb feed` listed is
+/// worked on its feed card, the only place Facebook offers Interested / Not interested; any
+/// other post, or one whose card Facebook has dropped, on the post's own page.
+pub async fn post_menu(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
+    let a = crate::ops::parse(args, &["press"], &[])?;
+    let spec = a.pos.first().ok_or("usage: post-menu <post> [--press <label>]...")?;
+    let url = d.refs.get(spec).unwrap_or_else(|| spec.clone());
+    let path = Value::from(a.opts_all("press"));
+    let b = d.browser(out).await?;
+    // a press can change the account (hide, snooze, report): hold it like other mutations
+    let _account = d.account.read().await;
+    let card = format!("window.__fbFeed.menu({},{path})", Value::from(url.as_str()));
+    let (from, r) = match d.feed.act(card).await {
+        Some(Ok(r)) if r["gone"] != Value::Bool(true) => ("feed", r),
+        Some(Err(e)) => return Err(e),
+        card => {
+            // why the feed card was not used, for the caller to explain the shorter menu
+            let why = match &card {
+                Some(Ok(r)) => r["why"].as_str().unwrap_or("").to_string(),
+                _ => "no feed is open".to_string(),
+            };
+            out.line(format!("feedcard\t{}", one_line(&why)));
+            let page = if url.starts_with('/') {
+                format!("https://www.facebook.com{url}")
+            } else {
+                url.clone()
+            };
+            let t = b.acquire().await?;
+            let r = async {
+                b.goto(&t, &page).await?;
+                wait_main(&b, &t).await?;
+                bounded(90, b.eval(&t, &format!("window.__fbFeed.postMenu({path})"))).await
+            }
+            .await;
+            close_layers(&b, &t).await;
+            b.release(t).await;
+            ("post", r?)
+        }
+    };
+    if let Some(e) = r["err"].as_str() {
+        return Err(e.to_string());
+    }
+    out.line(format!("from\t{from}"));
+    let s = |v: &Value| one_line(v.as_str().unwrap_or(""));
+    if r["done"] == Value::Bool(true) {
+        out.line("done");
+    } else {
+        out.line(format!("title\t{}", s(&r["title"])));
+        for line in r["text"].as_array().into_iter().flatten() {
+            out.line(format!("text\t{}", s(line)));
+        }
+        for o in r["options"].as_array().into_iter().flatten() {
+            let on = if o[2] == Value::Bool(true) { "on" } else { "" };
+            out.line(format!("option\t{}\t{}\t{on}", s(&o[0]), s(&o[1])));
+        }
+    }
+    for note in r["notes"].as_array().into_iter().flatten() {
+        out.line(format!("note\t{}", s(note)));
     }
     Ok(())
 }

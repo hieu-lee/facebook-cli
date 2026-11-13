@@ -1,6 +1,63 @@
 (()=>{
  const {TIME,SPON,shortBadge,vtext,num,postCards,postText,canon,waitFor,clean}=window.__fb;
  let seen=new WeakMap();let seq=0,current=null;
+ /* each listed post's card, so post-menu can find it again; Facebook swaps a card's element
+    when it re-renders it, but its feed position stays */
+ const byUrl=new Map();
+ const remember=(url,u)=>byUrl.set(url,{u,at:u.getAttribute('aria-posinset')});
+ /* post-menu: open a post's "Actions for this post" menu, press each label of `path` in turn
+    (menu items, then whatever they open: submenus, dialogs such as Report), and describe what
+    shows after the last press. Labels are Facebook's own text, so any language works. */
+ const LAYER='[role=menu],[role=dialog],[role=listbox]';
+ const CLICK='[role=menuitem],[role=menuitemradio],[role=menuitemcheckbox],[role=button],[role=radio],[role=checkbox],[role=option],[role=switch],[role=link],a[href],button,input[type=radio],input[type=checkbox]';
+ const actionsOf=root=>{const all=[...root.querySelectorAll('[aria-haspopup=menu][role=button]')].filter(b=>window.__fb.visible(b)&&!b.closest('blockquote'));return all.find(b=>/^Actions for this post/i.test(b.getAttribute('aria-label')||''))||all[0]};
+ const lines=e=>(e.innerText||'').split('\n').map(clean).filter(Boolean);
+ const optionsOf=l=>{
+  const out=[],count={};
+  for(const e of l.querySelectorAll(CLICK)){
+   if(!window.__fb.visible(e)||out.some(o=>o.e.contains(e)))continue;
+   const text=lines(e);let label=text[0]||clean(e.getAttribute('aria-label')||'');
+   if(!label)continue;
+   count[label]=(count[label]||0)+1;if(count[label]>1)label+=' ('+count[label]+')';
+   out.push({e,label,text,detail:text.slice(1).join(' '),on:e.getAttribute('aria-checked')==='true'||e.checked===true});
+  }
+  return out;
+ };
+ const walk=async(root,path,card)=>{
+  const {visible,press,sleep}=window.__fb;
+  const base=new Set([...document.querySelectorAll(LAYER)].filter(visible));
+  const top=()=>[...document.querySelectorAll(LAYER)].filter(l=>visible(l)&&!base.has(l)).pop();
+  const sig=()=>{const l=top();return [l,l?optionsOf(l).map(o=>o.label+(o.on?'*':'')).join('|'):'']};
+  /* wait for the press to show something, then for it to hold still (items arrive in steps) */
+  const settle=async([l0,s0])=>{
+   const t0=Date.now();let [l,s]=sig();
+   while(Date.now()-t0<5000&&l===l0&&s===s0){await sleep(150);[l,s]=sig()}
+   for(let still=0;still<4&&Date.now()-t0<9000;){await sleep(200);const [l2,s2]=sig();if(l2===l&&s2===s)still++;else{still=0;l=l2;s=s2}}
+  };
+  const button=actionsOf(root);
+  if(!button)return {err:'this post has no actions menu'};
+  let before=sig();press(button);await settle(before);
+  for(const want of path){
+   const l=top();
+   const o=l&&optionsOf(l).find(o=>o.label===want);
+   if(!o)return {err:'Facebook no longer shows "'+want+'" here; open the menu again'};
+   before=sig();press(o.e);await settle(before);
+  }
+  const notes=[...document.querySelectorAll('[role=alert],[role=status]')].filter(visible).map(e=>clean(e.innerText)).filter(Boolean);
+  const l=top();
+  /* a feed card answers in place: "Post hidden", "We'll show fewer posts like this", Undo */
+  if(!l)return {done:true,notes:card&&root.isConnected&&root.innerText.length<600?notes.concat(lines(root)):notes};
+  const options=optionsOf(l);
+  const used=new Set(options.flatMap(o=>o.text));
+  return {kind:l.getAttribute('role'),title:clean(l.getAttribute('aria-label')||''),text:lines(l).filter(t=>!used.has(t)),
+   options:options.map(o=>[o.label,o.detail,o.on]),notes};
+ };
+ /* the filled card must link the post itself before anything is pressed on it */
+ const linksTo=async(u,want)=>{
+  const t=timeLink(u);
+  if(t&&/^\?/.test(t.getAttribute('href'))){t.focus({preventScroll:true});await waitFor(()=>!/^\?/.test(t.getAttribute('href')||''),1500,50);t.blur()}
+  return [...u.querySelectorAll('a[href]')].some(a=>canon(a.getAttribute('href'))===want);
+ };
  const timeNode=(u,tt)=>{const w=document.createTreeWalker(u,NodeFilter.SHOW_TEXT);let n;while(n=w.nextNode()){const t=n.nodeValue;if(!t||t.includes('\u034f')||n.parentElement.closest('blockquote'))continue;if(t.replace(/[\u200b-\u200f\u2060\ufeff]/g,'').trim()===tt)return n;}return null;};
  const decode=a=>{
   const cs=[];const w=document.createTreeWalker(a,NodeFilter.SHOW_TEXT);let n;
@@ -80,6 +137,8 @@
     if(url)hover=null;
     else if(!hover){const tn=ti<0?null:timeNode(u,ch[ti]);if(tn){tn.parentElement.scrollIntoView({block:'center'});const rg=document.createRange();rg.selectNodeContents(tn);const r=rg.getBoundingClientRect();if(r.width>0)hover=[r.x+r.width/2,r.y+r.height/2];}}
     const alt=[...u.querySelectorAll('a[href]')].map(a=>a.getAttribute('href')).find(h=>POST.test(h)&&!/comment_id/.test(h));
+    if(url)remember(url,u);
+    if(alt&&!byUrl.has(canon(alt)))remember(canon(alt),u);
     out.push({pos,url,alt:alt?canon(alt):'',author:head.join(' / '),time:dt&&dt.text?dt.text:(ti<0?'':ch[ti]),text:postText(msg)||attached(u),
       r:num(g(u,'like_button')),c:num(g(u,'comment_button')),s:num(g(u,'share_button')),
       ad:ch.slice(0,12).some(c=>SPON.test(c)),hover});
@@ -95,7 +154,29 @@
    const pending=current&&current.pos===pos?current:null;current=null;const u=pending&&pending.u;
    if(!u||pending.render!==render(u)||pending.name!==g(u,'profile_name')||pending.msg!==g(u,'story_message')){if(u)seen.delete(u);return null}
    mark(u);
-   return a&&u&&u.contains(a)?canon(a.href):'';
+   const found=a&&u&&u.contains(a)?canon(a.href):'';
+   if(found)remember(found,u);
+   return found;
+  },
+  /* post-menu on a card this tab listed. {gone:true}: Facebook dropped the card (it keeps
+     only the last 10-25 posts of a long feed), so the caller uses the post's own page. */
+  async menu(url,path){
+   const want=canon(url),known=byUrl.get(want);
+   const u=known&&(known.u.isConnected?known.u:known.at&&document.querySelector('[aria-posinset="'+known.at+'"]'));
+   if(!u)return {gone:true,why:known?'card '+known.at+' removed':'never listed here'};
+   const y=scrollY;
+   try{
+    u.scrollIntoView({block:'center'});
+    if(!await waitFor(()=>actionsOf(u),6000,100))return {gone:true,why:'card '+known.at+' did not fill in'};
+    if(!await linksTo(u,want))return {gone:true,why:'card '+known.at+' shows another post'};
+    return await walk(u,path,true);
+   }finally{scrollTo(0,y)}
+  },
+  /* post-menu on a post's own page: the post opens in a dialog over the feed, or fills main */
+  async postMenu(path){
+   const root=await waitFor(()=>[...document.querySelectorAll('[role=dialog]')].filter(d=>window.__fb.visible(d)&&actionsOf(d)).pop()||[document.querySelector('[role=main]')].find(m=>m&&actionsOf(m)),12000,200);
+   if(!root)return {err:'this post has no actions menu'};
+   return walk(root,path);
   },
   async expand(){
    const pending=[];
