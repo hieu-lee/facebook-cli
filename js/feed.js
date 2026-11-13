@@ -4,7 +4,8 @@
  /* each listed post's card, so post-menu can find it again; Facebook swaps a card's element
     when it re-renders it, but its feed position stays */
  const byUrl=new Map();
- const remember=(url,u)=>byUrl.set(url,{u,at:u.getAttribute('aria-posinset')});
+ /* capped: Facebook drops all but its last few dozen cards anyway, and each entry keeps its card's DOM alive */
+ const remember=(url,u)=>{byUrl.delete(url);byUrl.set(url,{u,at:u.getAttribute('aria-posinset')});if(byUrl.size>100)byUrl.delete(byUrl.keys().next().value)};
  /* post-menu: open a post's "Actions for this post" menu, press each label of `path` in turn
     (menu items, then whatever they open: submenus, dialogs such as Report), and describe what
     shows after the last press. Labels are Facebook's own text, so any language works. */

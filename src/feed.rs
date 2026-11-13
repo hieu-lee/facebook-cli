@@ -282,7 +282,10 @@ impl FeedBuf {
                     if g.epoch != epoch {
                         return Ok(());
                     }
-                    if let Some((expr, done)) = g.actions.pop() {
+                    // oldest first; one whose caller gave up (timed out) is dropped, never run late
+                    g.actions.retain(|(_, done)| !done.is_closed());
+                    if !g.actions.is_empty() {
+                        let (expr, done) = g.actions.remove(0);
                         drop(g);
                         if frozen {
                             let _ = b.set_lifecycle(&t, false).await;
@@ -479,11 +482,18 @@ async fn close_layers(b: &Browser, t: &Tab) {
 pub async fn post_menu(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     let a = crate::ops::parse(args, &["press"], &[])?;
     let spec = a.pos.first().ok_or("usage: post-menu <post> [--press <label>]...")?;
-    let url = d.refs.get(spec).unwrap_or_else(|| spec.clone());
+    // a post only: on a profile or page the fallback would press the first post's menu there
+    let url = crate::ops::resolve_post_strict(d, spec).await?;
     let path = Value::from(a.opts_all("press"));
     let b = d.browser(out).await?;
+    let gen0 = b.generation.load(std::sync::atomic::Ordering::SeqCst);
     // a press can change the account (hide, snooze, report): hold it like other mutations
     let _account = d.account.read().await;
+    if b.generation.load(std::sync::atomic::Ordering::SeqCst) != gen0 {
+        return Err(
+            "the account changed while this command waited; nothing was done, try again".into(),
+        );
+    }
     let card = format!("window.__fbFeed.menu({},{path})", Value::from(url.as_str()));
     let (from, r) = match d.feed.act(card).await {
         Some(Ok(r)) if r["gone"] != Value::Bool(true) => ("feed", r),
