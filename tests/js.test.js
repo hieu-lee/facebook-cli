@@ -84,6 +84,13 @@ const F = global.window.__fb;
   buttons[0].onEvent = event => { if (event === 'click') present = false; };
   assert.strictEqual(await G.composePress(''), true, 'attachment-only posts remain supported');
   assert(buttons[0].events.includes('click'));
+  for (const [kind, label] of [['public', 'Veřejné'], ['friends', 'Přátelé'], ['me', 'Jen já'], ['public', 'Verejné'], ['friends', 'Priatelia'], ['me', 'Len ja'], ['me', 'Iba ja'], ['public', 'Publiczne'], ['friends', 'Znajomi'], ['me', 'Tylko ja'], ['public', 'Öffentlich'], ['friends', 'Freunde'], ['me', 'Nur ich'], ['public', 'Público'], ['friends', 'Amigos'], ['me', 'Solo yo']])
+    assert(G.AUD[kind].test(label), 'AUD ' + kind + ' should match: ' + label);
+  assert(!G.AUD.friends.test('Přátelé kromě'), 'a restricted audience is not Friends');
+  // a missing audience option reports itself (the picker opened, the option never showed)
+  present = true;
+  buttons = [Object.assign(button('div', 'Public.'), { click() {} })];
+  assert.strictEqual(await G.composeAudience('me'), 'audience option not found');
   console.log('js composer ok');
 })().catch(e => { console.error(e); process.exit(1); });
 
