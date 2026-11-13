@@ -5,24 +5,52 @@
  const dialogs=()=>[...document.querySelectorAll('[role=dialog]')];
  const btnText=b=>clean(b.innerText||'');
  // ---- post composer
+ const POST=/^(Post|Đăng|Publier|Publicar|Posten|Veröffentlichen|Pubblica|Plaatsen|Opublikuj|Přidat|Zveřejnit|Pridať|Uverejniť|Paylaş|Опубликовать|Опублікувати|Publicera|Publiser|Julkaise|Közzététel)$/i;
+ const NEXT=/^(Next|Tiếp|Tiếp tục|Suivant|Siguiente|Próximo|Seguinte|Weiter|Avanti|Volgende|Dalej|Další|Ďalej|İleri|Далее|Далі|Nästa|Næste|Neste|Seuraava)$/i;
+ const actionLabel=b=>clean(b.getAttribute('aria-label')||btnText(b));
+ const actionControls=d=>[...d.querySelectorAll('[role=button],button')];
+ // What the screen shows when a step fails: labels only, never draft text. A control in or
+ // around an editor keeps only its aria-label: its innerText would carry the draft.
+ const EDITABLE='[contenteditable]:not([contenteditable=false]),textarea,[role=textbox]';
+ const safeLabel=b=>clean(b.getAttribute('aria-label')||(b.closest(EDITABLE)||b.querySelector?.(EDITABLE)?'':btnText(b)));
+ const composerState=d=>{
+  const labels=d?[...new Set(actionControls(d).filter(F.visible).map(b=>safeLabel(b).slice(0,40)).filter(Boolean))].slice(0,14).join(' | '):'';
+  const title=d?clean(d.querySelector('[role=heading],h2')?.innerText).slice(0,50):'';
+  return ` (dialog "${title}", page language ${document.documentElement?.lang||'unknown'}, buttons: ${labels||'none'})`;
+ };
+ // In any language the composer card is its text button followed by labelled
+ // shortcuts (Live video, Photo/video, ...). Menu buttons such as a profile's
+ // "Share a thought..." note are not it.
+ const isComposerTrigger=b=>{
+  if(b.getAttribute('aria-label')||b.getAttribute('aria-haspopup')||btnText(b).length<=6)return false;
+  let card=b.parentElement;
+  while(card&&card.querySelectorAll('[role=button]').length<2)card=card.parentElement;
+  const buttons=card?[...card.querySelectorAll('[role=button]')]:[];
+  return buttons[0]===b&&buttons.length>=3&&buttons.length<=5&&buttons.slice(1).every(x=>x.getAttribute('aria-label'));
+ };
  F.composeOpen=async()=>{
   const m=await waitFor(()=>main(),15000);
   if(!m)return 'no main';
   const trigger=await waitFor(()=>{
+   const all=[...m.querySelectorAll('[role=button]')];
+   const named=all.find(b=>/^(What.s on your mind|Bạn đang nghĩ gì|Exprimez-vous|Que voulez-vous dire)/i.test(btnText(b)))||all.find(isComposerTrigger);
+   if(named)return named;
    const regs=[...m.querySelectorAll('[role=region]')];
-   for(const r of regs){const h=r.querySelector('h1,h2,h3,h4');if(!h)continue;const b=[...r.querySelectorAll('[role=button]')].find(b=>btnText(b).length>6);if(b)return b;}
-   return [...m.querySelectorAll('[role=button]')].find(b=>/^(What.s on your mind|Bạn đang nghĩ gì|Exprimez-vous|Que voulez-vous dire)/i.test(btnText(b)))||null;
+   for(const r of regs){const h=r.querySelector('h1,h2,h3,h4');if(!h)continue;const b=[...r.querySelectorAll('[role=button]')].find(b=>btnText(b).length>6&&!b.getAttribute('aria-haspopup'));if(b)return b;}
+   return null;
   },15000);
   if(!trigger)return 'no composer button';
   trigger.click();
   const d=await waitFor(()=>dialogs().find(d=>d.querySelector('[role=textbox]')),10000);
   if(!d)return 'composer did not open';
+  // Notes and profile editors also hold a textbox, but only the post composer takes files.
+  if(!await waitFor(()=>d.querySelector('input[type=file]'),3000,100))return 'opened the wrong dialog instead of the post composer'+composerState(d)+'; nothing was posted';
   const tb=d.querySelector('[role=textbox]');tb.focus();
   return true;
  };
- F.composeDialog=()=>dialogs().find(d=>d.querySelector('[role=textbox]'));
+ F.composeDialog=()=>{const k=window.__fbComposer;return k&&k.isConnected?k:dialogs().find(d=>d.querySelector('[role=textbox]'));};
  F.composeFocus=()=>{const d=F.composeDialog();const tb=d&&d.querySelector('[role=textbox]');if(!tb)return false;tb.focus();return true;};
- F.composeCheck=text=>{const d=F.composeDialog();if(!d)return 'no composer; nothing was posted';const draft=clean(d.querySelector('[role=textbox]').innerText);return draft===clean(text)?true:!draft?'composer text is empty; nothing was posted':'composer text does not match the requested text; nothing was posted';};
+ F.composeCheck=text=>{const d=F.composeDialog();if(!d)return 'no composer; nothing was posted';const tb=d.querySelector('[role=textbox]');if(!tb&&window.__fbComposer)return true;const draft=clean(tb.innerText);return draft===clean(text)?true:!draft?'composer text is empty; nothing was posted':'composer text does not match the requested text; nothing was posted';};
  // the bytes arrive beforehand as base64 chunks (upBegin/upChunk in msg.js), one CDP call each
  F.composeAttach=async(name,mime)=>{
   const parts=window.__fbUp;window.__fbUp=null;
@@ -157,18 +185,33 @@
  // The profile header mounts after DOMContentLoaded: wait for the tab strip, then for the relationship control, before concluding there is none.
  F.friendWait=async()=>{const m=await waitFor(()=>{const m=main();return m&&m.querySelector('[role=tablist]')&&m},15000);if(!m)return 'no-profile';const st=await waitFor(()=>{const s=F.friendState();return s!=='no-button'?s:null},5000,200);return st||'no-button';};
  F.friendAdd=async()=>{const st=F.friendState();if(st!=='can-add')return st;const b=friendButton();if(!b)return 'no-button';b.click();const ok=await waitFor(()=>{const s=F.friendState();return s==='requested'||s==='friends'?s:null;},8000,200);return ok||'unconfirmed';};
- const postButtons=()=>{const d=F.composeDialog();return d?[...d.querySelectorAll('[role=button],button')].filter(b=>F.visible(b)&&/^(Post|Đăng|Publier)$/i.test(clean(b.getAttribute('aria-label')||btnText(b)))):[];};
+ const postButtons=()=>{const d=F.composeDialog();return d?actionControls(d).filter(b=>{if(!F.visible(b))return false;const l=actionLabel(b);return POST.test(l);}):[];};
  const postButton=()=>{const bs=postButtons();return bs.length===1?bs[0]:null;};
+ const nextButton=()=>{const d=F.composeDialog();const bs=d?actionControls(d).filter(b=>F.visible(b)&&NEXT.test(actionLabel(b))):[];return bs.length===1?bs[0]:null;};
  // Retained audience panes can put Done after Post; order is not action identity.
- F.composePrepare=async()=>{
+ F.composePrepare=async text=>{
   if(!F.composeDialog())return 'no composer';
-  const post=await waitFor(()=>{const b=postButton();return b&&F.enabled(b)?b:null},60000,150);
+  const post=await waitFor(()=>{
+   const b=postButton();if(b&&F.enabled(b))return b;
+   // Some accounts get Next, then a settings pane holding Post. Next publishes nothing,
+   // but it can remove the editor, so this is the last chance to compare the draft.
+   // ponytail: a settings pane's Post is found by the POST list only. Guessing among its
+   // unlabelled toggles could press the wrong one; an unknown word fails and names the buttons.
+   const n=!window.__fbComposer&&nextButton();
+   if(n&&F.enabled(n)&&F.composeCheck(text)===true){
+    const d=F.composeDialog();
+    F.press(n,{valid:()=>n===nextButton()&&F.enabled(n)&&F.composeCheck(text)===true});
+    window.__fbComposer=d;
+   }
+   return null;
+  },60000,150);
   if(!post){
    const d=F.composeDialog();if(!d)return 'composer disappeared before Post became ready; nothing was posted';
    const bs=postButtons();
-   const reason=!clean(d.querySelector('[role=textbox]').innerText)&&!d.querySelector('img[src^="blob:"],img[src^="data:"],video')?'composer text is empty and no attachments were found':!bs.length?'Post button not found':bs.length>1?'multiple visible Post buttons found':'Post button is disabled';
+   const tb=d.querySelector('[role=textbox]');
+   const reason=tb&&!clean(tb.innerText)&&!d.querySelector('img[src^="blob:"],img[src^="data:"],video')?'composer text is empty and no attachments were found':!bs.length?'Post button not found':bs.length>1?'multiple visible Post buttons found':'Post button is disabled';
    const progress=[...d.querySelectorAll('[role=progressbar]')].some(F.visible)?'; progress indicator visible':'';
-   return reason+progress+'; nothing was posted';
+   return reason+progress+composerState(d)+'; nothing was posted';
   }
   F.press(post,{events:['pointerover','mouseover'],valid:()=>post===postButton()&&F.enabled(post)});
   await sleep(0);
