@@ -285,15 +285,24 @@ impl FeedBuf {
                     // oldest first; one whose caller gave up (timed out) is dropped, never run late
                     g.actions.retain(|(_, done)| !done.is_closed());
                     if !g.actions.is_empty() {
-                        let (expr, done) = g.actions.remove(0);
+                        let (expr, mut done) = g.actions.remove(0);
                         drop(g);
                         if frozen {
                             let _ = b.set_lifecycle(&t, false).await;
                             frozen = false;
                         }
-                        let r = bounded(90, b.eval(&t, &expr)).await;
+                        // a caller that gives up mid-walk (its timeout) stops the remaining presses
+                        let r = tokio::select! {
+                            r = bounded(90, b.eval(&t, &expr)) => Some(r),
+                            _ = done.closed() => None,
+                        };
+                        if r.is_none() {
+                            let _ = bounded(10, b.eval(&t, "window.__fbFeed.stop()")).await;
+                        }
                         close_layers(b, &t).await;
-                        let _ = done.send(r);
+                        if let Some(r) = r {
+                            let _ = done.send(r);
+                        }
                         last = Instant::now();
                         continue;
                     }
@@ -469,7 +478,8 @@ pub async fn feed(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
 /// Close whatever menus and dialogs post-menu left open (Escape needs trusted key presses).
 async fn close_layers(b: &Browser, t: &Tab) {
     for _ in 0..3 {
-        let _ = b.key(t, "Escape", "Escape", 27, 0).await;
+        // bounded: a key event Chrome never answers must not wedge the feed pump
+        let _ = tokio::time::timeout(Duration::from_secs(5), b.key(t, "Escape", "Escape", 27, 0)).await;
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
 }

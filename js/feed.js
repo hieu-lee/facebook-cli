@@ -24,8 +24,11 @@
   }
   return out;
  };
+ /* the walk in progress: stop() ends it before its next press, when its caller gave up */
+ let walking=null;
  const walk=async(root,path,card)=>{
   const {visible,press,sleep}=window.__fb;
+  const me={stopped:false};walking=me;
   const base=new Set([...document.querySelectorAll(LAYER)].filter(visible));
   const top=()=>[...document.querySelectorAll(LAYER)].filter(l=>visible(l)&&!base.has(l)).pop();
   const sig=()=>{const l=top();return [l,l?optionsOf(l).map(o=>o.label+(o.on?'*':'')).join('|'):'']};
@@ -39,6 +42,7 @@
   if(!button)return {err:'this post has no actions menu'};
   let before=sig();press(button);await settle(before);
   for(const want of path){
+   if(me.stopped)return {err:'stopped: the caller gave up'};
    const l=top();
    const o=l&&optionsOf(l).find(o=>o.label===want);
    if(!o)return {err:'Facebook no longer shows "'+want+'" here; open the menu again'};
@@ -164,6 +168,7 @@
   },
   /* post-menu on a card this tab listed. {gone:true}: Facebook dropped the card (it keeps
      only the last 10-25 posts of a long feed), so the caller uses the post's own page. */
+  stop(){if(walking)walking.stopped=true;return 1},
   async menu(url,path){
    const want=canon(url),known=byUrl.get(want);
    const u=known&&(known.u.isConnected?known.u:known.at&&document.querySelector('[aria-posinset="'+known.at+'"]'));
