@@ -565,6 +565,8 @@ console.log('js removed-newest ok');
     link('/places/City-Library/111', ['City Library']),
     Object.assign(link('/places/City-Library/111', ['View']), { getAttribute: k => (k === 'href' ? '/places/City-Library/111' : k === 'aria-label' ? 'View' : null) }),
     link('/places/Jazz-Night/222', ['Jazz Night']),
+    // image-only: no rendered text; the name is the link's aria-label
+    Object.assign(link('/places/Riverside-Books/333', []), { getAttribute: k => (k === 'href' ? '/places/Riverside-Books/333' : k === 'aria-label' ? 'Riverside Books' : null), querySelector: () => null }),
   ];
   let pass = 0;
   const scroll = () => {
@@ -583,7 +585,7 @@ console.log('js removed-newest ok');
   const one = JSON.parse(JSON.stringify((await G.places(1)).rows));
   assert.strictEqual(one[0][0], 'City Library', 'a hidden link must not fill -n 1: ' + JSON.stringify(one));
   const rows = JSON.parse(JSON.stringify((await G.places(10)).rows));
-  assert.deepStrictEqual(rows.map(r => r[0]), ['City Library', 'Jazz Night']);
+  assert.deepStrictEqual(rows.map(r => r[0]), ['City Library', 'Jazz Night', 'Riverside Books']);
   assert.strictEqual(rows[0][2], 'Library · 1K followers', 'later details merge in');
   assert.strictEqual(rows[1][2], 'Sat, Nov 14 · Town Hall', 'a second link keeps its first line');
   console.log('js places hub ok');
