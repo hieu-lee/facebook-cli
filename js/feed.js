@@ -13,11 +13,11 @@
  const timeLink=u=>[...u.querySelectorAll('a[href]')].find(a=>/^(\?|.*(?:\/posts\/|story_fbid|\/permalink))/.test(a.getAttribute('href')));
  const g=(u,r)=>u.querySelector('[data-ad-rendering-role='+r+']');
  const more=msg=>msg?[...msg.querySelectorAll('[role=button],button')].filter(b=>window.__fb.visible(b)&&/^(See more|Xem thêm|Voir plus|Afficher la suite)$/i.test(clean(b.innerText))):[];
- const render=u=>[u.getAttribute('aria-posinset')||'',g(u,'profile_name')?.innerText||'',g(u,'profile_name')?.querySelector('a')?.getAttribute('href')||'',postText(g(u,'story_message')),attached(u),timeLink(u)?.innerText||''].join('\0');
+ const render=u=>[u.getAttribute('aria-posinset')||'',g(u,'profile_name')?.innerText||'',g(u,'profile_name')?.querySelector('a')?.getAttribute('href')||'',msgs(u).map(postText).join('\0'),attached(u),timeLink(u)?.innerText||''].join('\0');
  const POST=/\/posts\/|pfbid|\/permalink|story_fbid|multi_permalinks|\/videos\/|\/reel\/|\/photo\/?\?fbid/;
  /* which post a card shows: position, author and text; its time and links fill in later and would
     make the same post look new, while the position tells a recycled card's new post from the old */
- const key=u=>{const a=g(u,'profile_name')?.querySelector('a');let p='';try{const l=a&&new URL(a.getAttribute('href'),location.href);p=l?l.pathname+(l.searchParams.get('id')||''):''}catch(e){}return (u.getAttribute('aria-posinset')||'')+'\0'+p+'\0'+postText(g(u,'story_message'))};
+ const key=u=>{const a=g(u,'profile_name')?.querySelector('a');let p='';try{const l=a&&new URL(a.getAttribute('href'),location.href);p=l?l.pathname+(l.searchParams.get('id')||''):''}catch(e){}return (u.getAttribute('aria-posinset')||'')+'\0'+p+'\0'+msgs(u).map(postText).join('\0')};
  /* the permalink a timestamp link has revealed, else '' */
  const permalink=a=>{const h=a?.getAttribute('href')||'';return !/^\?/.test(h)&&POST.test(h)&&!/comment_id/.test(h)?canon(h):''};
  /* a card is read again when its content changed or its revealed permalink became another one:
