@@ -232,19 +232,22 @@
   const ok=await waitFor(()=>document.querySelector(ready),12000);
   if(!ok)return {rows:[],note};
   await sleep(600);
-  const rows=await gather(n,()=>{
-   const byPath=new Map();
+  /* details can render on a later scroll pass than the name, so merge every pass into one
+     entry per path, as F.groups does; hidden anchors never count toward n */
+  const acc=new Map();
+  const scan=()=>{
    for(const a of document.querySelectorAll('[role=main] a[href]')){
-    const p=pathOf(a.getAttribute('href'));if(!p)continue;
-    const chunks=vtext(a).map(clean).filter(Boolean);
-    if(!chunks.length)continue;
-    const cur=byPath.get(p)||{name:chunks[0],info:[]};
-    for(const c of chunks.slice(1))if(c!==cur.name&&!cur.info.includes(c))cur.info.push(c);
-    byPath.set(p,cur);
+    const p=pathOf(a.getAttribute('href'));if(!p||!linkShown(a))continue;
+    /* rendered lines, not text nodes: a name split across inline spans stays whole */
+    const lines=(a.innerText||'').split('\n').map(clean).filter(Boolean);
+    if(lines.length)addGroup(acc,p,lines);
    }
-   return [...byPath.entries()].map(([p,g])=>({k:p,v:[g.name,p,trunc(g.info.join(' · '),120)]}));
-  });
-  return {rows:rows.map(r=>r.v)};
+   return [...acc.keys()].map(k=>({k}));
+  };
+  await gather(n,scan);
+  /* the limit can be reached before the last link's details render: let them settle once */
+  await sleep(300);scan();
+  return {rows:[...acc].slice(0,n).map(([p,g])=>[g.name,p,trunc(g.info.join(' · '),120)])};
  };
  F.events=async(n)=>hubList(n,'[role=main] a[href*="/events/"]',h=>{const p=stripQ(h);return /^\/events\/\d+\/?$/.test(p)?p:null;},'no events visible');
  F.groupMembers=async(n)=>{
