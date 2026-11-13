@@ -250,7 +250,9 @@
    }
    return [...acc.keys()].map(k=>({k}));
   };
-  await gather(n,scan);
+  /* a big group scrolls ~20 members a second: the default 25 s cut -n 500 at
+     ~476, and a larger -n got no further. Scale with n; src/cmd.rs adds the extra time to the command limit. */
+  await gather(n,scan,Math.min(120000,Math.max(25000,n*60)));
   /* the limit can be reached before the details of the last member render: let them settle once */
   await sleep(300);scan();
   return {rows:[...acc].slice(0,n).map(([p,m])=>[m.name,{r:'u',v:p},trunc(m.info.join(' · '),120)])};

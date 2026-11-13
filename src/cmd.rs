@@ -19,6 +19,19 @@ fn command_limit(argv: &[String], base: u64) -> u64 {
                 .count() as u64;
             base.saturating_add(files.saturating_mul(130))
         }
+        // groupMembers scrolls 60 ms per member asked, 25 s to 120 s (js/ops.js): the time past
+        // the default 25 s comes on top, or navigation plus a long scroll overruns the limit and
+        // every gathered row is lost
+        Some("members") => {
+            let n = argv
+                .iter()
+                .rposition(|a| a == "-n")
+                .and_then(|i| argv.get(i + 1)?.parse::<u64>().ok())
+                .unwrap_or(0);
+            base.saturating_add(
+                (n.saturating_mul(60).clamp(25_000, 120_000) - 25_000).div_ceil(1000),
+            )
+        }
         _ => base,
     }
 }
@@ -130,6 +143,28 @@ mod tests {
         assert_eq!(
             command_limit(&argv(&["send", "42", "hi", "--file=a", "--img", "b"]), 150),
             410
+        );
+    }
+
+    #[test]
+    fn members_allowance_covers_the_longer_scroll() {
+        assert_eq!(
+            command_limit(&argv(&["members", "g", "-n", "50"]), 150),
+            150
+        );
+        assert_eq!(command_limit(&argv(&["members", "g"]), 150), 150);
+        assert_eq!(
+            command_limit(&argv(&["members", "g", "-n", "1000", "--urls"]), 150),
+            185
+        );
+        assert_eq!(
+            command_limit(&argv(&["members", "g", "-n", "5000"]), 150),
+            245
+        );
+        // the last -n wins, as in ops::parse
+        assert_eq!(
+            command_limit(&argv(&["members", "g", "-n", "50", "-n", "5000"]), 150),
+            245
         );
     }
 }
