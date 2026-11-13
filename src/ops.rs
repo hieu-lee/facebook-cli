@@ -482,6 +482,65 @@ fn group_base(path: &str) -> Option<String> {
     Some(format!("/groups/{seg}"))
 }
 
+/// A browsable hub list (events, pages, places): the page at `url` is
+/// scraped by the matching `window.__fb` helper, whose rows are
+/// [name, path, info]; the path becomes a 'u' ref, or with --urls the
+/// full URL — the same row shape `groups` returns.
+async fn hub_list(
+    d: &Daemon,
+    args: &[String],
+    out: &Out,
+    url: &str,
+    js: &str,
+    default_n: usize,
+) -> Res<()> {
+    let a = parse(args, &[], &["urls"])?;
+    let b = d.browser(out).await?;
+    let t = b.acquire().await?;
+    let r = async {
+        b.goto(&t, url).await?;
+        let v = b
+            .eval(
+                &t,
+                &format!("window.__fb.{js}({}).then(JSON.stringify)", a.n.unwrap_or(default_n)),
+            )
+            .await?;
+        let v: Value =
+            serde_json::from_str(v.as_str().unwrap_or("{}")).map_err(|e| e.to_string())?;
+        if let Some(e) = v["err"].as_str() {
+            return Err(e.to_string());
+        }
+        for row in v["rows"].as_array().cloned().unwrap_or_default() {
+            let cells: Vec<Value> = row.as_array().cloned().unwrap_or_default();
+            let get = |i: usize| cells.get(i).and_then(Value::as_str).unwrap_or("");
+            let path = get(1);
+            let id = if a.flag("urls") {
+                format!("https://www.facebook.com{path}")
+            } else {
+                d.refs.put('u', path)
+            };
+            out.line(format!(
+                "{}\t{id}\t{}",
+                get(0).replace(['\t', '\n'], " "),
+                get(2).replace(['\t', '\n'], " ")
+            ));
+        }
+        if let Some(note) = v["note"].as_str() {
+            out.err(format!("{note}\n"));
+        }
+        Ok(())
+    }
+    .await;
+    b.release(t).await;
+    r
+}
+
+/// The events on your events page (facebook.com/events): rows are
+/// name, ref (or the event URL with --urls), date and place info.
+pub async fn events(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
+    hub_list(d, args, out, "https://www.facebook.com/events/", "events", 50).await
+}
+
 /// The members of one group, from its members page
 /// (facebook.com/groups/<id>/members), gathered with scrolling like the
 /// joined-groups list. Rows: name, ref (or the profile URL with --urls),
