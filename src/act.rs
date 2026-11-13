@@ -439,7 +439,10 @@ fn reaction_neutral(label: &str, picker: &[String]) -> bool {
     picker.first().is_some_and(|first| {
         !first.is_empty()
             && (l == *first
-                || l.starts_with(&format!("{first} "))
+                // "Like <author>'s post"; a bare prefix would also take a selected state
+                // that begins with the Like word ("Gefällt mir nicht mehr")
+                || (l.starts_with(&format!("{first} "))
+                    && (l.ends_with("'s post") || l.ends_with("\u{2019}s post")))
                 || l.starts_with(&format!("react with {first} to ")))
     })
 }
@@ -952,6 +955,15 @@ mod tests {
         for label in ["", "loading", "React to Danielle Cools's post"] {
             assert!(!reaction_neutral(label, &picker), "{label}");
         }
+        // German selected Like begins with the neutral word: it stays selected
+        let german: Vec<String> = ["gefällt mir", "love"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert!(!reaction_neutral("Gefällt mir nicht mehr", &german));
+        assert!(reaction_neutral("Gefällt mir", &german));
+        assert!(reaction_neutral("Like Ann\u{2019}s post", &picker));
+        assert!(!reaction_neutral("Like Ann", &picker));
         assert!(!reaction_neutral("Like", &[]));
         assert!(!reaction_neutral("Like", &[String::new()]));
     }
