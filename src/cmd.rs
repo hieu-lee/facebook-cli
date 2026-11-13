@@ -25,7 +25,7 @@ fn command_limit(argv: &[String], base: u64) -> u64 {
         Some("members") => {
             let n = argv
                 .iter()
-                .position(|a| a == "-n")
+                .rposition(|a| a == "-n")
                 .and_then(|i| argv.get(i + 1)?.parse::<u64>().ok())
                 .unwrap_or(0);
             base.saturating_add(
@@ -159,6 +159,11 @@ mod tests {
         );
         assert_eq!(
             command_limit(&argv(&["members", "g", "-n", "5000"]), 150),
+            245
+        );
+        // the last -n wins, as in ops::parse
+        assert_eq!(
+            command_limit(&argv(&["members", "g", "-n", "50", "-n", "5000"]), 150),
             245
         );
     }
