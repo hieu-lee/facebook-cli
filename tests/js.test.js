@@ -565,6 +565,8 @@ console.log('js removed-newest ok');
     link('/events/111/', ['City Library']),
     Object.assign(link('/events/111/', ['View']), { getAttribute: k => (k === 'href' ? '/events/111/' : k === 'aria-label' ? 'View' : null) }),
     link('/events/222/', ['Jazz Night']),
+    // image-only: no rendered text; the name is the link's aria-label
+    Object.assign(link('/events/333/', []), { getAttribute: k => (k === 'href' ? '/events/333/' : k === 'aria-label' ? 'Riverside Fair' : null), querySelector: () => null }),
   ];
   let pass = 0;
   const scroll = () => {
@@ -583,7 +585,7 @@ console.log('js removed-newest ok');
   const one = JSON.parse(JSON.stringify((await G.events(1)).rows));
   assert.strictEqual(one[0][0], 'City Library', 'a hidden link must not fill -n 1: ' + JSON.stringify(one));
   const rows = JSON.parse(JSON.stringify((await G.events(10)).rows));
-  assert.deepStrictEqual(rows.map(r => r[0]), ['City Library', 'Jazz Night']);
+  assert.deepStrictEqual(rows.map(r => r[0]), ['City Library', 'Jazz Night', 'Riverside Fair']);
   assert.strictEqual(rows[0][2], 'Library · 1K followers', 'later details merge in');
   assert.strictEqual(rows[1][2], 'Sat, Nov 14 · Town Hall', 'a second link keeps its first line');
   console.log('js events hub ok');
