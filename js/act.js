@@ -48,7 +48,7 @@
   if(AUD[kind].test(first(ab.innerText)))return true;
   ab.click();
   const lab=await waitFor(()=>[...d.querySelectorAll('label,[role=radio],[role=option]')].find(l=>AUD[kind].test(first(l.innerText||l.getAttribute('aria-label')))),6000);
-  if(!lab)return 'audience option not found'+composerState(d);
+  if(!lab)return 'audience option not found';
   lab.click();
   await sleep(300);
   const done=[...d.querySelectorAll('[role=button]')].filter(b=>btnText(b)).pop();
