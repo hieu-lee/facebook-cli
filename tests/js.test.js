@@ -631,3 +631,37 @@ console.log('js removed-newest ok');
   ]) assert.strictEqual(kindOf(href), kind, href);
   console.log('js search kinds ok');
 })();
+
+(async () => {
+  // feed step: a shared post's original author heads an unmarked linked
+  // heading, and an ad's label is SVG text behind a chain of <use> references
+  {
+    const use = id => ({ getAttribute: n => (n === 'href' ? '#' + id : null) });
+    const timeAnchor = {
+      getAttribute: n => (n === 'href' ? 'https://www.facebook.com/brandon/posts/999' : null),
+      innerText: '\u2060', focus() {}, blur() {}, scrollIntoView() {}, compareDocumentPosition: () => 4,
+      querySelector: sel => (sel === 'svg use' ? use('S1') : null),
+    };
+    const sharedAnchor = { innerText: 'Tanya Warner', getAttribute: n => (n === 'href' ? 'https://www.facebook.com/tanya' : null) };
+    const heading = { querySelector: sel => (sel === 'a[href]' ? sharedAnchor : null), closest: () => null, compareDocumentPosition: () => 4 };
+    const profileEl = { innerText: 'Brandon Bracey', querySelector: () => null, closest: () => null, compareDocumentPosition: () => 4 };
+    const msgEl = { querySelectorAll: () => [] };
+    const card = {
+      querySelector: sel => (sel.includes('profile_name') ? profileEl : sel.includes('story_message') ? msgEl : null),
+      querySelectorAll: sel => (sel === 'a[href]' ? [timeAnchor] : sel.includes('profile_name') ? [profileEl] : sel === 'h2,h3,h4' ? [heading] : []),
+      getAttribute: () => null,
+    };
+    // its own context: the other async blocks still use the shared globals
+    const document = {
+      createTreeWalker: () => ({ nextNode: () => null }), querySelectorAll: () => [], querySelector: () => null,
+      getElementById: id => ({ S1: { tagName: 'svg', querySelector: () => use('S2') }, S2: { tagName: 'text', textContent: 'Ad', querySelector: () => null } })[id] || null,
+    };
+    const window = { __fb: { ...F, postCards: () => [card], postText: () => 'Hello world', vtext: () => ['Brandon Bracey', 'Hello world'], num: () => '0', visible: () => true } };
+    require('vm').runInNewContext(fs.readFileSync(path.join(__dirname, '../js/feed.js'), 'utf8'), { window, document, Node: { DOCUMENT_POSITION_FOLLOWING: 4 }, NodeFilter: { SHOW_TEXT: 4 } });
+    const [post] = await window.__fbFeed.step();
+    assert.strictEqual(post.author, 'Brandon Bracey / Tanya Warner');
+    assert.strictEqual(post.time, 'Ad');
+    assert.strictEqual(post.ad, true);
+    console.log('js feed shared author and svg ad label ok');
+  }
+})().catch(e => { console.error(e); process.exit(1); });
