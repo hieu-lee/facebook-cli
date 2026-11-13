@@ -57,7 +57,10 @@
  const linksTo=async(u,want)=>{
   const t=timeLink(u);
   if(t&&/^\?/.test(t.getAttribute('href'))){t.focus({preventScroll:true});await waitFor(()=>!/^\?/.test(t.getAttribute('href')||''),1500,50);t.blur()}
-  return [...u.querySelectorAll('a[href]')].some(a=>canon(a.getAttribute('href'))===want);
+  /* the card's OWN permalink, picked the way step() picked it: its timestamp link, else its first
+     post link. Any other link (a share, a quote, a link in the text) may point at another post. */
+  const own=t?t.getAttribute('href'):[...u.querySelectorAll('a[href]')].map(a=>a.getAttribute('href')).find(h=>POST.test(h)&&!/comment_id/.test(h));
+  return !!own&&!/^\?/.test(own)&&canon(own)===want;
  };
  const timeNode=(u,tt)=>{const w=document.createTreeWalker(u,NodeFilter.SHOW_TEXT);let n;while(n=w.nextNode()){const t=n.nodeValue;if(!t||t.includes('\u034f')||n.parentElement.closest('blockquote'))continue;if(t.replace(/[\u200b-\u200f\u2060\ufeff]/g,'').trim()===tt)return n;}return null;};
  const decode=a=>{
@@ -175,7 +178,7 @@
   },
   /* post-menu on a post's own page: the post opens in a dialog over the feed, or fills main */
   async postMenu(path){
-   const root=await waitFor(()=>[...document.querySelectorAll('[role=dialog]')].filter(d=>window.__fb.visible(d)&&actionsOf(d)).pop()||[document.querySelector('[role=main]')].find(m=>m&&actionsOf(m)),12000,200);
+   const root=await waitFor(()=>[...document.querySelectorAll('[role=dialog]')].filter(d=>window.__fb.visible(d)&&actionsOf(d)).pop()||window.__fb.postCards().find(c=>c.closest('[role=main]')&&actionsOf(c)),12000,200);
    if(!root)return {err:'this post has no actions menu'};
    return walk(root,path);
   },
