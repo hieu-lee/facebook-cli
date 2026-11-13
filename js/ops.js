@@ -226,6 +226,34 @@
   await sleep(300);scan();
   return {rows:[...acc].slice(0,n).map(([k,g])=>[g.name,k,trunc(g.info.join(' · '),120)])};
  };
+ // browsable hub lists (events, pages, places): anchors in main whose
+ // canonical path matches the hub's own link shape, gathered like groups
+ const hubList=async(n,ready,pathOf,note)=>{
+  const ok=await waitFor(()=>document.querySelector(ready),12000);
+  if(!ok)return {rows:[],note};
+  await sleep(600);
+  /* details can render on a later scroll pass than the name, so merge every pass into one
+     entry per path, as F.groups does; hidden anchors never count toward n */
+  const acc=new Map();
+  const scan=()=>{
+   for(const a of document.querySelectorAll('[role=main] a[href]')){
+    const p=pathOf(a.getAttribute('href'));if(!p||!linkShown(a))continue;
+    /* rendered lines, not text nodes: a name split across inline spans stays whole */
+    let lines=(a.innerText||'').split('\n').map(clean).filter(Boolean);
+    /* an image-only link has no rendered text: its name is its label or its image's alt, as in F.groups */
+    if(!lines.length)lines=[clean(a.getAttribute('aria-label')||a.querySelector('img[alt]')?.alt||'')].filter(Boolean);
+    /* a labelled action on an item already named ("View group": aria-label = its text) is not a detail */
+    const label=clean(a.getAttribute('aria-label')||'');if(acc.has(p)&&label&&label===lines.join(' '))continue;
+    if(lines.length)addGroup(acc,p,lines);
+   }
+   return [...acc.keys()].map(k=>({k}));
+  };
+  await gather(n,scan);
+  /* the limit can be reached before the last link's details render: let them settle once */
+  await sleep(300);scan();
+  return {rows:[...acc].slice(0,n).map(([p,g])=>[g.name,p,trunc(g.info.join(' · '),120)])};
+ };
+ F.pages=async(n)=>hubList(n,'[role=main] a[href]',h=>profilePath(h),'no pages visible');
  F.groupMembers=async(n)=>{
   const ok=await waitFor(()=>document.querySelector('[role=main] a[href]'),12000);
   if(!ok)return {rows:[],note:'no members visible'};
