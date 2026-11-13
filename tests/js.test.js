@@ -101,6 +101,10 @@ assert.strictEqual(F.shortBadge('Oh My Mag Les comptes avec un badge Vérifié o
 assert.strictEqual(F.clean('4\u202f890\u00a0€'), '4 890 €');
 const count = text => F.num({parentElement: {parentElement: {innerText: text}}});
 for (const t of ['28', '1.2K', '1,9 K', '40,1\u00a0K', '4\u202f890']) assert.strictEqual(count(t), t, 'count ' + t);
+// a newline or tab inside a counter would split TSV records: not a count
+for (const t of ['1,9\nK', '4\t890']) assert.strictEqual(count(t), '0', 'count ' + JSON.stringify(t));
+// an author named like a weekday or "today" is not a timestamp
+for (const t of ['Lundi Matin', 'Aujourd’hui en France', 'Dimanche soir']) assert(!F.TIME.test(t), 'TIME must not match: ' + t);
 assert.strictEqual(count('28 réactions'), '0');
 console.log('js french ok');
 
