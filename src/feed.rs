@@ -16,10 +16,21 @@ pub struct Post {
     pub text: String,
     pub url: String,
     pub ad: bool,
+    pub reaction_label: String,
+    pub reaction_pressed: Option<bool>,
 }
 
 pub(crate) fn format_post(refs: &crate::refs::Refs, p: &Post, urls: bool) -> String {
     let mut line = String::with_capacity(p.url.len() + p.author.len() + p.text.len() + 32);
+    if !p.reaction_label.is_empty() {
+        line.push_str("ru\t");
+        push_one_line(&mut line, &p.reaction_label);
+        line.push('\t');
+        if let Some(pressed) = p.reaction_pressed {
+            line.push_str(if pressed { "true" } else { "false" });
+        }
+        line.push('\n');
+    }
     if p.url.is_empty() {
         line.push('-');
     } else if urls {
@@ -139,6 +150,8 @@ async fn resolve(b: &Browser, t: &Tab, p: &Value) -> Res<Option<Post>> {
     let s = |k: &str| p[k].as_str().unwrap_or("").to_string();
     Ok(Some(Post {
         author: s("author"),
+        reaction_label: s("reaction_label"),
+        reaction_pressed: p["reaction_pressed"].as_bool(),
         time: s("time"),
         stats: format!(
             "{}/{}/{}",
@@ -433,6 +446,15 @@ pub async fn feed(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn own_reaction_metadata_precedes_its_post() {
+        let refs = crate::refs::Refs::load(std::env::temp_dir().join("fb-reaction-refs"));
+        let mut p = post("Author", "Body", "https://www.facebook.com/a/posts/1");
+        p.reaction_label = "Remove Love from Author's post".into();
+        p.reaction_pressed = Some(true);
+        assert!(format_post(&refs, &p, true).starts_with("ru\tRemove Love from Author's post\ttrue\n"));
+    }
+
     fn post(author: &str, text: &str, url: &str) -> Post {
         Post {
             author: author.into(),
@@ -441,6 +463,8 @@ mod tests {
             text: text.into(),
             url: url.into(),
             ad: false,
+            reaction_label: String::new(),
+            reaction_pressed: None,
         }
     }
 
