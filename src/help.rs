@@ -3,6 +3,7 @@ Output: TSV, one record per line. Short refs (p3k9a post, c8x2f chat, u1abc prof
 <who>: me | name | @vanity | id | url | ref    <chat>: nickname | exact friend name | chat/profile ref | thread id | @handle | URL    <post>: ref | /path | url
 
 READ
+  feed/posts --reaction-state prepends ru<TAB>label<TAB>aria-pressed metadata to each post.
   feed [-n 10] [--refresh] [--full] [--urls]   next posts (scrolls on): ref, author, time, react/comment/share, text
   posts [who] [-n 10]                same, for a profile / page / group (/groups/ID)
   view <post> [-n 10]                by, stats, text, then c<TAB>author<TAB>time<TAB>text per comment
