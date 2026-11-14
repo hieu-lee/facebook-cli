@@ -12,6 +12,36 @@ const src = fs.readFileSync(path.join(__dirname, '../js/lib.js'), 'utf8');
 new Function(src).call(global.window);
 const F = global.window.__fb;
 
+// Facebook can replace the composer node while mounting the audience picker.
+// Only the picker's explicit Done action may be pressed, never the Post button.
+(async () => {
+  const vm = require('vm');
+  async function choose(hasDone, hidden = false) {
+    let opened = false, finished = false, selected = false, posted = false, donePressed = false;
+    const audience = { get innerText() { return finished ? 'Public' : 'Friends'; },
+      getAttribute: () => 'Edit privacy. Sharing with friends.', click: () => { opened = true; } };
+    const post = { innerText: 'Post', getAttribute: () => 'Post', click: () => { posted = true; } };
+    const done = { innerText: 'Done', getAttribute: () => 'Done', click: () => { assert(selected); donePressed = true; finished = true; } };
+    const option = { innerText: 'Public\nAnyone on or off Facebook', visible: true, closest: () => hidden ? {} : null,
+      getAttribute: () => null, click: () => { selected = true; } };
+    const old = { querySelectorAll: s => s === '[role=button]' ? [audience, post] : [] };
+    const picker = { querySelectorAll: s => s.includes('[role=button]') ? hasDone ? [done, post] : [post] : [option] };
+    const G = { clean: s => String(s || '').trim(), vtext: () => [], visible: e => e.visible !== false,
+      enabled: () => true, sleep: async () => {}, waitFor: async f => f() };
+    const ctx = vm.createContext({ window: { __fb: G }, document: { querySelectorAll: () => opened && !finished ? [picker] : [old] } });
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/act.js'), 'utf8'), ctx);
+    G.composeDialog = () => old;
+    const result = await G.composeAudience('public');
+    assert.strictEqual(posted, false, 'audience selection must never publish');
+    assert.strictEqual(donePressed, hasDone && !hidden);
+    return result;
+  }
+  assert.strictEqual(await choose(true), true, 'find Public in the replacement picker');
+  assert.notStrictEqual(await choose(false), true, 'missing Done must fail safely');
+  assert.notStrictEqual(await choose(true, true), true, 'ignore a hidden audience option');
+  console.log('js audience replacement dialog ok');
+})().catch(e => { console.error(e); process.exit(1); });
+
 // Composer timeouts use an immediate waitFor so every failure state is checked without a minute's delay.
 (async () => {
   const vm = require('vm');

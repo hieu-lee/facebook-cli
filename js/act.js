@@ -41,17 +41,26 @@
  const first=t=>clean(t).split('\n')[0].trim();
  F.composeAudience=async(kind)=>{
   const d=F.composeDialog();if(!d)return 'no composer';
-  const audienceButton=()=>{const dialog=F.composeDialog();return dialog&&[...dialog.querySelectorAll('[role=button]')].find(e=>/\./.test(e.getAttribute('aria-label')||'')&&btnText(e).length>0&&btnText(e).length<30);};
+  const visible=e=>F.visible(e)&&!e.closest?.('[aria-hidden=true],[hidden],[inert]');
+  const audienceButton=()=>{const dialog=F.composeDialog();return dialog&&[...dialog.querySelectorAll('[role=button]')].find(e=>visible(e)&&/\./.test(e.getAttribute('aria-label')||'')&&btnText(e).length>0&&btnText(e).length<30);};
   const ab=audienceButton();
   if(!ab)return 'no audience button';
   if(AUD[kind].test(first(ab.innerText)))return true;
   ab.click();
-  const lab=await waitFor(()=>[...d.querySelectorAll('label')].find(l=>AUD[kind].test(first(l.innerText))),6000);
+  const visibleDialogs=()=>dialogs().filter(visible);
+  const lab=await waitFor(()=>{
+   const choices=[...new Set(visibleDialogs().flatMap(p=>[...p.querySelectorAll('label,[role=radio],[role=option]')]))].filter(l=>visible(l)&&AUD[kind].test(first(l.innerText||l.getAttribute('aria-label'))));
+   return choices.length===1?choices[0]:null;
+  },6000);
   if(!lab)return 'audience option not found';
   lab.click();
   await sleep(300);
-  const done=[...d.querySelectorAll('[role=button]')].filter(b=>btnText(b)).pop();
-  if(done)done.click();
+  const done=await waitFor(()=>{
+   const buttons=[...new Set(visibleDialogs().flatMap(p=>[...p.querySelectorAll('[role=button],button')]))].filter(b=>visible(b)&&F.enabled(b)&&/^(Done|Xong|Terminé|Hotovo|Готово|Valmis|Listo|Concluir|Fertig|Fine|Klaar|Bitti|Gotowe|Klar|Færdig|Ferdig)$/i.test(first(b.innerText||b.getAttribute('aria-label'))));
+   return buttons.length===1?buttons[0]:null;
+  },6000);
+  if(!done)return 'audience confirmation button not found; nothing was posted';
+  done.click();
   await sleep(200);
   const current=await waitFor(()=>{const b=audienceButton();return b&&AUD[kind].test(first(b.innerText))},3000);
   return current?true:'audience change not confirmed; nothing was posted';
