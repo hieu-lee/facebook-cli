@@ -226,7 +226,10 @@
     if(/^\?/.test(own)||/comment_id/.test(own)||!samePost(own,want))
      return {err:'this page does not show that post (Facebook may have moved or removed it); nothing was pressed'};
    }
-   return walk(root,path,false,me);
+   /* as on a feed card: Facebook can reuse the card between press()'s pointer events, so each
+      event re-checks it still shows the same post (and, after a redirect, still links it) */
+   const k=key(root),moved=want&&!samePost(location.href,want);
+   return walk(root,path,false,me,()=>root.isConnected&&key(root)===k&&(!moved||samePost(timeLink(root)?.getAttribute('href')||'',want)));
   },
   async expand(){
    const pending=[];
