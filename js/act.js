@@ -11,11 +11,15 @@
   const trigger=await waitFor(()=>{
    const regs=[...m.querySelectorAll('[role=region]')];
    for(const r of regs){const h=r.querySelector('h1,h2,h3,h4');if(!h)continue;const b=[...r.querySelectorAll('[role=button]')].find(b=>btnText(b).length>6);if(b)return b;}
-   return [...m.querySelectorAll('[role=button]')].find(b=>/^(What.s on your mind|Bạn đang nghĩ gì|Exprimez-vous|Que voulez-vous dire)/i.test(btnText(b)))||null;
+   return [...m.querySelectorAll('[role=button]')].find(b=>/^(What.s on your mind|Bạn đang nghĩ gì|Exprimez-vous|Que voulez-vous dire|Что у вас нового|О чём вы думаете|Що у вас нового)/i.test(btnText(b)))||null;
   },15000);
   if(!trigger)return 'no composer button';
+  // Facebook loads the composer on first use: on a slow connection that takes well over
+  // 10 seconds, and a click made before the page is ready does nothing. Click once more.
+  const composer=()=>dialogs().find(d=>d.querySelector('[role=textbox]'));
   trigger.click();
-  const d=await waitFor(()=>dialogs().find(d=>d.querySelector('[role=textbox]')),10000);
+  let d=await waitFor(composer,12000);
+  if(!d&&trigger.isConnected){trigger.click();d=await waitFor(composer,20000);}
   if(!d)return 'composer did not open';
   const tb=d.querySelector('[role=textbox]');tb.focus();
   return true;
@@ -41,19 +45,45 @@
  const first=t=>clean(t).split('\n')[0].trim();
  F.composeAudience=async(kind)=>{
   const d=F.composeDialog();if(!d)return 'no composer';
-  const audienceButton=()=>{const dialog=F.composeDialog();return dialog&&[...dialog.querySelectorAll('[role=button]')].find(e=>/\./.test(e.getAttribute('aria-label')||'')&&btnText(e).length>0&&btnText(e).length<30);};
+  const visible=e=>F.visible(e)&&!e.closest?.('[aria-hidden=true],[hidden],[inert]');
+  const audienceButton=()=>{const dialog=F.composeDialog();return dialog&&[...dialog.querySelectorAll('[role=button]')].find(e=>visible(e)&&/\./.test(e.getAttribute('aria-label')||'')&&btnText(e).length>0&&btnText(e).length<30);};
   const ab=audienceButton();
   if(!ab)return 'no audience button';
   if(AUD[kind].test(first(ab.innerText)))return true;
   ab.click();
-  const lab=await waitFor(()=>[...d.querySelectorAll('label')].find(l=>AUD[kind].test(first(l.innerText))),6000);
+  const visibleDialogs=()=>dialogs().filter(visible);
+  const text=l=>first(l.innerText||l.getAttribute('aria-label')||'');
+  // The picker's choices in screen order, innermost element of each (one choice can be a
+  // label wrapping a role=radio).
+  const choices=()=>{
+   const all=[...new Set(visibleDialogs().flatMap(p=>[...p.querySelectorAll('label,[role=radio],[role=option]')]))].filter(l=>visible(l)&&text(l));
+   return all.filter(l=>!all.some(other=>other!==l&&l.contains(other)));
+  };
+  const named=()=>{const m=choices().filter(l=>AUD[kind].test(text(l)));return m.length===1?m[0]:null;};
+  // A language the label sets miss: Facebook lists Public first and Friends second, and
+  // Only me is the one choice without a description line. The audience button must show
+  // the picked choice afterwards, or nothing is posted.
+  const placed=()=>{
+   const c=choices();if(c.length<3)return null;
+   if(kind==='public')return c[0];
+   if(kind==='friends')return c[1];
+   const bare=c.filter(l=>!clean(l.innerText||'').includes('\n'));
+   return bare.length===1?bare[0]:null;
+  };
+  // The picker loads on first use too: allow a slow connection.
+  const lab=await waitFor(named,8000)||await waitFor(()=>named()||placed(),12000);
   if(!lab)return 'audience option not found';
+  const want=text(lab);
   lab.click();
   await sleep(300);
-  const done=[...d.querySelectorAll('[role=button]')].filter(b=>btnText(b)).pop();
-  if(done)done.click();
+  const done=await waitFor(()=>{
+   const buttons=[...new Set(visibleDialogs().flatMap(p=>[...p.querySelectorAll('[role=button],button')]))].filter(b=>visible(b)&&F.enabled(b)&&/^(Done|Xong|Terminé|Hotovo|Готово|Valmis|Listo|Concluir|Fertig|Fine|Klaar|Bitti|Gotowe|Klar|Færdig|Ferdig)$/i.test(first(b.innerText||b.getAttribute('aria-label'))));
+   return buttons.length===1?buttons[0]:null;
+  },10000);
+  if(!done)return 'audience confirmation button not found; nothing was posted';
+  done.click();
   await sleep(200);
-  const current=await waitFor(()=>{const b=audienceButton();return b&&AUD[kind].test(first(b.innerText))},3000);
+  const current=await waitFor(()=>{const b=audienceButton();return b&&(AUD[kind].test(first(b.innerText))||first(b.innerText)===want)},5000);
   return current?true:'audience change not confirmed; nothing was posted';
  };
  const setVal=(el,v)=>{const proto=el.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;const set=Object.getOwnPropertyDescriptor(proto,'value').set;set.call(el,v);el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));};
