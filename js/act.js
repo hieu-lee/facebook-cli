@@ -157,6 +157,74 @@
  // The profile header mounts after DOMContentLoaded: wait for the tab strip, then for the relationship control, before concluding there is none.
  F.friendWait=async()=>{const m=await waitFor(()=>{const m=main();return m&&m.querySelector('[role=tablist]')&&m},15000);if(!m)return 'no-profile';const st=await waitFor(()=>{const s=F.friendState();return s!=='no-button'?s:null},5000,200);return st||'no-button';};
  F.friendAdd=async()=>{const st=F.friendState();if(st!=='can-add')return st;const b=friendButton();if(!b)return 'no-button';b.click();const ok=await waitFor(()=>{const s=F.friendState();return s==='requested'||s==='friends'?s:null;},8000,200);return ok||'unconfirmed';};
+ // ---- follow: a public figure shows Follow / Following in the profile header; a person who
+ // also takes friend requests keeps Follow / Unfollow in the header's "…" menu. Only controls
+ // above the tab strip belong to the requested profile (as for friend-add).
+ const FOLLOW=/^(Follow|Suivre|Theo dõi|Sledovat|Sledovať|Подписаться|Jälgi)$/i;
+ const FOLLOWING=/^(Following|Abonné|Abonnée|Abonné\(e\)|Đang theo dõi|Sledujete|Вы подписаны|Jälgid)$/i;
+ const UNFOLLOW=/^(Unfollow|Ne plus suivre|Se désabonner|Bỏ theo dõi|Přestat sledovat|Prestať sledovať|Отписаться|Отменить подписку|Lõpeta jälgimine)$/i;
+ const headerButtons=()=>{const m=main();const tl=m&&m.querySelector('[role=tablist]');if(!tl)return [];return [...m.querySelectorAll('[role=button]')].filter(x=>!x.closest('[role=tablist],[role=feed],[role=list],[role=article],[role=dialog]')&&(tl.compareDocumentPosition(x)&Node.DOCUMENT_POSITION_PRECEDING)&&F.visible(x));};
+ const followButtons=()=>headerButtons().filter(x=>FOLLOW.test(first(btnText(x)))||FOLLOWING.test(first(btnText(x))));
+ const openMenu=()=>[...document.querySelectorAll('[role=menu]')].filter(F.visible).pop()||null;
+ const closeMenu=async()=>{if(!openMenu())return;(document.activeElement||document.body).dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',code:'Escape',keyCode:27,bubbles:true}));await waitFor(()=>!openMenu(),1500,100);};
+ const menuItem=(m,re)=>m&&[...m.querySelectorAll('[role=menuitem]')].find(i=>F.visible(i)&&re.test(first(btnText(i))))||null;
+ // open each header "…" menu until one holds Follow or Unfollow; that menu stays open
+ // the header's "…" menu button sits beside the tab strip, after it in the page: it counts when
+ // it is nearer the tab strip than the first post is (posts and footers have menus too)
+ const headerMenus=()=>{
+  const m=main();const tl=m&&m.querySelector('[role=tablist]');if(!tl)return [];
+  const near=x=>{let a=tl,d=0;while(a&&!a.contains(x)){a=a.parentElement;d++}return d};
+  const limit=Math.min(99,...[...m.querySelectorAll('[role=article],[role=feed]')].map(near));
+  const before=x=>tl.compareDocumentPosition(x)&Node.DOCUMENT_POSITION_PRECEDING;
+  // a friend's Unfollow is in the menu of the header's own Friends button
+  const friends=headerButtons().filter(x=>FRIEND_IS.test(first(btnText(x))));
+  return [...friends,...[...m.querySelectorAll('[aria-haspopup=menu][role=button]')].filter(x=>F.visible(x)&&!x.closest('[role=tablist],[role=feed],[role=list],[role=article],[role=dialog]')&&(before(x)||near(x)<limit))];
+ };
+ const followMenu=async()=>{
+  for(const b of headerMenus()){
+   F.press(b);
+   const m=await waitFor(openMenu,3000,100);
+   if(menuItem(m,FOLLOW)||menuItem(m,UNFOLLOW))return m;
+   await closeMenu();
+  }
+  return null;
+ };
+ // 'following', 'can-follow', 'no-follow' (this profile offers neither), 'ambiguous' or 'no-profile'
+ F.followState=async()=>{
+  if(!await waitFor(()=>main()&&main().querySelector('[role=tablist]'),15000))return 'no-profile';
+  // the header's buttons mount after the tab strip
+  await waitFor(()=>followButtons().length||headerMenus().length,5000,200);
+  const hb=followButtons();
+  if(hb.length>1)return 'ambiguous';
+  if(hb.length)return FOLLOWING.test(first(btnText(hb[0])))?'following':'can-follow';
+  const m=await followMenu();
+  if(!m)return 'no-follow';
+  const st=menuItem(m,UNFOLLOW)?'following':'can-follow';
+  await closeMenu();
+  return st;
+ };
+ // follow (on) or unfollow (!on), then read the state back; already there = nothing pressed
+ F.follow=async on=>{
+  const st=await F.followState();
+  if(st!=='following'&&st!=='can-follow')return st;
+  if((st==='following')===on)return st;
+  const hb=followButtons()[0];
+  if(hb&&on)F.press(hb);
+  else{
+   // a header "Following" opens its own menu with Unfollow; otherwise the "…" menu holds the item
+   let m;
+   if(hb){F.press(hb);m=await waitFor(openMenu,3000,100);}else m=await followMenu();
+   const it=menuItem(m,on?FOLLOW:UNFOLLOW);
+   if(!it){await closeMenu();return 'no-item';}
+   F.press(it);
+  }
+  await sleep(1500);
+  await closeMenu();
+  const want=on?'following':'can-follow';
+  let after='';
+  for(let i=0;i<4&&after!==want;i++){if(i)await sleep(1000);after=await F.followState();}
+  return after;
+ };
  const postButtons=()=>{const d=F.composeDialog();return d?[...d.querySelectorAll('[role=button],button')].filter(b=>F.visible(b)&&/^(Post|Đăng|Publier)$/i.test(clean(b.getAttribute('aria-label')||btnText(b)))):[];};
  const postButton=()=>{const bs=postButtons();return bs.length===1?bs[0]:null;};
  // Retained audience panes can put Done after Post; order is not action identity.
