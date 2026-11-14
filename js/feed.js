@@ -67,6 +67,9 @@
     const head=ch.slice(0,ti>=0?ti:(dot>0?dot:1)).filter(c=>c!=='·'&&c.length>1).map(shortBadge);
     /* Shared-source headers follow the first timestamp; comments follow the post's reactions. */
     const reactions=g(u,'like_button');
+    const reactionButton=reactions&&(reactions.closest?.('[role=button]')||reactions);
+    const reactionLabel=reactionButton?.getAttribute?.('aria-label')||'';
+    const pressed=reactionButton?.getAttribute?.('aria-pressed');
     for(const profile of u.querySelectorAll('[data-ad-rendering-role=profile_name]')){
      if(!window.__fb.visible(profile)||profile.closest('blockquote')||(reactions&&!(profile.compareDocumentPosition(reactions)&Node.DOCUMENT_POSITION_FOLLOWING)))continue;
      const author=shortBadge(clean(profile.innerText));if(author&&!head.includes(author))head.push(author);
@@ -81,6 +84,7 @@
     else if(!hover){const tn=ti<0?null:timeNode(u,ch[ti]);if(tn){tn.parentElement.scrollIntoView({block:'center'});const rg=document.createRange();rg.selectNodeContents(tn);const r=rg.getBoundingClientRect();if(r.width>0)hover=[r.x+r.width/2,r.y+r.height/2];}}
     const alt=[...u.querySelectorAll('a[href]')].map(a=>a.getAttribute('href')).find(h=>POST.test(h)&&!/comment_id/.test(h));
     out.push({pos,url,alt:alt?canon(alt):'',author:head.join(' / '),time:dt&&dt.text?dt.text:(ti<0?'':ch[ti]),text:postText(msg)||attached(u),
+      reaction_label:reactionLabel,reaction_pressed:pressed==='true'?true:pressed==='false'?false:null,
       r:num(g(u,'like_button')),c:num(g(u,'comment_button')),s:num(g(u,'share_button')),
       ad:ch.slice(0,12).some(c=>SPON.test(c)),hover});
     if(url||!hover)continue;
