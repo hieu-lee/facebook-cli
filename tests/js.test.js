@@ -37,6 +37,15 @@ const F = global.window.__fb;
     getClientRects() { return [{}]; }, matches() { return this.disabled; }, closest() { return null; }, getBoundingClientRect() { return { x: 0, y: 0, width: 20, height: 20 }; },
     dispatchEvent(e) { this.events.push(e.type); this.onEvent?.(e.type); },
   });
+  // post-menu (#56 review): a card Facebook reuses for another post during the press's
+  // pointer events fails the walk's identity check, so the click never reaches it.
+  {
+    let same = true;
+    const actions = button('div', 'Actions for this post');
+    actions.onEvent = type => { if (type === 'pointerover') same = false; };
+    assert.throws(() => G.press(actions, { valid: () => same }), /action target changed/);
+    assert.deepEqual(actions.events, ['pointerover']);
+  }
   buttons = [button('button')];
   assert.strictEqual(await G.composePrepare(), true, 'native Post button is recognized');
   assert.strictEqual(G.composeCheck('requested draft'), true);

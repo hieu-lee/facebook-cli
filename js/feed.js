@@ -1,6 +1,89 @@
 (()=>{
  const {TIME,SPON,shortBadge,vtext,num,postCards,postText,canon,waitFor,clean}=window.__fb;
  let seen=new WeakMap();let seq=0,current=null;
+ /* each listed post's card, so post-menu can find it again; Facebook swaps a card's element
+    when it re-renders it, but its feed position stays */
+ const byUrl=new Map();
+ /* capped: Facebook drops all but its last few dozen cards anyway, and each entry keeps its card's DOM alive */
+ const remember=(url,u)=>{byUrl.delete(url);byUrl.set(url,{u,at:u.getAttribute('aria-posinset')});if(byUrl.size>100)byUrl.delete(byUrl.keys().next().value)};
+ /* post-menu: open a post's "Actions for this post" menu, press each label of `path` in turn
+    (menu items, then whatever they open: submenus, dialogs such as Report), and describe what
+    shows after the last press. Labels are Facebook's own text, so any language works. */
+ const LAYER='[role=menu],[role=dialog],[role=listbox]';
+ const CLICK='[role=menuitem],[role=menuitemradio],[role=menuitemcheckbox],[role=button],[role=radio],[role=checkbox],[role=option],[role=switch],[role=link],a[href],button,input[type=radio],input[type=checkbox]';
+ const actionsOf=root=>{const all=[...root.querySelectorAll('[aria-haspopup=menu][role=button]')].filter(b=>window.__fb.visible(b)&&!b.closest('blockquote'));return all.find(b=>/^Actions for this post/i.test(b.getAttribute('aria-label')||''))||all[0]};
+ const lines=e=>(e.innerText||'').split('\n').map(clean).filter(Boolean);
+ const optionsOf=l=>{
+  const out=[],count={};
+  for(const e of l.querySelectorAll(CLICK)){
+   if(!window.__fb.visible(e)||out.some(o=>o.e.contains(e)))continue;
+   const text=lines(e);let label=text[0]||clean(e.getAttribute('aria-label')||'');
+   if(!label)continue;
+   count[label]=(count[label]||0)+1;if(count[label]>1)label+=' ('+count[label]+')';
+   out.push({e,label,text,detail:text.slice(1).join(' '),on:e.getAttribute('aria-checked')==='true'||e.checked===true});
+  }
+  return out;
+ };
+ /* the walk in progress: stop() ends it before its next press, when its caller gave up */
+ let walking=null;
+ const STOPPED={err:'stopped: the caller gave up'};
+ /* a stop token made when the command enters, before any wait, so stop() reaches it at once */
+ const begin=()=>{const me={stopped:false};walking=me;return me};
+ const walk=async(root,path,card,me,valid=()=>true)=>{
+  const {visible,press,sleep}=window.__fb;
+  const base=new Set([...document.querySelectorAll(LAYER)].filter(visible));
+  const top=()=>[...document.querySelectorAll(LAYER)].filter(l=>visible(l)&&!base.has(l)).pop();
+  const sig=()=>{const l=top();return [l,l?optionsOf(l).map(o=>o.label+(o.on?'*':'')).join('|'):'']};
+  /* wait for the press to show something, then for it to hold still (items arrive in steps) */
+  const settle=async([l0,s0])=>{
+   const t0=Date.now();let [l,s]=sig();
+   while(Date.now()-t0<5000&&l===l0&&s===s0){await sleep(150);[l,s]=sig()}
+   for(let still=0;still<4&&Date.now()-t0<9000;){await sleep(200);const [l2,s2]=sig();if(l2===l&&s2===s)still++;else{still=0;l=l2;s=s2}}
+  };
+  const button=actionsOf(root);
+  if(!button)return {err:'this post has no actions menu'};
+  if(me.stopped)return STOPPED;
+  let before=sig();press(button,{valid});await settle(before);
+  /* nothing opened: an ignored click must not read as "done" further down */
+  if(!top())return {err:'Facebook did not open the post menu; nothing was pressed'};
+  for(const want of path){
+   if(me.stopped)return STOPPED;
+   const l=top();
+   const o=l&&optionsOf(l).find(o=>o.label===want);
+   if(!o)return {err:'Facebook no longer shows "'+want+'" here; open the menu again'};
+   before=sig();press(o.e);await settle(before);
+  }
+  const notes=[...document.querySelectorAll('[role=alert],[role=status]')].filter(visible).map(e=>clean(e.innerText)).filter(Boolean);
+  const l=top();
+  /* a feed card answers in place: "Post hidden", "We'll show fewer posts like this", Undo */
+  if(!l)return {done:true,notes:card&&root.isConnected&&root.innerText.length<600?notes.concat(lines(root)):notes};
+  const options=optionsOf(l);
+  const used=new Set(options.flatMap(o=>o.text));
+  return {kind:l.getAttribute('role'),title:clean(l.getAttribute('aria-label')||''),text:lines(l).filter(t=>!used.has(t)),
+   options:options.map(o=>[o.label,o.detail,o.on]),notes};
+ };
+ /* the post an address names: its canonical path, or its own id (posts/<id>, permalink/<id>,
+    story_fbid, fbid, v), which stays the same when Facebook writes the path another way */
+ const postId=h=>{const m=/\/(?:posts|permalink|videos|reel)\/([^/?#]+)|[?&](?:story_fbid|fbid|v)=([^&#]+)/.exec(canon(h)||'');return m?m[1]||m[2]:''};
+ const samePost=(h,want)=>{const c=canon(h);if(!c)return false;if(c===want)return true;const id=postId(h);return !!id&&id===postId(want)};
+ /* the filled card must link the post itself before anything is pressed on it */
+ const linksTo=async(u,want)=>{
+  const t=timeLink(u),before=key(u);
+  if(t&&/^\?/.test(t.getAttribute('href'))){t.focus({preventScroll:true});await waitFor(()=>!/^\?/.test(t.getAttribute('href')||''),1500,50);t.blur()}
+  /* Facebook may swap the timestamp, or reuse the card for another post, during that wait */
+  if(key(u)!==before||(t&&(!t.isConnected||!u.contains(t)||timeLink(u)!==t)))return false;
+  /* the card's OWN permalink, picked the way step() picked it: its timestamp link when that is a
+     post link, else its first post link. Any other link (a share, a quote, a link in the text)
+     may point at another post. */
+  return ownLink(u)===want;
+ };
+ const ownLink=u=>{
+  const t=timeLink(u),real=t?.getAttribute('href')||'';
+  const viaTime=!/^\?/.test(real)&&POST.test(real)&&!/comment_id/.test(real)?canon(real):'';
+  if(viaTime)return viaTime;
+  const alt=[...u.querySelectorAll('a[href]')].map(a=>a.getAttribute('href')).find(h=>POST.test(h)&&!/comment_id/.test(h));
+  return alt?canon(alt):'';
+ };
  const timeNode=(u,tt)=>{const w=document.createTreeWalker(u,NodeFilter.SHOW_TEXT);let n;while(n=w.nextNode()){const t=n.nodeValue;if(!t||t.includes('\u034f')||n.parentElement.closest('blockquote'))continue;if(t.replace(/[\u200b-\u200f\u2060\ufeff]/g,'').trim()===tt)return n;}return null;};
  const decode=a=>{
   const cs=[];const w=document.createTreeWalker(a,NodeFilter.SHOW_TEXT);let n;
@@ -80,6 +163,8 @@
     if(url)hover=null;
     else if(!hover){const tn=ti<0?null:timeNode(u,ch[ti]);if(tn){tn.parentElement.scrollIntoView({block:'center'});const rg=document.createRange();rg.selectNodeContents(tn);const r=rg.getBoundingClientRect();if(r.width>0)hover=[r.x+r.width/2,r.y+r.height/2];}}
     const alt=[...u.querySelectorAll('a[href]')].map(a=>a.getAttribute('href')).find(h=>POST.test(h)&&!/comment_id/.test(h));
+    if(url)remember(url,u);
+    if(alt&&!byUrl.has(canon(alt)))remember(canon(alt),u);
     out.push({pos,url,alt:alt?canon(alt):'',author:head.join(' / '),time:dt&&dt.text?dt.text:(ti<0?'':ch[ti]),text:postText(msg)||attached(u),
       r:num(g(u,'like_button')),c:num(g(u,'comment_button')),s:num(g(u,'share_button')),
       ad:ch.slice(0,12).some(c=>SPON.test(c)),hover});
@@ -95,7 +180,58 @@
    const pending=current&&current.pos===pos?current:null;current=null;const u=pending&&pending.u;
    if(!u||pending.render!==render(u)||pending.name!==g(u,'profile_name')||pending.msg!==g(u,'story_message')){if(u)seen.delete(u);return null}
    mark(u);
-   return a&&u&&u.contains(a)?canon(a.href):'';
+   const found=a&&u&&u.contains(a)?canon(a.href):'';
+   if(found)remember(found,u);
+   return found;
+  },
+  /* post-menu on a card this tab listed. {gone:true}: Facebook dropped the card (it keeps
+     only the last 10-25 posts of a long feed), so the caller uses the post's own page. */
+  stop(){if(walking)walking.stopped=true;return 1},
+  async menu(url,path){
+   const me=begin();
+   const want=canon(url),known=byUrl.get(want);
+   const u=known&&(known.u.isConnected?known.u:known.at&&document.querySelector('[aria-posinset="'+known.at+'"]'));
+   if(!u)return {gone:true,why:known?'card '+known.at+' removed':'never listed here'};
+   const y=scrollY;
+   try{
+    u.scrollIntoView({block:'center'});
+    if(!await waitFor(()=>actionsOf(u),6000,100))return {gone:true,why:'card '+known.at+' did not fill in'};
+    if(!await linksTo(u,want))return {gone:true,why:'card '+known.at+' shows another post'};
+    if(me.stopped)return STOPPED;
+    /* Facebook can reuse the card for another post between two of press()'s pointer events;
+       every event of the Actions press re-checks it is still this post, so the other post's menu
+       never opens; the open menu then belongs to this post */
+    const k=key(u);
+    return await walk(u,path,true,me,()=>u.isConnected&&key(u)===k&&ownLink(u)===want);
+   }finally{scrollTo(0,y)}
+  },
+  /* post-menu on a post's own page: the post opens in a dialog over the feed, or fills main */
+  async postMenu(path,url){
+   const me=begin();
+   const want=url?canon(url):'';
+   const root=await waitFor(()=>[...document.querySelectorAll('[role=dialog]')].filter(d=>window.__fb.visible(d)&&actionsOf(d)).pop()||window.__fb.postCards().find(c=>c.closest('[role=main]')&&actionsOf(c))
+    /* a photo page: the side panel beside the photo holds only that photo's caption and menu */
+    ||[...document.querySelectorAll('[role=complementary]')].find(c=>window.__fb.visible(c)&&c.querySelector('[data-ad-rendering-role=like_button]')&&actionsOf(c)),12000,200);
+   if(me.stopped)return STOPPED;
+   if(!root)return {err:'this post has no actions menu'};
+   /* a post address can redirect (a removed or pending post goes to its author's profile), and
+      the first card there is some other post: press only on the post that was asked for. The
+      page may name it by another path (a group's slug for its number), so the post's own id
+      also counts. Only the card's OWN permalink, its timestamp link, identifies it: another
+      card can link the post in its text or a shared attachment. Facebook reveals a hidden
+      timestamp address only once it is focused. */
+   if(want&&!samePost(location.href,want)){
+    const t=timeLink(root);
+    if(t&&/^\?/.test(t.getAttribute('href'))){t.focus({preventScroll:true});await waitFor(()=>!/^\?/.test(t.getAttribute('href')||''),1500,50);t.blur()}
+    if(me.stopped)return STOPPED;
+    const own=t&&t.isConnected&&root.contains(t)?t.getAttribute('href')||'':'';
+    if(/^\?/.test(own)||/comment_id/.test(own)||!samePost(own,want))
+     return {err:'this page does not show that post (Facebook may have moved or removed it); nothing was pressed'};
+   }
+   /* as on a feed card: Facebook can reuse the card between press()'s pointer events, so each
+      event re-checks it still shows the same post (and, after a redirect, still links it) */
+   const k=key(root),moved=want&&!samePost(location.href,want);
+   return walk(root,path,false,me,()=>root.isConnected&&key(root)===k&&(!moved||samePost(timeLink(root)?.getAttribute('href')||'',want)));
   },
   async expand(){
    const pending=[];
