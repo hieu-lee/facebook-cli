@@ -1361,7 +1361,7 @@ mod tests {
         assert_eq!(picker_name("Удалить реакцию \"Нравится\""), "нравится");
         assert_eq!(picker_name("Удалить реакцию «Нравится»"), "нравится");
         assert_eq!(picker_name("Ух ты!"), "ух ты!");
-        let neutral = "Поставить Нравится публикации Christopher Michael Brennan";
+        let neutral = "Поставить Нравится публикации Анна Петрова";
         assert!(reaction_neutral(neutral, &picker));
         assert!(!reaction_landed(neutral, &picker, 0));
         for (i, name) in [
@@ -1376,7 +1376,7 @@ mod tests {
         .iter()
         .enumerate()
         {
-            let label = format!("Удалить {name} из публикации Brandon Bracey");
+            let label = format!("Удалить {name} из публикации Иван Иванов");
             assert!(!reaction_neutral(&label, &picker), "{label}");
             assert!(reaction_landed(&label, &picker, i), "{label}");
         }
