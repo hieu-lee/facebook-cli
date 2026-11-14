@@ -613,7 +613,7 @@ pub async fn post_menu(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::author_ref_prefix;
+    use super::{author_ref_prefix, reaction_prefix, Post};
 
     #[test]
     fn author_ref_prefix_carries_the_profile_path() {
