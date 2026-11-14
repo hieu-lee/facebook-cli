@@ -428,7 +428,21 @@ pub async fn follow(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
         if out.cancelled() {
             return Err("cancelled by client; nothing was pressed".into());
         }
-        let after = text_of(&b.eval(&t, &format!("window.__fb.follow({on})")).await?)?;
+        let prepared = text_of(&b.eval(&t, &format!("window.__fb.followPrepare({on})")).await?)?;
+        if prepared != "ready" && !done(&prepared) {
+            return Err(format!("follow change not confirmed (state: {prepared})"));
+        }
+        same_account(&b, gen0)?;
+        if out.cancelled() {
+            return Err("cancelled by client; nothing was pressed".into());
+        }
+        if prepared == "ready" {
+            let pressed = text_of(&b.eval(&t, "window.__fb.followPress()").await?)?;
+            if pressed != "pressed" {
+                return Err(format!("follow change not confirmed (state: {pressed})"));
+            }
+        }
+        let after = text_of(&b.eval(&t, &format!("window.__fb.followConfirm({on})")).await?)?;
         if done(&after) {
             out.line(if on { "following" } else { "unfollowed" });
             Ok(())

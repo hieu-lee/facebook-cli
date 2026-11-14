@@ -185,7 +185,7 @@
  const followMenu=async()=>{
   for(const b of headerMenus()){
    F.press(b);
-   const m=await waitFor(openMenu,3000,100);
+   const m=await waitFor(()=>{const m=openMenu();return menuItem(m,FOLLOW)||menuItem(m,UNFOLLOW)?m:null;},3000,100);
    if(menuItem(m,FOLLOW)||menuItem(m,UNFOLLOW))return m;
    await closeMenu();
   }
@@ -208,20 +208,32 @@
   }
  };
  // follow (on) or unfollow (!on), then read the state back; already there = nothing pressed
- F.follow=async on=>{
+ let followAction=null;
+ F.followPrepare=async on=>{
+  followAction=null;
   const st=await F.followState();
   if(st!=='following'&&st!=='can-follow')return st;
   if((st==='following')===on)return st;
   const hb=followButtons()[0];
-  if(hb&&on)F.press(hb);
+  if(hb&&on){followAction={button:hb,on};return 'ready';}
   else{
    // a header "Following" opens its own menu with Unfollow; otherwise the "…" menu holds the item
    let m;
-   if(hb){F.press(hb);m=await waitFor(openMenu,3000,100);}else m=await followMenu();
+   if(hb){F.press(hb);m=await waitFor(()=>{const m=openMenu();return menuItem(m,UNFOLLOW)?m:null;},3000,100);}else m=await followMenu();
    const it=menuItem(m,on?FOLLOW:UNFOLLOW);
    if(!it){await closeMenu();return 'no-item';}
-   F.press(it);
+   followAction={button:it,on};return 'ready';
   }
+ };
+ // No awaits between validation and the relationship press: the caller checks cancellation first.
+ F.followPress=()=>{
+  const action=followAction;followAction=null;
+  if(!action)return 'no-item';
+  const {button,on}=action;
+  if(!button.isConnected||!F.visible(button)||!F.enabled(button)||!(on?FOLLOW:UNFOLLOW).test(first(btnText(button))))return 'no-item';
+  F.press(button);return 'pressed';
+ };
+ F.followConfirm=async on=>{
   await sleep(1500);
   await closeMenu();
   const want=on?'following':'can-follow';
