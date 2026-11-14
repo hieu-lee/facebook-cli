@@ -552,7 +552,7 @@ pub async fn post_menu(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
             let r = async {
                 b.goto(&t, &page).await?;
                 wait_main(&b, &t).await?;
-                let walk = format!("window.__fbFeed.postMenu({path})");
+                let walk = format!("window.__fbFeed.postMenu({path},{})", Value::from(page.as_str()));
                 let r = tokio::select! {
                     r = bounded(90, b.eval(&t, &walk)) => r,
                     _ = client_gone(out) => Err(CANCELLED.into()),

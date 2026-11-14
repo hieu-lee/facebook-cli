@@ -60,6 +60,10 @@
   return {kind:l.getAttribute('role'),title:clean(l.getAttribute('aria-label')||''),text:lines(l).filter(t=>!used.has(t)),
    options:options.map(o=>[o.label,o.detail,o.on]),notes};
  };
+ /* the post an address names: its canonical path, or its own id (posts/<id>, permalink/<id>,
+    story_fbid, fbid, v), which stays the same when Facebook writes the path another way */
+ const postId=h=>{const m=/\/(?:posts|permalink|videos|reel)\/([^/?#]+)|[?&](?:story_fbid|fbid|v)=([^&#]+)/.exec(canon(h)||'');return m?m[1]||m[2]:''};
+ const samePost=(h,want)=>{const c=canon(h);if(!c)return false;if(c===want)return true;const id=postId(h);return !!id&&id===postId(want)};
  /* the filled card must link the post itself before anything is pressed on it */
  const linksTo=async(u,want)=>{
   const t=timeLink(u),before=key(u);
@@ -200,13 +204,27 @@
    }finally{scrollTo(0,y)}
   },
   /* post-menu on a post's own page: the post opens in a dialog over the feed, or fills main */
-  async postMenu(path){
+  async postMenu(path,url){
    const me=begin();
+   const want=url?canon(url):'';
    const root=await waitFor(()=>[...document.querySelectorAll('[role=dialog]')].filter(d=>window.__fb.visible(d)&&actionsOf(d)).pop()||window.__fb.postCards().find(c=>c.closest('[role=main]')&&actionsOf(c))
     /* a photo page: the side panel beside the photo holds only that photo's caption and menu */
     ||[...document.querySelectorAll('[role=complementary]')].find(c=>window.__fb.visible(c)&&c.querySelector('[data-ad-rendering-role=like_button]')&&actionsOf(c)),12000,200);
    if(me.stopped)return STOPPED;
    if(!root)return {err:'this post has no actions menu'};
+   /* a post address can redirect (a removed or pending post goes to its author's profile), and
+      the first card there is some other post: press only on the post that was asked for. The
+      page may name it by another path (a group's slug for its number), so the post's own id
+      also counts; Facebook reveals a hidden timestamp address only once it is focused. */
+   if(want&&!samePost(location.href,want)){
+    for(const a of root.querySelectorAll('a[href]')){
+     if(!/^\?/.test(a.getAttribute('href'))||!window.__fb.visible(a))continue;
+     a.focus({preventScroll:true});await waitFor(()=>!/^\?/.test(a.getAttribute('href')||''),1500,50);a.blur();
+    }
+    if(me.stopped)return STOPPED;
+    if(![...root.querySelectorAll('a[href]')].some(a=>!a.closest('[role=article]')&&samePost(a.getAttribute('href'),want)))
+     return {err:'this page does not show that post (Facebook may have moved or removed it); nothing was pressed'};
+   }
    return walk(root,path,false,me);
   },
   async expand(){
