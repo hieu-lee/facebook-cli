@@ -405,7 +405,9 @@ pub async fn follow(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     let r = async {
         b.goto(&t, &format!("https://www.facebook.com{p}")).await?;
         let state = text_of(&b.eval(&t, "window.__fb.followState()").await?)?;
-        let done = |s: &str| (s == "following") == on;
+        // only the asked state counts: an error state is never a done unfollow
+        let want = if on { "following" } else { "can-follow" };
+        let done = |s: &str| s == want;
         match state.as_str() {
             "following" | "can-follow" if a.flag("dry") => {
                 out.line(format!("dry: {state}"));

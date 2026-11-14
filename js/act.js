@@ -173,12 +173,14 @@
  // it is nearer the tab strip than the first post is (posts and footers have menus too)
  const headerMenus=()=>{
   const m=main();const tl=m&&m.querySelector('[role=tablist]');if(!tl)return [];
-  const near=x=>{let a=tl,d=0;while(a&&!a.contains(x)){a=a.parentElement;d++}return d};
-  const limit=Math.min(99,...[...m.querySelectorAll('[role=article],[role=feed]')].map(near));
+  // a menu beside the tab strip shares a container with it that holds no post: posts, with or
+  // without an article role, are found the way the feed finds them
+  const cards=F.postCards?F.postCards():[];
+  const header=x=>{let a=tl;while(a&&!a.contains(x))a=a.parentElement;return !!a&&!a.querySelector('[role=article],[role=feed]')&&!cards.some(c=>a.contains(c))};
   const before=x=>tl.compareDocumentPosition(x)&Node.DOCUMENT_POSITION_PRECEDING;
   // a friend's Unfollow is in the menu of the header's own Friends button
   const friends=headerButtons().filter(x=>FRIEND_IS.test(first(btnText(x))));
-  return [...friends,...[...m.querySelectorAll('[aria-haspopup=menu][role=button]')].filter(x=>F.visible(x)&&!x.closest('[role=tablist],[role=feed],[role=list],[role=article],[role=dialog]')&&(before(x)||near(x)<limit))];
+  return [...friends,...[...m.querySelectorAll('[aria-haspopup=menu][role=button]')].filter(x=>F.visible(x)&&!x.closest('[role=tablist],[role=feed],[role=list],[role=article],[role=dialog]')&&(before(x)||header(x)))];
  };
  const followMenu=async()=>{
   for(const b of headerMenus()){
@@ -192,16 +194,18 @@
  // 'following', 'can-follow', 'no-follow' (this profile offers neither), 'ambiguous' or 'no-profile'
  F.followState=async()=>{
   if(!await waitFor(()=>main()&&main().querySelector('[role=tablist]'),15000))return 'no-profile';
-  // the header's buttons mount after the tab strip
-  await waitFor(()=>followButtons().length||headerMenus().length,5000,200);
-  const hb=followButtons();
-  if(hb.length>1)return 'ambiguous';
-  if(hb.length)return FOLLOWING.test(first(btnText(hb[0])))?'following':'can-follow';
-  const m=await followMenu();
-  if(!m)return 'no-follow';
-  const st=menuItem(m,UNFOLLOW)?'following':'can-follow';
-  await closeMenu();
-  return st;
+  // the header's controls mount after the tab strip, and another header menu can be there
+  // before the Follow control is: look again until the deadline
+  const until=Date.now()+5000;
+  for(;;){
+   const hb=followButtons();
+   if(hb.length>1)return 'ambiguous';
+   if(hb.length)return FOLLOWING.test(first(btnText(hb[0])))?'following':'can-follow';
+   const m=await followMenu();
+   if(m){const st=menuItem(m,UNFOLLOW)?'following':'can-follow';await closeMenu();return st;}
+   if(Date.now()>=until)return 'no-follow';
+   await sleep(500);
+  }
  };
  // follow (on) or unfollow (!on), then read the state back; already there = nothing pressed
  F.follow=async on=>{
