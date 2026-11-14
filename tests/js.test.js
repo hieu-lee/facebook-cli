@@ -28,7 +28,7 @@ const F = global.window.__fb;
       getAttribute: () => null, contains: () => false, click: () => { selected = true; } };
     const old = { querySelector: () => null, querySelectorAll: s => s === '[role=button]' ? [audience, post] : [] };
     const wrapper = { innerText: option.innerText, contains: e => e === option };
-    const picker = { querySelectorAll: s => s.includes('[role=button]') ? hasDone ? [done, post] : [post] : nested ? [wrapper, option] : [option] };
+    const picker = { querySelector: () => null, querySelectorAll: s => s.includes('[role=button]') ? hasDone ? [done, post] : [post] : nested ? [wrapper, option] : [option] };
     const G = { clean: s => String(s || '').trim(), vtext: () => [], visible: e => e.visible !== false,
       enabled: () => true, sleep: async () => {}, waitFor: async f => f() };
     const ctx = vm.createContext({ window: { __fb: G }, document: { querySelectorAll: () => opened && !finished ? [picker] : [old] } });
@@ -44,6 +44,34 @@ const F = global.window.__fb;
   assert.notStrictEqual(await choose(false), true, 'missing Done must fail safely');
   assert.notStrictEqual(await choose(true, true), true, 'ignore a hidden audience option');
   console.log('js audience replacement dialog ok');
+})().catch(e => { console.error(e); process.exit(1); });
+
+// A picker language the label sets miss: Public is first, Friends second, Only me the
+// choice without a description line, and the audience button must show the pick.
+(async () => {
+  const vm = require('vm');
+  async function pick(kind, shown) {
+    let opened = false, finished = false, picked = null;
+    const labels = ['Публично\nВсеки', 'Приятели\nВашите приятели', 'Близки приятели\nСписък', 'Само аз'];
+    const options = labels.map(t => ({ innerText: t, closest: () => null, getAttribute: () => null,
+      contains: () => false, click() { picked = t.split('\n')[0]; } }));
+    const audience = { get innerText() { return finished ? (shown || picked) : 'Нещо'; },
+      getAttribute: () => 'Edit privacy.', click: () => { opened = true; } };
+    const done = { innerText: 'Готово', getAttribute: () => null, click: () => { finished = true; } };
+    const old = { querySelector: () => null, querySelectorAll: s => s === '[role=button]' ? [audience] : [] };
+    const picker = { querySelector: () => null, querySelectorAll: s => s.includes('[role=button]') ? [done] : options };
+    const G = { clean: s => String(s || '').trim(), vtext: () => [], visible: () => true,
+      enabled: () => true, sleep: async () => {}, waitFor: async f => f() };
+    const ctx = vm.createContext({ window: { __fb: G }, document: { querySelectorAll: () => opened && !finished ? [picker] : [old] } });
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/act.js'), 'utf8'), ctx);
+    G.composeDialog = () => old;
+    return [await G.composeAudience(kind), picked];
+  }
+  assert.deepStrictEqual(await pick('public'), [true, 'Публично']);
+  assert.deepStrictEqual(await pick('friends'), [true, 'Приятели']);
+  assert.deepStrictEqual(await pick('me'), [true, 'Само аз']);
+  assert.notStrictEqual((await pick('friends', 'Публично'))[0], true, 'a button that does not show the pick must fail');
+  console.log('js audience unknown language ok');
 })().catch(e => { console.error(e); process.exit(1); });
 
 

@@ -33,16 +33,20 @@
   if(!m)return 'no main';
   const trigger=await waitFor(()=>{
    const all=[...m.querySelectorAll('[role=button]')];
-   const named=all.find(b=>/^(What.s on your mind|Bạn đang nghĩ gì|Exprimez-vous|Que voulez-vous dire)/i.test(btnText(b)))||all.find(isComposerTrigger);
+   const named=all.find(b=>/^(What.s on your mind|Bạn đang nghĩ gì|Exprimez-vous|Que voulez-vous dire|Что у вас нового|О чём вы думаете|Що у вас нового)/i.test(btnText(b)))||all.find(isComposerTrigger);
    if(named)return named;
    const regs=[...m.querySelectorAll('[role=region]')];
    for(const r of regs){const h=r.querySelector('h1,h2,h3,h4');if(!h)continue;const b=[...r.querySelectorAll('[role=button]')].find(b=>btnText(b).length>6&&!b.getAttribute('aria-haspopup'));if(b)return b;}
    return null;
   },15000);
   if(!trigger)return 'no composer button';
+  // Facebook loads the composer on first use: on a slow connection that takes well over
+  // 10 seconds, and a click made before the page is ready does nothing. Click once more.
+  const composer=()=>dialogs().find(d=>d.querySelector('[role=textbox]'));
   trigger.click();
-  const d=await waitFor(()=>dialogs().find(d=>d.querySelector('[role=textbox]')),10000);
-  if(!d)return 'composer did not open';
+  let d=await waitFor(composer,12000);
+  if(!d&&trigger.isConnected){trigger.click();d=await waitFor(composer,20000);}
+  if(!d)return 'composer did not open'+composerState(dialogs().filter(F.visible).pop());
   // Notes and profile editors also hold a textbox, but only the post composer takes files.
   if(!await waitFor(()=>d.querySelector('input[type=file]'),3000,100))return 'opened the wrong dialog instead of the post composer'+composerState(d)+'; nothing was posted';
   // The publish control is the one action an empty composer disables, whatever its language.
@@ -79,22 +83,38 @@ F.AUD=AUD;
   if(AUD[kind].test(first(ab.innerText)))return true;
   ab.click();
   const visibleDialogs=()=>dialogs().filter(visible);
-  const lab=await waitFor(()=>{
-   const choices=[...new Set(visibleDialogs().flatMap(p=>[...p.querySelectorAll('label,[role=radio],[role=option]')]))].filter(l=>visible(l)&&AUD[kind].test(first(l.innerText||l.getAttribute('aria-label'))));
-   const options=choices.filter(l=>!choices.some(other=>other!==l&&l.contains(other)));
-   return options.length===1?options[0]:null;
-  },6000);
-  if(!lab)return 'audience option not found'+composerState(d);
+  const text=l=>first(l.innerText||l.getAttribute('aria-label')||'');
+  // The picker's choices in screen order, innermost element of each (one choice can be a
+  // label wrapping a role=radio).
+  const choices=()=>{
+   const all=[...new Set(visibleDialogs().flatMap(p=>[...p.querySelectorAll('label,[role=radio],[role=option]')]))].filter(l=>visible(l)&&text(l));
+   return all.filter(l=>!all.some(other=>other!==l&&l.contains(other)));
+  };
+  const named=()=>{const m=choices().filter(l=>AUD[kind].test(text(l)));return m.length===1?m[0]:null;};
+  // A language the label sets miss: Facebook lists Public first and Friends second, and
+  // Only me is the one choice without a description line. The audience button must show
+  // the picked choice afterwards, or nothing is posted.
+  const placed=()=>{
+   const c=choices();if(c.length<3)return null;
+   if(kind==='public')return c[0];
+   if(kind==='friends')return c[1];
+   const bare=c.filter(l=>!clean(l.innerText||'').includes('\n'));
+   return bare.length===1?bare[0]:null;
+  };
+  // The picker loads on first use too: allow a slow connection.
+  const lab=await waitFor(named,8000)||await waitFor(()=>named()||placed(),12000);
+  if(!lab)return 'audience option not found'+composerState(visibleDialogs().pop()||d);
+  const want=text(lab);
   lab.click();
   await sleep(300);
   const done=await waitFor(()=>{
    const buttons=[...new Set(visibleDialogs().flatMap(p=>[...p.querySelectorAll('[role=button],button')]))].filter(b=>visible(b)&&F.enabled(b)&&/^(Done|Xong|Terminé|Hotovo|Готово|Valmis|Listo|Concluir|Fertig|Fine|Klaar|Bitti|Gotowe|Klar|Færdig|Ferdig)$/i.test(first(b.innerText||b.getAttribute('aria-label'))));
    return buttons.length===1?buttons[0]:null;
-  },6000);
-  if(!done)return 'audience confirmation button not found; nothing was posted';
+  },10000);
+  if(!done)return 'audience confirmation button not found; nothing was posted'+composerState(visibleDialogs().pop());
   done.click();
   await sleep(200);
-  const current=await waitFor(()=>{const b=audienceButton();return b&&AUD[kind].test(first(b.innerText))},3000);
+  const current=await waitFor(()=>{const b=audienceButton();return b&&(AUD[kind].test(first(b.innerText))||first(b.innerText)===want)},5000);
   return current?true:'audience change not confirmed; nothing was posted';
  };
  const FRIEND_ADD=/^(Add friend|Thêm bạn bè|Ajouter un ami|Ajouter)$/i;
