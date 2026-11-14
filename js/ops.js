@@ -63,7 +63,8 @@
     if(/\/groups\/[^/]+\/?$/.test(u))return 'group';
     if(/\/marketplace\/item\//.test(u))return 'listing';
     if(/\/events\/\d+/.test(u))return 'event';
-    if(/\/photo|fbid=|\/photos\//.test(u))return 'photo';
+    // a post's story_fbid is no photo: only the fbid parameter itself names one
+    if(/\/photo|[?&]fbid=|\/photos\//.test(u))return 'photo';
     if(/\/watch|\/videos?\/|\/reel\//.test(u))return 'video';
     if(/\/posts\/|pfbid|\/permalink/.test(u))return 'post';
     return null;
@@ -101,7 +102,8 @@
     if(feedEl&&f!==feedEl)return true;
     if(hadStranger&&!document.querySelector('[data-stranger]'))return true;
     if(firstRow&&!firstRow.isConnected)return true;
-    if(f&&before.size){const now=[...f.querySelectorAll('a[href]')].map(a=>a.getAttribute('href'));if(now.length!==before.size||now.some(h=>!before.has(h)))return true;}
+    // sets on both sides: a result links its profile twice (avatar and name)
+    if(f&&before.size){const now=new Set([...f.querySelectorAll('a[href]')].map(a=>a.getAttribute('href')));if(now.size!==before.size||[...now].some(h=>!before.has(h)))return true;}
     return false;
    };
    let calmSince=0;

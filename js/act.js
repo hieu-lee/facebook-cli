@@ -101,20 +101,22 @@ F.AUD=AUD;
  const G_LEAVE=/^(Leave group|Rời khỏi nhóm|Quitter le groupe)$/i;
  const groupButton=()=>{const m=main();if(!m)return null;const bs=[...m.querySelectorAll('[role=button]')].map(b=>({b,t:clean(b.innerText||'').split('\n')[0].trim()}));const j=bs.find(x=>G_JOINED.test(x.t));if(j)return j.b;const p=bs.find(x=>G_PENDING.test(x.t));if(p)return p.b;const a=bs.find(x=>G_JOIN.test(x.t));return a?a.b:null;};
  F.groupState=()=>{const b=groupButton();if(!b)return 'none';const t=clean(b.innerText||'').split('\n')[0].trim();if(G_JOINED.test(t))return 'joined';if(G_PENDING.test(t))return 'pending';if(G_JOIN.test(t))return 'can-join';return 'none';};
+ // a membership-question dialog: a text field or a choice; a form of choices only has no text field
+ const QUESTION='textarea,[role=textbox],input[type=text],[role=radiogroup],[role=radio],input[type=radio]';
+ const questionDialog=()=>dialogs().find(d=>d.querySelector(QUESTION));
  F.groupJoin=async()=>{
   const st=F.groupState();if(st!=='can-join')return st;
   const b=groupButton();if(!b)return 'none';b.click();
   const out=await waitFor(()=>{
    const s=F.groupState();if(s==='joined')return 'joined';if(s==='pending')return 'pending';
-   const d=dialogs().find(d=>d.querySelector('textarea,[role=textbox],input[type=text]'));
-   if(d)return 'questions';
+   if(questionDialog())return 'questions';
    return null;
   },10000,250);
   if(out==='questions'){
    // membership questions: report them and back out; answering is the user's
    // call. Prompts are labels, headings or plain spans — never button text,
    // and a wrapper that repeats a prompt verbatim is dropped.
-   const d=dialogs().find(d=>d.querySelector('textarea,[role=textbox],input[type=text]'));
+   const d=questionDialog();
    let qs=[...d.querySelectorAll('label,[role=heading],span')].filter(e=>!e.closest('[role=button]')).map(e=>clean(e.innerText||'')).filter(t=>t&&t.length>3&&t.length<200);
    qs=[...new Set(qs)].filter(t=>!qs.some(o=>o!==t&&t.includes(o)));
    const cancel=[...d.querySelectorAll('[role=button]')].find(x=>/^(Cancel|Hủy|Annuler|Close|Đóng|Fermer)$/i.test(clean(x.innerText||'')));
@@ -143,22 +145,24 @@ F.AUD=AUD;
   let st=F.groupState();
   if(st==='joined')return 'joined';if(st==='pending')return 'pending';
   if(st==='can-join'){const b=groupButton();if(!b)return 'none';b.click();}
-  const dlg=()=>dialogs().find(x=>x.querySelector('textarea,[role=textbox],input[type=text]'));
+  const dlg=questionDialog;
   const d=await waitFor(dlg,10000);
   if(!d){
    const s=await waitFor(()=>{const x=F.groupState();return x==='joined'||x==='pending'?x:null;},4000,250);
    return s||'no-questions';
   }
+  // one answer per question, in the order the form shows them (choices and text fields mixed)
   let ai=0;
-  for(const g of [...d.querySelectorAll('[role=radiogroup]')].filter(e=>F.visible(e))){
-   const want=(answers[ai++]||'').toLowerCase();if(!want)continue;
-   const opt=[...g.querySelectorAll('[role=radio],[role=checkbox],label')].find(o=>clean(o.innerText||o.getAttribute('aria-label')||'').toLowerCase().includes(want));
-   if(opt)opt.click();
-  }
-  for(const f of [...d.querySelectorAll('textarea,input[type=text],[role=textbox]')].filter(e=>F.visible(e))){
+  const questions=[...d.querySelectorAll('[role=radiogroup],textarea,input[type=text],[role=textbox]')].filter(e=>F.visible(e)&&(e.matches('[role=radiogroup]')||!e.closest('[role=radiogroup]')));
+  for(const q of questions){
    const want=answers[ai++];if(want==null)break;
-   if(f.tagName==='TEXTAREA'||f.tagName==='INPUT')setVal(f,want);
-   else{f.focus();document.execCommand('selectAll',false,null);document.execCommand('insertText',false,want);}
+   if(q.matches('[role=radiogroup]')){
+    const w=want.toLowerCase();if(!w)continue;
+    const opt=[...q.querySelectorAll('[role=radio],[role=checkbox],label')].find(o=>clean(o.innerText||o.getAttribute('aria-label')||'').toLowerCase().includes(w));
+    if(opt)opt.click();
+   }
+   else if(q.tagName==='TEXTAREA'||q.tagName==='INPUT')setVal(q,want);
+   else{q.focus();document.execCommand('selectAll',false,null);document.execCommand('insertText',false,want);}
   }
   const submit=[...d.querySelectorAll('[role=button]')].find(x=>/^(Submit|Submit answers|Send|Gửi|Envoyer|Soumettre)$/i.test(clean(x.innerText||'')));
   if(!submit)return 'no-submit';
@@ -175,11 +179,17 @@ F.AUD=AUD;
   const box=await waitFor(()=>{for(const d of dialogs()){const tb=d.querySelector('[role=textbox][contenteditable=true]');if(tb)return tb;}return null;},10000);
   if(!box)return 'message composer did not open';
   box.focus();
+  window.__fbListingBox=box;
   return true;
  };
- F.listingMessageSent=text=>{
-  const want=clean(text).toLowerCase();
-  return [...document.querySelectorAll('[role=dialog] [role=log] *,[role=dialog] [role=article]')].some(e=>clean(e.innerText||'').toLowerCase()===want);
+ // copies of `text` in the open chat: counted before the send, so a copy already in the
+ // conversation is never taken for the new message
+ const listingCopies=text=>{const want=clean(text).toLowerCase();return [...document.querySelectorAll('[role=dialog] [role=log] *,[role=dialog] [role=article]')].filter(e=>clean(e.innerText||'').toLowerCase()===want&&![...e.children].some(c=>clean(c.innerText||'').toLowerCase()===want)).length};
+ F.listingMessageCount=listingCopies;
+ // sent = one more copy than before, and Facebook emptied the composer (a blocked send keeps it)
+ F.listingMessageSent=(text,before=0)=>{
+  const box=window.__fbListingBox;
+  return listingCopies(text)>before&&!(box&&box.isConnected&&clean(box.innerText||''));
  };
  // ---- marketplace listing form (/marketplace/create/item): labelled text
  // fields, Condition and Category pickers, one file input for photos/video

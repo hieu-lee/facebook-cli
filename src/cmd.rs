@@ -20,6 +20,9 @@ fn members_extra_secs(argv: &[String]) -> u64 {
     (n.saturating_mul(60).clamp(25_000, 120_000) - 25_000).div_ceil(1000)
 }
 
+/// Over FB_TIMEOUT for `unlock`, so the default limit never cuts a verifying restore short.
+const UNLOCK_EXTRA_SECS: u64 = 300;
+
 pub async fn run(d: &Daemon, argv: &[String], cwd: &str, out: &Out) -> Res<()> {
     // login waits for a human (Allow click, checkbox, 2FA): it has its own, longer limits
     let limit = if argv.first().map(String::as_str) == Some("login") {
@@ -42,7 +45,13 @@ pub async fn run(d: &Daemon, argv: &[String], cwd: &str, out: &Out) -> Res<()> {
         } else {
             0
         };
-        base + files * 130 + post + members_extra_secs(argv)
+        // unlock: two 20s prompt waits and page loads, then up to 240s of PIN verification
+        let unlock = if argv.first().map(String::as_str) == Some("unlock") {
+            UNLOCK_EXTRA_SECS
+        } else {
+            0
+        };
+        base + files * 130 + post + unlock + members_extra_secs(argv)
     };
     match tokio::time::timeout(
         std::time::Duration::from_secs(limit),

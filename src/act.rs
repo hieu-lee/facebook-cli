@@ -800,6 +800,10 @@ pub async fn listing_message(d: &Daemon, args: &[String], out: &Out) -> Res<()> 
     let r = async {
         b.goto(&t, &format!("https://www.facebook.com{path}")).await?;
         ok(&b.eval(&t, "window.__fb.listingMessageOpen()").await?)?;
+        // the conversation may already hold this text: only a new copy confirms the send
+        let before = b
+            .eval(&t, &format!("window.__fb.listingMessageCount({})", json!(text)))
+            .await?;
         // one insert for the whole text: Enter keystrokes would send early
         b.insert_text(&t, &text).await?;
         same_account(&b, gen0)?;
@@ -811,8 +815,9 @@ pub async fn listing_message(d: &Daemon, args: &[String], out: &Out) -> Res<()> 
             .eval(
                 &t,
                 &format!(
-                    "window.__fb.waitFor(()=>window.__fb.listingMessageSent({})||null,10000,200).then(v=>!!v)",
-                    json!(text)
+                    "window.__fb.waitFor(()=>window.__fb.listingMessageSent({},{})||null,10000,200).then(v=>!!v)",
+                    json!(text),
+                    before
                 ),
             )
             .await?;
@@ -950,10 +955,20 @@ pub async fn sell(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> 
             Value::String(s) => s,
             other => return Err(format!("unexpected publish result: {other}")),
         };
-        if done.starts_with("/marketplace/item/") {
-            out.line(format!("listed\t{}\t{done}", d.refs.put('u', &done)));
-        } else {
-            out.line("listed (confirmation seen; open Marketplace > Your listings to view it)");
+        // only a listing address or Facebook's "listing is live" confirms it
+        match done.as_str() {
+            s if s.starts_with("/marketplace/item/") => {
+                out.line(format!("listed\t{}\t{done}", d.refs.put('u', &done)))
+            }
+            "live" => {
+                out.line("listed (confirmation seen; open Marketplace > Your listings to view it)")
+            }
+            "publish not confirmed" => {
+                return Err("Publish was pressed but Facebook did not confirm the listing; \
+                    check Marketplace > Your listings before trying again"
+                    .into())
+            }
+            other => return Err(format!("the listing was not published: {other}")),
         }
         Ok(())
     }

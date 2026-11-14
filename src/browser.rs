@@ -28,8 +28,14 @@ pub struct Tab {
     gen_at: u64,
     /// what the tab last showed (e.g. "messages"); lets ops reuse a warm page
     pub kind: String,
+    /// a page with live work (a Messenger restore still verifying): no other command may take
+    /// it and navigate it away before this time
+    live_until: Option<std::time::Instant>,
     permit: Option<tokio::sync::OwnedSemaphorePermit>,
 }
+
+/// How long a still-restoring Messenger page stays out of reach of other commands.
+const LIVE_HOLD: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// A tab that is dropped while an op still holds it (cancel/timeout/panic) may be mid-script: close it.
 impl Drop for Tab {
@@ -152,9 +158,11 @@ impl Browser {
         loop {
             let popped = {
                 let mut idle = self.idle.lock().await;
-                match idle.iter().rposition(|t| t.kind == kind) {
+                // a page holding live work is never reused until its hold ends
+                let free = |t: &Tab| t.live_until.is_none_or(|u| std::time::Instant::now() >= u);
+                match idle.iter().rposition(|t| t.kind == kind && free(t)) {
                     Some(i) => Some(idle.remove(i)),
-                    None => idle.pop(),
+                    None => idle.iter().rposition(free).map(|i| idle.remove(i)),
                 }
             };
             let Some(mut t) = popped else {
@@ -223,6 +231,7 @@ impl Browser {
             armed: true,
             gen_at: self.generation.load(std::sync::atomic::Ordering::SeqCst),
             kind: String::new(),
+            live_until: None,
             permit: None,
         };
         // bounded once the guard exists: a stalled setup closes the target and frees the slot
@@ -302,6 +311,7 @@ impl Browser {
             return;
         }
         t.kind = kind.to_string();
+        t.live_until = (!freeze).then(|| std::time::Instant::now() + LIVE_HOLD);
         let idle = self.idle.lock().await;
         if idle.len() < MAX_IDLE {
             // Freeze the parked page: Facebook tabs run heavy timers, and
