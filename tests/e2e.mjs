@@ -1000,7 +1000,7 @@ try{
  });
  await check('timeout drops uncertain page and close frees its name',async()=>{
   const original=env;env={...env,FB_STATE:path.join(temp,'timeout-state'),FB_TIMEOUT:'1'};
-  try{await fb('page','slow','open','https://www.facebook.com/fixture');await assert.rejects(()=>fb('page','slow','eval','new Promise(()=>{})'));await assert.rejects(()=>fb('page','slow','snapshot'));assert.equal(await fb('page','slow','close'),'closed');await fb('stop')}finally{env=original}
+  try{await fb('page','slow','open','https://www.facebook.com/fixture');await assert.rejects(()=>fb('page','slow','eval','new Promise(()=>{})'));await assert.rejects(()=>fb('page','slow','snapshot'));assert.equal(await fb('page','slow','close'),'closed')}finally{/* stop this state's daemon even when a step failed: a live one keeps daemon.lock open, and on Windows removing the temp folder then fails with EBUSY and hides the real failure */try{await fb('stop')}catch{}env=original}
  });
  assert.deepEqual(failures,[],'E2E failures');
  assert.deepEqual(report.filter(x=>x.harnessError),[],'network interception errors');
