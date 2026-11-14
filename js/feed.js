@@ -29,7 +29,7 @@
  const STOPPED={err:'stopped: the caller gave up'};
  /* a stop token made when the command enters, before any wait, so stop() reaches it at once */
  const begin=()=>{const me={stopped:false};walking=me;return me};
- const walk=async(root,path,card,me)=>{
+ const walk=async(root,path,card,me,valid=()=>true)=>{
   const {visible,press,sleep}=window.__fb;
   const base=new Set([...document.querySelectorAll(LAYER)].filter(visible));
   const top=()=>[...document.querySelectorAll(LAYER)].filter(l=>visible(l)&&!base.has(l)).pop();
@@ -43,7 +43,7 @@
   const button=actionsOf(root);
   if(!button)return {err:'this post has no actions menu'};
   if(me.stopped)return STOPPED;
-  let before=sig();press(button);await settle(before);
+  let before=sig();press(button,{valid});await settle(before);
   for(const want of path){
    if(me.stopped)return STOPPED;
    const l=top();
@@ -69,11 +69,14 @@
   /* the card's OWN permalink, picked the way step() picked it: its timestamp link when that is a
      post link, else its first post link. Any other link (a share, a quote, a link in the text)
      may point at another post. */
-  const real=t?.getAttribute('href')||'';
+  return ownLink(u)===want;
+ };
+ const ownLink=u=>{
+  const t=timeLink(u),real=t?.getAttribute('href')||'';
   const viaTime=!/^\?/.test(real)&&POST.test(real)&&!/comment_id/.test(real)?canon(real):'';
-  if(viaTime)return viaTime===want;
+  if(viaTime)return viaTime;
   const alt=[...u.querySelectorAll('a[href]')].map(a=>a.getAttribute('href')).find(h=>POST.test(h)&&!/comment_id/.test(h));
-  return !!alt&&canon(alt)===want;
+  return alt?canon(alt):'';
  };
  const timeNode=(u,tt)=>{const w=document.createTreeWalker(u,NodeFilter.SHOW_TEXT);let n;while(n=w.nextNode()){const t=n.nodeValue;if(!t||t.includes('\u034f')||n.parentElement.closest('blockquote'))continue;if(t.replace(/[\u200b-\u200f\u2060\ufeff]/g,'').trim()===tt)return n;}return null;};
  const decode=a=>{
@@ -189,7 +192,11 @@
     if(!await waitFor(()=>actionsOf(u),6000,100))return {gone:true,why:'card '+known.at+' did not fill in'};
     if(!await linksTo(u,want))return {gone:true,why:'card '+known.at+' shows another post'};
     if(me.stopped)return STOPPED;
-    return await walk(u,path,true,me);
+    /* Facebook can reuse the card for another post between two of press()'s pointer events;
+       every event of the Actions press re-checks it is still this post, so the other post's menu
+       never opens; the open menu then belongs to this post */
+    const k=key(u);
+    return await walk(u,path,true,me,()=>u.isConnected&&key(u)===k&&ownLink(u)===want);
    }finally{scrollTo(0,y)}
   },
   /* post-menu on a post's own page: the post opens in a dialog over the feed, or fills main */
