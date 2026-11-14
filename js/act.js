@@ -81,7 +81,8 @@ F.AUD=AUD;
   const visibleDialogs=()=>dialogs().filter(visible);
   const lab=await waitFor(()=>{
    const choices=[...new Set(visibleDialogs().flatMap(p=>[...p.querySelectorAll('label,[role=radio],[role=option]')]))].filter(l=>visible(l)&&AUD[kind].test(first(l.innerText||l.getAttribute('aria-label'))));
-   return choices.length===1?choices[0]:null;
+   const options=choices.filter(l=>!choices.some(other=>other!==l&&l.contains(other)));
+   return options.length===1?options[0]:null;
   },6000);
   if(!lab)return 'audience option not found'+composerState(d);
   lab.click();
