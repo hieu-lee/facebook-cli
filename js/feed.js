@@ -215,14 +215,15 @@
    /* a post address can redirect (a removed or pending post goes to its author's profile), and
       the first card there is some other post: press only on the post that was asked for. The
       page may name it by another path (a group's slug for its number), so the post's own id
-      also counts; Facebook reveals a hidden timestamp address only once it is focused. */
+      also counts. Only the card's OWN permalink, its timestamp link, identifies it: another
+      card can link the post in its text or a shared attachment. Facebook reveals a hidden
+      timestamp address only once it is focused. */
    if(want&&!samePost(location.href,want)){
-    for(const a of root.querySelectorAll('a[href]')){
-     if(!/^\?/.test(a.getAttribute('href'))||!window.__fb.visible(a))continue;
-     a.focus({preventScroll:true});await waitFor(()=>!/^\?/.test(a.getAttribute('href')||''),1500,50);a.blur();
-    }
+    const t=timeLink(root);
+    if(t&&/^\?/.test(t.getAttribute('href'))){t.focus({preventScroll:true});await waitFor(()=>!/^\?/.test(t.getAttribute('href')||''),1500,50);t.blur()}
     if(me.stopped)return STOPPED;
-    if(![...root.querySelectorAll('a[href]')].some(a=>!a.closest('[role=article]')&&samePost(a.getAttribute('href'),want)))
+    const own=t&&t.isConnected&&root.contains(t)?t.getAttribute('href')||'':'';
+    if(/^\?/.test(own)||/comment_id/.test(own)||!samePost(own,want))
      return {err:'this page does not show that post (Facebook may have moved or removed it); nothing was pressed'};
    }
    return walk(root,path,false,me);
