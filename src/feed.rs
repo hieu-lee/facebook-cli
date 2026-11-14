@@ -302,7 +302,8 @@ impl FeedBuf {
                             r = bounded(90, b.eval(&t, &expr)) => Some(r),
                             _ = done.closed() => None,
                         };
-                        if r.is_none() {
+                        // gave up or hit the 90 s bound: the page script still runs, so stop it there
+                        if !matches!(r, Some(Ok(_))) {
                             let _ = bounded(10, b.eval(&t, "window.__fbFeed.stop()")).await;
                         }
                         close_layers(b, &t).await;
@@ -548,13 +549,15 @@ pub async fn post_menu(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
                 b.goto(&t, &page).await?;
                 wait_main(&b, &t).await?;
                 let walk = format!("window.__fbFeed.postMenu({path})");
-                tokio::select! {
+                let r = tokio::select! {
                     r = bounded(90, b.eval(&t, &walk)) => r,
-                    _ = client_gone(out) => {
-                        let _ = bounded(10, b.eval(&t, "window.__fbFeed.stop()")).await;
-                        Err(CANCELLED.into())
-                    }
+                    _ = client_gone(out) => Err(CANCELLED.into()),
+                };
+                // a cancelled or timed-out walk is still running in the page: stop it there
+                if r.is_err() {
+                    let _ = bounded(10, b.eval(&t, "window.__fbFeed.stop()")).await;
                 }
+                r
             }
             .await;
             close_layers(&b, &t).await;
