@@ -156,7 +156,9 @@ pub async fn post(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> 
         }
         let receipt = async {
             ok(&b.eval(&t, &format!("window.__fb.composePress({})", json!(text))).await?)?;
-            let created = tokio::time::timeout(Duration::from_secs(15), created_post(&b, &t, &uid, &mut events)).await.map_err(|_| "creation response timed out".to_string())??;
+            // FB's composer may take far longer than 15 s to answer on a slow
+            // connection; giving up then aborts the in-flight publish.
+            let created = tokio::time::timeout(Duration::from_secs(60), created_post(&b, &t, &uid, &mut events)).await.map_err(|_| "creation response timed out".to_string())??;
             match created {
                 Created::Story(path) => {
                     if !read_back(&b, &t, &path, &text, 15000).await? {
@@ -263,6 +265,25 @@ fn parse_created(body: &str, uid: &str) -> Res<Option<Created>> {
     }
 }
 
+/// The request id if this Network event sends a ComposerStoryCreateMutation.
+fn creation_request_id(event: &crate::cdp::Event) -> Option<&str> {
+    if event.method != "Network.requestWillBeSent" {
+        return None;
+    }
+    let p = &event.params;
+    if p["request"]["method"] != "POST"
+        || !crate::ops::fb_path(p["request"]["url"].as_str().unwrap_or(""))
+            .is_some_and(|p| p.starts_with("/api/graphql/"))
+        || !p["request"]["postData"].as_str().is_some_and(|s| {
+            s.split('&')
+                .any(|v| v == "fb_api_req_friendly_name=ComposerStoryCreateMutation")
+        })
+    {
+        return None;
+    }
+    p["requestId"].as_str()
+}
+
 async fn created_post(
     b: &Browser,
     t: &Tab,
@@ -280,19 +301,10 @@ async fn created_post(
         }
         let p = &event.params;
         let id = p["requestId"].as_str().unwrap_or("");
-        if event.method == "Network.requestWillBeSent"
-            && p["request"]["method"] == "POST"
-            && crate::ops::fb_path(p["request"]["url"].as_str().unwrap_or(""))
-                .is_some_and(|p| p.starts_with("/api/graphql/"))
-            && p["request"]["postData"].as_str().is_some_and(|s| {
-                s.split('&')
-                    .any(|v| v == "fb_api_req_friendly_name=ComposerStoryCreateMutation")
-            })
-        {
-            if request.as_deref().is_some_and(|old| old != id) {
-                return Err("multiple creation requests".into());
-            }
-            request = Some(id.to_string());
+        if let Some(creation) = creation_request_id(&event) {
+            // FB's composer resubmits a failed creation itself: follow the
+            // newest request instead of failing on the second one.
+            request = Some(creation.to_string());
         }
         if request.as_deref() != Some(id) {
             continue;
@@ -1317,6 +1329,50 @@ mod tests {
                 Err("unique creation identity missing".to_string())
             );
         }
+    }
+
+    #[test]
+    fn creation_request_id_finds_only_the_composer_mutation() {
+        let event = |method: &str, request_id: &str, url: &str, post_data: &str| {
+            crate::cdp::Event {
+                session: Some("s".into()),
+                method: method.into(),
+                params: json!({"requestId": request_id, "request": {"method": "POST", "url": url, "postData": post_data}}).into(),
+            }
+        };
+        let url = "https://www.facebook.com/api/graphql/";
+        let data = "fb_api_req_friendly_name=ComposerStoryCreateMutation&doc_id=1";
+        assert_eq!(
+            creation_request_id(&event("Network.requestWillBeSent", "42", url, data)),
+            Some("42")
+        );
+        // FB resubmits with a new id; the caller follows the newest one.
+        assert_ne!(
+            creation_request_id(&event("Network.requestWillBeSent", "42", url, data)),
+            creation_request_id(&event("Network.requestWillBeSent", "43", url, data))
+        );
+        assert_eq!(
+            creation_request_id(&event(
+                "Network.requestWillBeSent",
+                "42",
+                url,
+                "fb_api_req_friendly_name=OtherMutation"
+            )),
+            None
+        );
+        assert_eq!(
+            creation_request_id(&event("Network.loadingFinished", "42", url, data)),
+            None
+        );
+        assert_eq!(
+            creation_request_id(&event(
+                "Network.requestWillBeSent",
+                "42",
+                "https://www.facebook.com/other/",
+                data
+            )),
+            None
+        );
     }
 
     #[test]

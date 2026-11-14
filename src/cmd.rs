@@ -2,8 +2,9 @@ use crate::cdp::Res;
 use crate::daemon::{Daemon, Out};
 
 /// A pending post may be polled for a minute after Post was pressed. Timing out there would
-/// report failure for a post Facebook already accepted.
-const POST_EXTRA_SECS: u64 = 60;
+/// report failure for a post Facebook already accepted. The creation answer itself may also
+/// take a minute on a slow connection before that polling starts.
+const POST_EXTRA_SECS: u64 = 120;
 
 /// groupMembers scrolls 60 ms per member asked, 25 s to 120 s (js/ops.js). The time past the
 /// default 25 s comes on top of the limit, or navigation plus a long scroll overruns it and every
