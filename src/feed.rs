@@ -198,6 +198,15 @@ pub async fn posts(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     collect_url(d, &b, &format!("https://www.facebook.com{p}"), &a, out).await
 }
 
+/// The saved posts on facebook.com/saved: the same story cards the feed
+/// reads, with the same row shape as `posts` (ref, author, time, counts,
+/// text), so everything that works on a post works on these rows.
+pub async fn saved(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
+    let a = crate::ops::parse(args, &[], &["full", "urls"])?;
+    let b = d.browser(out).await?;
+    collect_url(d, &b, "https://www.facebook.com/saved", &a, out).await
+}
+
 /// Home feed read-ahead: a background tab keeps scrolling so `fb feed` can answer from memory.
 #[derive(Default)]
 pub struct FeedBuf {

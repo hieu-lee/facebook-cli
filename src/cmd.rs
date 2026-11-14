@@ -105,6 +105,7 @@ async fn run_inner(d: &Daemon, argv: &[String], _cwd: &str, out: &Out) -> Res<()
         "unlock" => crate::messenger::unlock(d, &argv[1..], out).await,
         "feed" => crate::feed::feed(d, &argv[1..], out).await,
         "posts" => crate::feed::posts(d, &argv[1..], out).await,
+        "saved" => crate::feed::saved(d, &argv[1..], out).await,
         _ => Err(format!("unknown command '{cmd}' (try `fb help`)")),
     }
 }

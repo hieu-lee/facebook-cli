@@ -5,6 +5,7 @@ Output: TSV, one record per line. Short refs (p3k9a post, c8x2f chat, u1abc prof
 READ
   feed [-n 10] [--refresh] [--full] [--urls]   next posts (scrolls on): ref, author, time, react/comment/share, text
   posts [who] [-n 10]                same, for a profile / page / group (/groups/ID)
+  saved [-n 10] [--full] [--urls]     your saved posts, same rows as feed
   view <post> [-n 10]                by, stats, text, then c<TAB>author<TAB>time<TAB>text per comment
   profile [who]                      key<TAB>value lines
   friends [who] [-n 30]              name, ref, mutual friends
