@@ -24,7 +24,7 @@ pub struct Post {
     pub reaction_pressed: Option<bool>,
 }
 
-fn format_post(d: &Daemon, p: &Post, urls: bool) -> String {
+fn format_post(d: &Daemon, p: &Post, urls: bool, reaction_state: bool) -> String {
     let text = one_line(&p.text);
     let id = if p.url.is_empty() {
         "-".to_string()
@@ -36,7 +36,7 @@ fn format_post(d: &Daemon, p: &Post, urls: bool) -> String {
     let ad = if p.ad { " [ad]" } else { "" };
     format!(
         "{}{}{id}\t{}{ad}\t{}\t{}\t{text}",
-        reaction_prefix(p),
+        if reaction_state { reaction_prefix(p) } else { String::new() },
         author_ref_prefix(&p.author_ref),
         one_line(&p.author),
         one_line(&p.time),
@@ -192,7 +192,7 @@ async fn collect(d: &Daemon, b: &Browser, t: &Tab, url: &str, args: &Args, out: 
             .take(n - count)
         {
             count += 1;
-            out.line(format_post(d, &p, urls));
+            out.line(format_post(d, &p, urls, args.flag("reaction-state")));
         }
         b.eval(t, "window.__fbFeed.scroll()").await?;
         tokio::time::sleep(Duration::from_millis(150)).await;
@@ -208,7 +208,7 @@ async fn collect_url(d: &Daemon, b: &Arc<Browser>, url: &str, args: &Args, out: 
 }
 
 pub async fn posts(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
-    let a = crate::ops::parse(args, &[], &["full", "urls"])?;
+    let a = crate::ops::parse(args, &[], &["full", "urls", "reaction-state"])?;
     let b = d.browser(out).await?;
     let who = a.pos.first().map(String::as_str).unwrap_or("me");
     let p = crate::ops::profile_path(d, &b, who).await?;
@@ -219,7 +219,7 @@ pub async fn posts(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
 /// reads, with the same row shape as `posts` (ref, author, time, counts,
 /// text), so everything that works on a post works on these rows.
 pub async fn saved(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
-    let a = crate::ops::parse(args, &[], &["full", "urls"])?;
+    let a = crate::ops::parse(args, &[], &["full", "urls", "reaction-state"])?;
     let b = d.browser(out).await?;
     collect_url(d, &b, "https://www.facebook.com/saved", &a, out).await
 }
@@ -498,12 +498,12 @@ impl FeedBuf {
 
 /// `fb feed`: the next `n` posts. Repeated calls keep scrolling; `--refresh` starts over.
 pub async fn feed(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
-    let a = crate::ops::parse(args, &[], &["refresh", "full", "urls"])?;
+    let a = crate::ops::parse(args, &[], &["refresh", "full", "urls", "reaction-state"])?;
     let b = d.browser(out).await?;
     d.feed.start(&b, a.flag("refresh")).await;
     let urls = a.flag("urls");
     for p in d.feed.take(a.n.unwrap_or(10)).await? {
-        out.line(format_post(d, &p, urls));
+        out.line(format_post(d, &p, urls, a.flag("reaction-state")));
     }
     Ok(())
 }

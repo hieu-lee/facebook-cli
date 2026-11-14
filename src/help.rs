@@ -4,6 +4,7 @@ Output: TSV, one record per line. Short refs (p3k9a post, c8x2f chat, u1abc prof
 
 READ
   resolve <ref>                     original URL, path or thread id for a saved ref; no navigation
+  feed/posts --reaction-state prepends ru<TAB>label<TAB>aria-pressed metadata to each post.
   feed [-n 10] [--refresh] [--full] [--urls]   next posts (scrolls on): ref, author, time, react/comment/share, text
   posts [who] [-n 10]                same, for a profile / page / group (/groups/ID)
   post-menu <post> [--press <label>]...   a post's actions menu, pressing each label in turn (submenus, dialogs such as Report): from, title, text, option<TAB>label<TAB>detail<TAB>on, done, note lines
