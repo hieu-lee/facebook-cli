@@ -16,10 +16,21 @@ pub struct Post {
     pub text: String,
     pub url: String,
     pub ad: bool,
+    pub reaction_label: String,
+    pub reaction_pressed: Option<bool>,
 }
 
-pub(crate) fn format_post(refs: &crate::refs::Refs, p: &Post, urls: bool) -> String {
+pub(crate) fn format_post(refs: &crate::refs::Refs, p: &Post, urls: bool, reaction_state: bool) -> String {
     let mut line = String::with_capacity(p.url.len() + p.author.len() + p.text.len() + 32);
+    if reaction_state && !p.reaction_label.is_empty() {
+        line.push_str("ru\t");
+        push_one_line(&mut line, &p.reaction_label);
+        line.push('\t');
+        if let Some(pressed) = p.reaction_pressed {
+            line.push_str(if pressed { "true" } else { "false" });
+        }
+        line.push('\n');
+    }
     if p.url.is_empty() {
         line.push('-');
     } else if urls {
@@ -139,6 +150,8 @@ async fn resolve(b: &Browser, t: &Tab, p: &Value) -> Res<Option<Post>> {
     let s = |k: &str| p[k].as_str().unwrap_or("").to_string();
     Ok(Some(Post {
         author: s("author"),
+        reaction_label: s("reaction_label"),
+        reaction_pressed: p["reaction_pressed"].as_bool(),
         time: s("time"),
         stats: format!(
             "{}/{}/{}",
@@ -175,7 +188,7 @@ async fn collect(d: &Daemon, b: &Browser, t: &Tab, url: &str, args: &Args, out: 
             .take(n - count)
         {
             count += 1;
-            out.line(format_post(&d.refs, &p, urls));
+            out.line(format_post(&d.refs, &p, urls, args.flag("reaction-state")));
         }
         b.eval(t, "window.__fbFeed.scroll()").await?;
         tokio::time::sleep(Duration::from_millis(150)).await;
@@ -191,7 +204,7 @@ async fn collect_url(d: &Daemon, b: &Arc<Browser>, url: &str, args: &Args, out: 
 }
 
 pub async fn posts(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
-    let a = crate::ops::parse(args, &[], &["full", "urls"])?;
+    let a = crate::ops::parse(args, &[], &["full", "urls", "reaction-state"])?;
     let b = d.browser(out).await?;
     let who = a.pos.first().map(String::as_str).unwrap_or("me");
     let p = crate::ops::profile_path(d, &b, who).await?;
@@ -419,12 +432,12 @@ impl FeedBuf {
 
 /// `fb feed`: the next `n` posts. Repeated calls keep scrolling; `--refresh` starts over.
 pub async fn feed(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
-    let a = crate::ops::parse(args, &[], &["refresh", "full", "urls"])?;
+    let a = crate::ops::parse(args, &[], &["refresh", "full", "urls", "reaction-state"])?;
     let b = d.browser(out).await?;
     d.feed.start(&b, a.flag("refresh")).await;
     let urls = a.flag("urls");
     for p in d.feed.take(a.n.unwrap_or(10)).await? {
-        out.line(format_post(&d.refs, &p, urls));
+        out.line(format_post(&d.refs, &p, urls, a.flag("reaction-state")));
     }
     Ok(())
 }
@@ -432,6 +445,16 @@ pub async fn feed(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn own_reaction_metadata_precedes_its_post() {
+        let refs = crate::refs::Refs::load(std::env::temp_dir().join("fb-reaction-refs"));
+        let mut p = post("Author", "Body", "https://www.facebook.com/a/posts/1");
+        p.reaction_label = "Remove Love from Author's post".into();
+        p.reaction_pressed = Some(true);
+        assert!(format_post(&refs, &p, true, false).starts_with("https://www.facebook.com/a/posts/1\t"));
+        assert!(format_post(&refs, &p, true, true).starts_with("ru\tRemove Love from Author's post\ttrue\n"));
+    }
 
     fn post(author: &str, text: &str, url: &str) -> Post {
         Post {
@@ -441,6 +464,8 @@ mod tests {
             text: text.into(),
             url: url.into(),
             ad: false,
+            reaction_label: String::new(),
+            reaction_pressed: None,
         }
     }
 
@@ -459,17 +484,17 @@ mod tests {
         p.ad = true;
         let short = refs.put('p', "/a/posts/pfbid0X");
         assert_eq!(
-            format_post(&refs, &p, false),
+            format_post(&refs, &p, false, false),
             format!("{short}\tPage One [ad]\t2 h\t1/2/3\tline one line two")
         );
         assert_eq!(
-            format_post(&refs, &p, true),
+            format_post(&refs, &p, true, false),
             "/a/posts/pfbid0X\tPage One [ad]\t2 h\t1/2/3\tline one line two"
         );
         p.url.clear();
         p.ad = false;
         assert_eq!(
-            format_post(&refs, &p, false),
+            format_post(&refs, &p, false, false),
             "-\tPage One\t2 h\t1/2/3\tline one line two"
         );
     }
