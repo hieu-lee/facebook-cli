@@ -1,6 +1,6 @@
 [package]
 name = "fb"
-version = "0.1.5-blindfb.56"
+version = "0.1.5-blindfb.57"
 edition = "2024"
 description = "Facebook + Messenger CLI for LLM agents, driving your logged-in Chrome"
 license = "MIT"
