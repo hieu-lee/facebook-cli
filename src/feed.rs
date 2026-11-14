@@ -20,6 +20,8 @@ pub struct Post {
     pub text: String,
     pub url: String,
     pub ad: bool,
+    pub reaction_label: String,
+    pub reaction_pressed: Option<bool>,
 }
 
 fn format_post(d: &Daemon, p: &Post, urls: bool) -> String {
@@ -33,12 +35,19 @@ fn format_post(d: &Daemon, p: &Post, urls: bool) -> String {
     };
     let ad = if p.ad { " [ad]" } else { "" };
     format!(
-        "{}{id}\t{}{ad}\t{}\t{}\t{text}",
+        "{}{}{id}\t{}{ad}\t{}\t{}\t{text}",
+        reaction_prefix(p),
         author_ref_prefix(&p.author_ref),
         one_line(&p.author),
         one_line(&p.time),
         p.stats
     )
+}
+
+fn reaction_prefix(p: &Post) -> String {
+    if p.reaction_label.is_empty() { return String::new(); }
+    let pressed = p.reaction_pressed.map(|value| value.to_string()).unwrap_or_default();
+    format!("ru\t{}\t{pressed}\n", one_line(&p.reaction_label))
 }
 
 /// The line that carries a post's author profile path, printed before the
@@ -121,6 +130,8 @@ async fn resolve(b: &Browser, t: &Tab, p: &Value) -> Res<Option<Post>> {
     let s = |k: &str| p[k].as_str().unwrap_or("").to_string();
     Ok(Some(Post {
         author: s("author"),
+        reaction_label: s("reaction_label"),
+        reaction_pressed: p["reaction_pressed"].as_bool(),
         author_ref: s("aref"),
         time: s("time"),
         stats: format!(
@@ -611,6 +622,13 @@ mod tests {
             "au\t/profile.php?id=456\n"
         );
         assert_eq!(author_ref_prefix("/some.user"), "au\t/some.user\n");
+    }
+
+    #[test]
+    fn own_reaction_metadata_precedes_its_post() {
+        let p = Post { reaction_label: "Remove Love".into(), reaction_pressed: Some(true), ..Post::default() };
+        assert_eq!(reaction_prefix(&p), "ru\tRemove Love\ttrue\n");
+        assert_eq!(reaction_prefix(&Post::default()), "");
     }
 
     #[test]

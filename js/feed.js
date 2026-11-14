@@ -144,6 +144,9 @@
     const head=ch.slice(0,ti>=0?ti:(dot>0?dot:1)).filter(c=>c!=='·'&&c.length>1);
     /* Shared-source headers follow the first timestamp; comments follow the post's reactions. */
     const reactions=g(u,'like_button');
+    const reactionButton=reactions&&(reactions.closest?.('[role=button]')||reactions);
+    const reactionLabel=reactionButton?.getAttribute?.('aria-label')||'';
+    const pressed=reactionButton?.getAttribute?.('aria-pressed');
     for(const profile of u.querySelectorAll('[data-ad-rendering-role=profile_name]')){
      if(!window.__fb.visible(profile)||profile.closest('blockquote')||(reactions&&!(profile.compareDocumentPosition(reactions)&Node.DOCUMENT_POSITION_FOLLOWING)))continue;
      const author=profileName(profile);if(author&&!head.includes(author))head.push(author);
@@ -181,6 +184,7 @@
     const svg=svgText(tlk);
     const linkTime=tlk&&!dt?svg||clean(tlk.innerText):'';
     out.push({pos,url,alt:alt?canon(alt):'',author:head.join(' / '),aref,time:dt&&dt.text?dt.text:(svg||(ti<0?linkTime:ch[ti])),text:msgs(u).map(postText).filter(Boolean).reduce((all,t)=>all?all+(/[.!?…:]$/.test(all)?'\n\n':'.\n\n')+t:t,'')||attached(u),
+      reaction_label:reactionLabel,reaction_pressed:pressed==='true'?true:pressed==='false'?false:null,
       r:num(g(u,'like_button')),c:num(g(u,'comment_button')),s:num(g(u,'share_button')),
       ad:SPON.test(svg)||/^Ad$/.test(svg)||ch.slice(0,12).some(c=>SPON.test(c)),hover});
     if(url||!hover)continue;
