@@ -372,6 +372,89 @@ pub async fn friend_add(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     r
 }
 
+/// Follow a profile's public posts without a friend request, or with --undo stop following.
+/// Idempotent: a profile already in the asked state is reported, nothing is pressed. --dry
+/// only reports the state. A public figure's header shows Follow; a person who also takes
+/// friend requests keeps it in the header's "…" menu.
+pub async fn follow(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
+    let a = parse(args, &[], &["undo", "dry"])?;
+    let spec = a
+        .pos
+        .first()
+        .ok_or("usage: follow <ref|url|@handle|id> [--undo] [--dry]")?;
+    let on = !a.flag("undo");
+    let b: Arc<Browser> = d.browser(out).await?;
+    let gen0 = b.generation.load(std::sync::atomic::Ordering::SeqCst);
+    // mutations hold the shared side of the account lock; an account import takes the exclusive side
+    let _account = d.account.read().await;
+    if b.generation.load(std::sync::atomic::Ordering::SeqCst) != gen0 {
+        return Err(
+            "the account changed while this command waited; nothing was done, try again".into(),
+        );
+    }
+    // a plain name is never searched: the first hit may be a different person
+    let p = crate::ops::profile_path_explicit(d, &b, spec).await?;
+    let t = b.acquire().await?;
+    same_account(&b, gen0)?;
+    let text_of = |v: &Value| -> Res<String> {
+        match v {
+            Value::String(s) => Ok(s.clone()),
+            other => Err(format!("unexpected follow state: {other}")),
+        }
+    };
+    let r = async {
+        b.goto(&t, &format!("https://www.facebook.com{p}")).await?;
+        let state = text_of(&b.eval(&t, "window.__fb.followState()").await?)?;
+        // only the asked state counts: an error state is never a done unfollow
+        let want = if on { "following" } else { "can-follow" };
+        let done = |s: &str| s == want;
+        match state.as_str() {
+            "following" | "can-follow" if a.flag("dry") => {
+                out.line(format!("dry: {state}"));
+                return Ok(());
+            }
+            s @ ("following" | "can-follow") if done(s) => {
+                out.line(if on { "already following" } else { "not following" });
+                return Ok(());
+            }
+            "following" | "can-follow" => {}
+            "ambiguous" => {
+                return Err("several Follow controls on this page; nothing was pressed".into());
+            }
+            "no-profile" => return Err("this is not a profile page".into()),
+            _ => return Err("this profile offers no Follow".into()),
+        }
+        same_account(&b, gen0)?;
+        if out.cancelled() {
+            return Err("cancelled by client; nothing was pressed".into());
+        }
+        let prepared = text_of(&b.eval(&t, &format!("window.__fb.followPrepare({on})")).await?)?;
+        if prepared != "ready" && !done(&prepared) {
+            return Err(format!("follow change not confirmed (state: {prepared})"));
+        }
+        same_account(&b, gen0)?;
+        if out.cancelled() {
+            return Err("cancelled by client; nothing was pressed".into());
+        }
+        if prepared == "ready" {
+            let pressed = text_of(&b.eval(&t, "window.__fb.followPress()").await?)?;
+            if pressed != "pressed" {
+                return Err(format!("follow change not confirmed (state: {pressed})"));
+            }
+        }
+        let after = text_of(&b.eval(&t, &format!("window.__fb.followConfirm({on})")).await?)?;
+        if done(&after) {
+            out.line(if on { "following" } else { "unfollowed" });
+            Ok(())
+        } else {
+            Err(format!("follow change not confirmed (state: {after})"))
+        }
+    }
+    .await;
+    b.release(t).await;
+    r
+}
+
 pub async fn comment(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     let a = parse(args, &[], &[])?;
     let spec = a.pos.first().ok_or("usage: comment <post> <text>")?;

@@ -32,6 +32,7 @@ ACT
   group-apply <group> <answer>...    join a group by answering its membership questions in order (a choice question takes the option text)
   group-leave <group>                leave a group (reports not-a-member; a pending request is left alone)
   friend-add <ref|url|@handle|id>    send a friend request (reports existing friends / pending requests)
+  follow <ref|url|@handle|id>        follow their public posts without a friend request; --undo unfollows, --dry only reports
 BROWSER (fallback; named tabs are separate from normal commands)
   page <name> open <url> | snapshot [filter]   bounded text + refs; max 6 pages
   page <name> stories [story-url]     experimental story page; blocks known seen requests, not a privacy guarantee

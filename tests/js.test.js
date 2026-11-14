@@ -12,6 +12,51 @@ const src = fs.readFileSync(path.join(__dirname, '../js/lib.js'), 'utf8');
 new Function(src).call(global.window);
 const F = global.window.__fb;
 
+// Relationship menus may mount before their items. Preparation must never follow
+// anyone: the caller checks cancellation before the separate synchronous press.
+(async () => {
+  const vm = require('vm');
+  let now = 0, openedAt = 0, opened = false, pressed = 0, pendingLabel = 'Follow', cards = [];
+  const item = { get innerText() { return pendingLabel; }, isConnected: true };
+  const menu = { querySelectorAll: () => now - openedAt >= 100 ? [item] : [] };
+  const options = { innerText: 'Options', closest: () => null };
+  const header = { contains: () => true, querySelector: () => null };
+  const tabs = { parentElement: header, contains: () => false, compareDocumentPosition: () => 4 };
+  const main = { querySelector: () => tabs, querySelectorAll: () => [options] };
+  const G = {
+    clean: s => s.trim(), vtext: () => [], visible: () => true, enabled: () => true,
+    postCards: () => cards, sleep: async ms => { now += ms; },
+    waitFor: async (f, ms, step = 100) => {
+      for (const end = now + ms; now <= end; now += step) { const v = await f(); if (v) return v; }
+      return null;
+    },
+    press: b => { if (b === options) { opened = true; openedAt = now; } else { assert.strictEqual(b, item); pressed++; } },
+  };
+  const body = { dispatchEvent: () => { opened = false; } };
+  const ctx = vm.createContext({ window: { __fb: G },
+    document: { body, querySelector: () => main, querySelectorAll: () => opened ? [menu] : [] },
+    Node: { DOCUMENT_POSITION_PRECEDING: 2 }, KeyboardEvent: class {}, Date: { now: () => now },
+  });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/act.js'), 'utf8'), ctx);
+  assert.strictEqual(await G.followState(), 'can-follow', 'wait for a delayed Follow item');
+  assert.strictEqual(pressed, 0, 'reading state changes no relationship');
+  assert.strictEqual(await G.followPrepare(true), 'ready');
+  assert.strictEqual(pressed, 0, 'cancel after preparation by omitting the press');
+  pendingLabel = 'Unfollow';
+  assert.notStrictEqual(G.followPress(), 'pressed', 'reject a changed prepared action');
+  assert.strictEqual(pressed, 0);
+  pendingLabel = 'Follow';
+  assert.strictEqual(await G.followPrepare(true), 'ready');
+  assert.strictEqual(G.followPress(), 'pressed');
+  assert.strictEqual(pressed, 1);
+  assert.notStrictEqual(G.followPress(), 'pressed', 'consume the prepared action once');
+  opened = false;
+  cards = [{}];
+  assert.strictEqual(await G.followState(), 'no-follow', 'exclude menus beside role-less posts');
+  assert.strictEqual(opened, false, 'never open a post menu as a relationship menu');
+  console.log('js follow preparation ok');
+})().catch(e => { console.error(e); process.exit(1); });
+
 // Composer timeouts use an immediate waitFor so every failure state is checked without a minute's delay.
 (async () => {
   const vm = require('vm');

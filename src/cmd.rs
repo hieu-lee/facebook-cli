@@ -99,6 +99,7 @@ async fn run_inner(d: &Daemon, argv: &[String], _cwd: &str, out: &Out) -> Res<()
         "group-apply" => crate::act::group_apply(d, &argv[1..], out).await,
         "group-leave" => crate::act::group_leave(d, &argv[1..], out).await,
         "friend-add" => crate::act::friend_add(d, &argv[1..], out).await,
+        "follow" => crate::act::follow(d, &argv[1..], out).await,
         "unsend" => crate::messenger::unsend(d, &argv[1..], out).await,
         "msgreact" => crate::messenger::msgreact(d, &argv[1..], out).await,
         "reply" => crate::messenger::reply(d, &argv[1..], _cwd, out).await,
