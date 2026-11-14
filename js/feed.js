@@ -26,9 +26,11 @@
  };
  /* the walk in progress: stop() ends it before its next press, when its caller gave up */
  let walking=null;
- const walk=async(root,path,card)=>{
+ const STOPPED={err:'stopped: the caller gave up'};
+ /* a stop token made when the command enters, before any wait, so stop() reaches it at once */
+ const begin=()=>{const me={stopped:false};walking=me;return me};
+ const walk=async(root,path,card,me)=>{
   const {visible,press,sleep}=window.__fb;
-  const me={stopped:false};walking=me;
   const base=new Set([...document.querySelectorAll(LAYER)].filter(visible));
   const top=()=>[...document.querySelectorAll(LAYER)].filter(l=>visible(l)&&!base.has(l)).pop();
   const sig=()=>{const l=top();return [l,l?optionsOf(l).map(o=>o.label+(o.on?'*':'')).join('|'):'']};
@@ -40,9 +42,10 @@
   };
   const button=actionsOf(root);
   if(!button)return {err:'this post has no actions menu'};
+  if(me.stopped)return STOPPED;
   let before=sig();press(button);await settle(before);
   for(const want of path){
-   if(me.stopped)return {err:'stopped: the caller gave up'};
+   if(me.stopped)return STOPPED;
    const l=top();
    const o=l&&optionsOf(l).find(o=>o.label===want);
    if(!o)return {err:'Facebook no longer shows "'+want+'" here; open the menu again'};
@@ -176,6 +179,7 @@
      only the last 10-25 posts of a long feed), so the caller uses the post's own page. */
   stop(){if(walking)walking.stopped=true;return 1},
   async menu(url,path){
+   const me=begin();
    const want=canon(url),known=byUrl.get(want);
    const u=known&&(known.u.isConnected?known.u:known.at&&document.querySelector('[aria-posinset="'+known.at+'"]'));
    if(!u)return {gone:true,why:known?'card '+known.at+' removed':'never listed here'};
@@ -184,14 +188,19 @@
     u.scrollIntoView({block:'center'});
     if(!await waitFor(()=>actionsOf(u),6000,100))return {gone:true,why:'card '+known.at+' did not fill in'};
     if(!await linksTo(u,want))return {gone:true,why:'card '+known.at+' shows another post'};
-    return await walk(u,path,true);
+    if(me.stopped)return STOPPED;
+    return await walk(u,path,true,me);
    }finally{scrollTo(0,y)}
   },
   /* post-menu on a post's own page: the post opens in a dialog over the feed, or fills main */
   async postMenu(path){
-   const root=await waitFor(()=>[...document.querySelectorAll('[role=dialog]')].filter(d=>window.__fb.visible(d)&&actionsOf(d)).pop()||window.__fb.postCards().find(c=>c.closest('[role=main]')&&actionsOf(c)),12000,200);
+   const me=begin();
+   const root=await waitFor(()=>[...document.querySelectorAll('[role=dialog]')].filter(d=>window.__fb.visible(d)&&actionsOf(d)).pop()||window.__fb.postCards().find(c=>c.closest('[role=main]')&&actionsOf(c))
+    /* a photo page: the side panel beside the photo holds only that photo's caption and menu */
+    ||[...document.querySelectorAll('[role=complementary]')].find(c=>window.__fb.visible(c)&&c.querySelector('[data-ad-rendering-role=like_button]')&&actionsOf(c)),12000,200);
+   if(me.stopped)return STOPPED;
    if(!root)return {err:'this post has no actions menu'};
-   return walk(root,path);
+   return walk(root,path,false,me);
   },
   async expand(){
    const pending=[];

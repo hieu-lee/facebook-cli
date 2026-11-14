@@ -245,6 +245,10 @@ impl FeedBuf {
                 continue;
             }
             g.running = false;
+            // no producer is left to run queued menu actions: answer them now, not at their deadline
+            for (_, done) in g.actions.drain(..) {
+                let _ = done.send(Err("the feed tab closed before this ran; nothing was pressed".into()));
+            }
             if g.epoch == epoch
                 && let Err(e) = r
             {
