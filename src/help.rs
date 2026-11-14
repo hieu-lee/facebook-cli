@@ -38,6 +38,7 @@ ACT
   group-leave <group>                leave a group (reports not-a-member; a pending request is left alone)
   sell <title> --price N [--condition new|like-new|good|fair] [--category name] [--desc text] [--img file]... [--video file]   create a Marketplace listing; price 0 = free; at least one photo or video, 10 max
   listing-message <listing> <text>   message a Marketplace seller from the listing page
+  follow <ref|url|@handle|id>        follow their public posts without a friend request; --undo unfollows, --dry only reports
 BROWSER (fallback; named tabs are separate from normal commands)
   page <name> open <url> | snapshot [filter]   bounded text + refs; max 6 pages
   page <name> click <ref> | fill <ref> <text> | key <Ctrl+a|Enter|...> | scroll <dx> <dy>
