@@ -44,6 +44,8 @@
   if(!button)return {err:'this post has no actions menu'};
   if(me.stopped)return STOPPED;
   let before=sig();press(button,{valid});await settle(before);
+  /* nothing opened: an ignored click must not read as "done" further down */
+  if(!top())return {err:'Facebook did not open the post menu; nothing was pressed'};
   for(const want of path){
    if(me.stopped)return STOPPED;
    const l=top();
