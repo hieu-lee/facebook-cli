@@ -37,7 +37,7 @@
   await dismissRestore();
   const t0=Date.now();
   // ready once messages render, or (empty/new conversation) once the composer has been there a moment
-  const ok=await waitFor(async()=>{await dismissRestore();return document.querySelector('[role=log] [role=article] [aria-label]')||(location.pathname.startsWith('/messages')&&document.querySelector('[role=textbox][contenteditable=true]')&&Date.now()-t0>2500)},15000);
+  const ok=await waitFor(async()=>{await dismissRestore();return document.querySelector('[role=log] [role=article] [aria-label]')||(location.pathname.startsWith('/messages')&&(document.querySelector('[role=textbox][contenteditable=true]')||F.e2eeContinue())&&Date.now()-t0>2500)},15000);
   return !!ok;
  };
  const snapshot=log=>{
@@ -131,10 +131,33 @@
  };
  // Facebook keeps closed panels (the Notifications jewel) mounted as hidden [role=dialog]: only a shown one blocks.
  const openDialog=()=>[...document.querySelectorAll('[role=dialog]')].some(F.visible);
+ // A one-to-one chat Facebook moved to end-to-end encryption keeps its old thread, read-only: in place of
+ // the composer, MWDefaultE2eeThreadBlockedComposer shows "This chat is now secured..." and one Continue
+ // button that opens the secure chat with the same person. Found by component, not by its words: a blocked
+ // or request chat has a single button there too (Unblock, Accept), which must never be pressed.
+ const e2eeContinue=()=>{
+  let C;try{C=require('__debug').modulesMap['MWDefaultE2eeThreadBlockedComposer.react'].defaultExport;}catch(_){}
+  if(typeof C!=='function')return null;
+  // Facebook's DOM nodes carry no fiber key: search the tree from React's root container.
+  for(const r of document.querySelectorAll('[id^=mount_]')){
+   const k=Object.keys(r).find(k=>k.startsWith('__reactContainer$'));
+   const stack=k?[r[k]]:[];let hit=null;
+   for(let n=0;stack.length&&n<300000&&!hit;n++){const f=stack.pop();if(f.type===C)hit=f;else{if(f.sibling)stack.push(f.sibling);if(f.child)stack.push(f.child);}}
+   if(!hit)continue;
+   const buttons=[];
+   for(const q=[hit.child];q.length;){const f=q.pop();if(!f)continue;if(f.stateNode instanceof Element&&f.stateNode.matches('[role=button]')&&F.visible(f.stateNode))buttons.push(f.stateNode);q.push(f.sibling,f.child);}
+   if(buttons.length===1)return buttons[0];
+  }
+  return null;
+ };
+ F.e2eeContinue=e2eeContinue;
  F.focusComposer=async()=>{
   await dismissRestore();
   if(openDialog())throw Error('Messenger dialog blocks input; inspect with `fb page`');
-  const tb=await waitFor(()=>document.querySelector('[role=textbox][contenteditable=true]'),8000,100);
+  const box=()=>document.querySelector('[role=textbox][contenteditable=true]');
+  let tb=await waitFor(()=>box()||e2eeContinue(),8000,100);
+  // a chat Facebook moved to end-to-end encryption: its Continue opens the secure chat with the same person
+  if(tb&&tb!==box()){F.press(tb);tb=await waitFor(box,15000,100);}
   if(!tb)return false;
   tb.focus();
   return document.activeElement===tb;
