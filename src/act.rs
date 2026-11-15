@@ -366,8 +366,9 @@ async fn created_post(
 async fn read_back(b: &Browser, t: &Tab, path: &str, text: &str, ms: u32) -> Res<bool> {
     b.goto(t, &format!("https://www.facebook.com{path}"))
         .await?;
+    // Facebook shows each paragraph as a block of its own: blank lines between them are gone.
     let js = format!(
-        "window.__fb.waitFor(()=>{{window.__fbFeed.expand();const r=window.__fb.postRoot();return r&&window.__fb.postText(r.querySelector('[data-ad-rendering-role=story_message]'))===window.__fb.clean({})}},{ms})",
+        "window.__fb.waitFor(()=>{{window.__fbFeed.expand();const r=window.__fb.postRoot();const p=s=>s.replace(/\\n+/g,'\\n');return r&&p(window.__fb.postText(r.querySelector('[data-ad-rendering-role=story_message]')))===p(window.__fb.clean({}))}},{ms})",
         json!(text)
     );
     Ok(b.eval(t, &js).await? == Value::Bool(true))
