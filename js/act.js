@@ -5,8 +5,8 @@
  const dialogs=()=>[...document.querySelectorAll('[role=dialog]')];
  const btnText=b=>clean(b.innerText||'');
  // ---- post composer
- const POST=/^(Post|Đăng|Publier|Publicar|Posten|Veröffentlichen|Pubblica|Plaatsen|Opublikuj|Přidat|Zveřejnit|Pridať|Uverejniť|Paylaş|Опубликовать|Опублікувати|Publicera|Publiser|Julkaise)$/i;
- const NEXT=/^(Next|Tiếp|Tiếp tục|Suivant|Siguiente|Próximo|Seguinte|Weiter|Avanti|Volgende|Dalej|Další|Ďalej|İleri|Далее|Далі|Nästa|Næste|Neste|Seuraava)$/i;
+ const POST=/^(Post|Đăng|Publier|Publicar|Posten|Veröffentlichen|Pubblica|Plaatsen|Opublikuj|Přidat|Zveřejnit|Pridať|Uverejniť|Paylaş|Опубликовать|Опублікувати|Publicera|Publiser|Julkaise|Postita|Postitus)$/i;
+ const NEXT=/^(Next|Tiếp|Tiếp tục|Suivant|Siguiente|Próximo|Seguinte|Weiter|Avanti|Volgende|Dalej|Další|Ďalej|İleri|Далее|Далі|Nästa|Næste|Neste|Seuraava|Järgmine|Edasi)$/i;
  const actionLabel=b=>clean(b.getAttribute('aria-label')||btnText(b));
  const actionControls=d=>[...d.querySelectorAll('[role=button],button')];
  // What the screen shows when a step fails: labels only, never draft text.
@@ -33,7 +33,7 @@
   if(!m)return 'no main';
   const trigger=await waitFor(()=>{
    const all=[...m.querySelectorAll('[role=button]')];
-   const named=all.find(b=>/^(What.s on your mind|Bạn đang nghĩ gì|Exprimez-vous|Que voulez-vous dire|Что у вас нового|О чём вы думаете|Що у вас нового)/i.test(btnText(b)))||all.find(isComposerTrigger);
+   const named=all.find(b=>/^(What.s on your mind|Bạn đang nghĩ gì|Exprimez-vous|Que voulez-vous dire|Что у вас нового|О чём вы думаете|Що у вас нового|Mida sa mõtled)/i.test(btnText(b)))||all.find(isComposerTrigger);
    if(named)return named;
    const regs=[...m.querySelectorAll('[role=region]')];
    for(const r of regs){const h=r.querySelector('h1,h2,h3,h4');if(!h)continue;const b=[...r.querySelectorAll('[role=button]')].find(b=>btnText(b).length>6&&!b.getAttribute('aria-haspopup'));if(b)return b;}
@@ -71,7 +71,7 @@
  // matched against the first line only: "Friends except..." is a different audience from "Friends".
  // The label sets cover every language the POST list below recognizes (BlindFB #20 was filed from a
  // Czech or Slovak interface, which the original English/French/Vietnamese set missed entirely).
- const AUD={public:/^(Công khai|Public|Publique|Público|Veřejné|Verejné|Publiczne|Öffentlich|Tutti|Openbaar|Herkese Açık|Доступно всем|Публічно|Offentligt|Offentlig|Julkinen)$/i,friends:/^(Bạn bè|Friends|Amis|Amigos|Přátelé|Priatelia|Znajomi|Freunde|Amici|Vrienden|Arkadaşlar|Друзья|Друзі|Vänner|Venner|Kaverit)$/i,me:/^(Chỉ mình tôi|Only me|Moi uniquement|Sólo yo|Solo yo|Somente eu|Jen já|Len ja|Iba ja|Tylko ja|Nur ich|Solo io|Alleen ik|Sadece ben|Только я|Тільки я|Bara jag|Bare meg|Kun mig|Vain minä)$/i};
+ const AUD={public:/^(Công khai|Public|Publique|Público|Veřejné|Verejné|Publiczne|Öffentlich|Tutti|Openbaar|Herkese Açık|Доступно всем|Публічно|Offentligt|Offentlig|Julkinen|Avalik)$/i,friends:/^(Bạn bè|Friends|Amis|Amigos|Přátelé|Priatelia|Znajomi|Freunde|Amici|Vrienden|Arkadaşlar|Друзья|Друзі|Vänner|Venner|Kaverit|Sõbrad)$/i,me:/^(Chỉ mình tôi|Only me|Moi uniquement|Sólo yo|Solo yo|Somente eu|Jen já|Len ja|Iba ja|Tylko ja|Nur ich|Solo io|Alleen ik|Sadece ben|Только я|Тільки я|Bara jag|Bare meg|Kun mig|Vain minä|Ainult mina)$/i};
 F.AUD=AUD;
  const first=t=>clean(t).split('\n')[0].trim();
  F.composeAudience=async(kind)=>{
@@ -397,7 +397,7 @@ F.AUD=AUD;
   const checked=F.composeCheck(text);if(checked!==true)return checked;
   F.press(post,{events:['pointerdown','mousedown','pointerup','mouseup','click'],valid:()=>post===postButton()&&F.enabled(post)&&F.composeCheck(text)===true});
   const closed=await waitFor(()=>!F.composeDialog(),90000,200);
-  return closed?true:'post dialog still open (upload slow?)';
+  return closed?true:'post dialog still open (upload slow?)'+composerState(dialogs().filter(F.visible).pop());
  };
  // ---- post-level actions (root = dialog showing the post, or main)
  const postRoot=()=>{for(const d of dialogs())if(d.querySelector('[data-ad-rendering-role=profile_name]'))return d;const m=main();return m&&m.querySelector('[data-ad-rendering-role=profile_name]')&&m;};
