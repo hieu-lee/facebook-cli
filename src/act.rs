@@ -102,6 +102,7 @@ pub async fn post(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> 
     }
     let t = b.acquire().await?;
     same_account(&b, gen0)?;
+    let pressed = std::sync::atomic::AtomicBool::new(false);
     let r = async {
         let profile = crate::ops::profile_path(d, &b, "me").await?;
         b.goto(&t, &format!("https://www.facebook.com{profile}")).await?;
@@ -154,11 +155,18 @@ pub async fn post(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> 
             let _ = b.cdp.call(Some(&t.session), "Network.disable", json!({})).await;
             return Err(e);
         }
+        pressed.store(true, std::sync::atomic::Ordering::SeqCst);
         let receipt = async {
-            ok(&b.eval(&t, &format!("window.__fb.composePress({})", json!(text))).await?)?;
-            // FB's composer may take far longer than 15 s to answer on a slow
-            // connection; giving up then aborts the in-flight publish.
-            let created = tokio::time::timeout(Duration::from_secs(60), created_post(&b, &t, &uid, &mut events)).await.map_err(|_| "creation response timed out".to_string())??;
+            let press = async { ok(&b.eval(&t, &format!("window.__fb.composePress({})", json!(text))).await?) };
+            // Read the network events while Post is pressed: composePress can wait 90 s for the
+            // dialog to close, and events left unread that long can overflow the queue. FB's
+            // composer may also take minutes to answer on a slow connection.
+            let create = async {
+                tokio::time::timeout(Duration::from_secs(150), created_post(&b, &t, &uid, &mut events))
+                    .await
+                    .map_err(|_| "creation response timed out".to_string())?
+            };
+            let ((), created) = tokio::try_join!(press, create)?;
             match created {
                 Created::Story(path) => {
                     if !read_back(&b, &t, &path, &text, 15000).await? {
@@ -188,7 +196,13 @@ pub async fn post(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> 
         Ok(())
     }
     .await;
-    b.release(t).await;
+    // After Post, an unconfirmed publish may still be uploading or resubmitting in this
+    // page: a frozen or reused tab would cut it off, so park it live and unused.
+    if pressed.load(std::sync::atomic::Ordering::SeqCst) && r.is_err() {
+        b.release_live(t).await;
+    } else {
+        b.release(t).await;
+    }
     r
 }
 
@@ -292,10 +306,12 @@ async fn created_post(
 ) -> Res<Created> {
     let mut request: Option<String> = None;
     loop {
-        let event = events
-            .recv()
-            .await
-            .map_err(|_| "creation events lost".to_string())?;
+        let event = match events.recv().await {
+            Ok(event) => event,
+            // Other tabs' events overflowed the queue; the creation answer may still come.
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(_) => return Err("creation events lost".into()),
+        };
         if event.session.as_deref() != Some(&t.session) {
             continue;
         }
