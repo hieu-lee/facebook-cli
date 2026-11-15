@@ -403,7 +403,7 @@ F.AUD=AUD;
  const postRoot=()=>{for(const d of dialogs())if(d.querySelector('[data-ad-rendering-role=profile_name]'))return d;const m=main();return m&&m.querySelector('[data-ad-rendering-role=profile_name]')&&m;};
  F.postRoot=postRoot;
  F.postReady=async()=>{const r=await waitFor(postRoot,15000);if(r)await sleep(600);return !!r;};
- const MENU_RE={del:/Chuyển vào thùng rác|Move to trash|Move to Recycle|Xóa bài viết|Delete post|Supprimer|Déplacer vers la corbeille|Xóa/i};
+ const MENU_RE={del:/Chuyển vào thùng rác|Move to trash|Move to Recycle|Xóa bài viết|Delete post|Supprimer|Déplacer vers la corbeille|Xóa|Удалить публикацию|Переместить в корзину/i};
  // two steps so the caller can still abort before the irreversible click
  F.postDeleteOpen=async()=>{
   const r=postRoot();if(!r)return 'no post';
@@ -415,7 +415,7 @@ F.AUD=AUD;
   if(!item)return 'delete not available (not your post?)';
   window.__fbDeleteAct=act;
   item.click();
-  const confirm=await waitFor(()=>{for(const d of dialogs()){const b=[...d.querySelectorAll('[role=button]')].find(b=>/^(Di chuyển|Move|Xóa|Delete|Supprimer|Déplacer|Remove)/i.test(clean(b.innerText)||b.getAttribute('aria-label')||''));if(b)return b;}return null;},6000);
+  const confirm=await waitFor(()=>{for(const d of dialogs()){const b=[...d.querySelectorAll('[role=button]')].find(b=>/^(Di chuyển|Move|Xóa|Delete|Supprimer|Déplacer|Remove|Удалить|Переместить)/i.test(clean(b.innerText)||b.getAttribute('aria-label')||''));if(b)return b;}return null;},6000);
   if(!confirm)return 'delete confirmation dialog not found';
   window.__fbDeleteConfirm=confirm;
   return true;
