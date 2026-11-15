@@ -11,7 +11,7 @@
   const trigger=await waitFor(()=>{
    const regs=[...m.querySelectorAll('[role=region]')];
    for(const r of regs){const h=r.querySelector('h1,h2,h3,h4');if(!h)continue;const b=[...r.querySelectorAll('[role=button]')].find(b=>btnText(b).length>6);if(b)return b;}
-   return [...m.querySelectorAll('[role=button]')].find(b=>/^(What.s on your mind|Bạn đang nghĩ gì|Exprimez-vous|Que voulez-vous dire)/i.test(btnText(b)))||null;
+   return [...m.querySelectorAll('[role=button]')].find(b=>/^(What.s on your mind|Bạn đang nghĩ gì|Exprimez-vous|Que voulez-vous dire|Mida sa mõtled)/i.test(btnText(b)))||null;
   },15000);
   if(!trigger)return 'no composer button';
   trigger.click();
@@ -37,7 +37,7 @@
   return ok?true:'no preview';
  };
  // matched against the first line only: "Friends except..." is a different audience from "Friends"
- const AUD={public:/^(Công khai|Public|Publique)$/i,friends:/^(Bạn bè|Friends|Amis)$/i,me:/^(Chỉ mình tôi|Only me|Moi uniquement)$/i};
+ const AUD={public:/^(Công khai|Public|Publique|Avalik)$/i,friends:/^(Bạn bè|Friends|Amis|Sõbrad)$/i,me:/^(Chỉ mình tôi|Only me|Moi uniquement|Ainult mina)$/i};
  const first=t=>clean(t).split('\n')[0].trim();
  F.composeAudience=async(kind)=>{
   const d=F.composeDialog();if(!d)return 'no composer';
@@ -157,7 +157,7 @@
  // The profile header mounts after DOMContentLoaded: wait for the tab strip, then for the relationship control, before concluding there is none.
  F.friendWait=async()=>{const m=await waitFor(()=>{const m=main();return m&&m.querySelector('[role=tablist]')&&m},15000);if(!m)return 'no-profile';const st=await waitFor(()=>{const s=F.friendState();return s!=='no-button'?s:null},5000,200);return st||'no-button';};
  F.friendAdd=async()=>{const st=F.friendState();if(st!=='can-add')return st;const b=friendButton();if(!b)return 'no-button';b.click();const ok=await waitFor(()=>{const s=F.friendState();return s==='requested'||s==='friends'?s:null;},8000,200);return ok||'unconfirmed';};
- const postButtons=()=>{const d=F.composeDialog();return d?[...d.querySelectorAll('[role=button],button')].filter(b=>F.visible(b)&&/^(Post|Đăng|Publier)$/i.test(clean(b.getAttribute('aria-label')||btnText(b)))):[];};
+ const postButtons=()=>{const d=F.composeDialog();return d?[...d.querySelectorAll('[role=button],button')].filter(b=>F.visible(b)&&/^(Post|Đăng|Publier|Postita|Postitus)$/i.test(clean(b.getAttribute('aria-label')||btnText(b)))):[];};
  const postButton=()=>{const bs=postButtons();return bs.length===1?bs[0]:null;};
  // Retained audience panes can put Done after Post; order is not action identity.
  F.composePrepare=async()=>{
