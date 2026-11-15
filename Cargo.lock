@@ -93,7 +93,7 @@ dependencies = [
 
 [[package]]
 name = "fb"
-version = "0.1.5-blindfb.67"
+version = "0.1.5-blindfb.68"
 dependencies = [
  "base64",
  "futures-util",
