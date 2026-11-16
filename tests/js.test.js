@@ -747,3 +747,155 @@ console.log('js removed-newest ok');
   assert.strictEqual(rows[1][2], 'Sat, Nov 14 · Town Hall', 'a second link keeps its first line');
   console.log('js groups hub ok');
 })().catch(e => { console.error(e); process.exit(1); });
+
+// Group creation only reports created once Facebook lands on the group's own
+// page; filling the form must never count as created.
+(async () => {
+  const vm = require('vm');
+  function el(tag, text, extra = {}) {
+    const e = { tagName: tag.toUpperCase(), children: [], innerText: text || '', _attrs: {}, _click: null,
+      getAttribute: k => e._attrs[k] ?? null, setAttribute: (k, v) => { e._attrs[k] = v; },
+      dispatchEvent: () => {}, click: () => { e._click && e._click(); }, querySelectorAll: () => [] };
+    Object.assign(e, extra);
+    return e;
+  }
+  function span(text) { const s = el('span', text); s.innerText = text; s.children = []; return s; }
+  function row(text, fn) { const r = el('div', text); r.children = [span(text)]; r.innerText = text; r._click = fn; return r; }
+  class Input {}
+  Object.defineProperty(Input.prototype, 'value', { get() { return this._v || ''; }, set(v) { this._v = v; } });
+
+  function build(startPath = '/groups/create/') {
+    const field = el('input'); field.type = 'text'; field._v = '';
+    let privacyClicks = 0, optionClicks = [], createdName = null, pathname = startPath;
+    const mainEl = el('main');
+    const createBtn = el('div', 'Create'); createBtn._attrs.role = 'button';
+    createBtn._click = () => { createdName = field._v; pathname = '/groups/9001'; };
+    mainEl.querySelectorAll = () => [createBtn];
+    const privacyEl = el('label', 'Choose privacy'); privacyEl._attrs.role = 'combobox'; privacyEl._attrs['aria-labelledby'] = 'gc1';
+    const lab = el('div', 'Choose privacy'); lab._attrs.id = 'gc1';
+    let menu = [], sub = [];
+    privacyEl._click = () => { privacyClicks++; menu = []; sub = [];
+      menu = [row('Public', () => { optionClicks.push('Public'); }),
+              row('Private', () => { optionClicks.push('Private'); sub = [row('Visible', () => { optionClicks.push('Visible'); }), row('Hidden', () => { optionClicks.push('Hidden'); })]; })];
+    };
+    const doc = { querySelectorAll: sel => sel.includes('combobox') ? [privacyEl] : sel.includes('input[type=text]') ? [field] : [...menu, ...sub],
+      querySelector: sel => (sel === '[role=main]' ? mainEl : null),
+      getElementById: id => (id === 'gc1' ? lab : null) };
+    const G = { pageLoading: () => false, clean: s => String(s || '').trim(), visible: () => true,
+      sleep: async () => {}, waitFor: async f => f() || null, trunc: s => s };
+    const location = { get pathname() { return pathname; } };
+    const ctx = vm.createContext({ window: { __fb: G }, document: doc, location, HTMLInputElement: Input, HTMLTextAreaElement: Input, Event: class { constructor(t, o) { Object.assign(this, { type: t }, o); } } });
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/act.js'), 'utf8'), ctx);
+    return { G, field, state: () => ({ createdName, pathname, privacyClicks, optionClicks }) };
+  }
+
+  { // private + hidden: Hidden is picked one step under Private, dry run creates nothing
+    const { G, state } = build();
+    const r = await G.groupCreate('My group', 'private', true, true);
+    assert.strictEqual(r, 'form-filled');
+    assert.deepStrictEqual(state().optionClicks, ['Private', 'Visible', 'Hidden'], 'hidden needs Visible first: ' + JSON.stringify(state()));
+  }
+  { // private + visible real run lands on the group home URL
+    const { G, state } = build();
+    const r = await G.groupCreate('My group', 'private', false, false);
+    assert.strictEqual(r, 'created\thttps://www.facebook.com/groups/9001');
+    assert.deepStrictEqual(state().optionClicks, ['Private', 'Visible']);
+    assert.strictEqual(state().createdName, 'My group');
+  }
+  { // public real run
+    const { G, state } = build();
+    const r = await G.groupCreate('Pub group', 'public', false, false);
+    assert.strictEqual(r, 'created\thttps://www.facebook.com/groups/9001');
+    assert.deepStrictEqual(state().optionClicks, ['Public']);
+  }
+  { // wrong page: nothing happens
+    const { G, state } = build('/groups/feed');
+    const r = await G.groupCreate('X', 'public', false, true);
+    assert.match(r, /not on the create form/);
+    assert.strictEqual(state().privacyClicks, 0);
+  }
+  console.log('js groupCreate ok');
+})().catch(e => { console.error(e); process.exit(1); });
+
+// Group invitations: exact-one matching, running selection count, dry-run
+// cancel, and nothing sent when a name is missing or duplicated.
+(async () => {
+  const vm = require('vm');
+  function el(tag, text, extra = {}) {
+    const e = { tagName: tag.toUpperCase(), children: [], innerText: text || '', _attrs: {}, _click: null,
+      getAttribute: k => e._attrs[k] ?? null, setAttribute: (k, v) => { e._attrs[k] = v; },
+      dispatchEvent: () => {}, click: () => { e._click && e._click(); }, querySelectorAll: () => [] };
+    Object.assign(e, extra);
+    return e;
+  }
+  function span(text, fn) { const s = el('span', text); s.innerText = text; s.children = []; s._click = fn; return s; }
+  function row(text, fn) { const r = el('div', text); r.children = [span(text, fn)]; r.innerText = text; r._click = fn; return r; }
+  class Input {}
+  Object.defineProperty(Input.prototype, 'value', { get() { return this._v || ''; }, set(v) { this._v = v; } });
+
+  function build() {
+    let sent = null, cancelled = 0, picked = 0, dialogOpen = false;
+    const joinedBtn = el('div', 'Joined'); joinedBtn._attrs.role = 'button';
+    const mainEl = el('main');
+    const inviteBtn = el('div', 'Invite'); inviteBtn._attrs.role = 'button';
+    let results = [];
+    const search = el('input'); search.type = 'text'; search._v = '';
+    const dlg = el('div', '');
+    const paintCount = () => { dlg._countText = `${picked} friend${picked === 1 ? '' : 's'} selected`; };
+    paintCount();
+    dlg.querySelector = sel => (sel === 'input[type=text]' ? search : null);
+    dlg.querySelectorAll = sel => (sel.includes('role=button') ? [cancelBtn, sendBtn] : [...results, ...results.map(r => r.children[0])]);
+    Object.defineProperty(dlg, 'innerText', { get: () => dlg._countText });
+    const cancelBtn = el('div', 'Cancel'); cancelBtn._attrs.role = 'button';
+    cancelBtn._click = () => { cancelled++; dialogOpen = false; };
+    const sendBtn = el('div', 'Send invites'); sendBtn._attrs.role = 'button';
+    sendBtn._click = () => { sent = picked; dialogOpen = false; };
+    inviteBtn._click = () => { dialogOpen = true; };
+    mainEl.querySelectorAll = () => [joinedBtn, inviteBtn];
+    const FRIENDS = ['Alice Friend', 'Bob Friend', 'Tanya Warner', 'Tanya Warner'];
+    const show = q => { results = FRIENDS.filter(f => !q || f === q).map(f => row(f, () => { picked++; paintCount(); })); };
+    show(null);
+    // setVal triggers input event? no; groupInvite calls setVal twice (clear, name) then reads results
+    search._oninput = () => show(search._v);
+    const doc = { querySelectorAll: sel => (sel === '[role=dialog]' ? (dialogOpen ? [dlg] : []) : mainEl.querySelectorAll()),
+      querySelector: sel => (sel === '[role=main]' ? mainEl : sel === '[role=dialog]' ? [] : null), getElementById: () => null };
+    const G = { pageLoading: () => false, clean: s => String(s || '').trim(), visible: () => true,
+      sleep: async () => {}, waitFor: async f => f() || null, trunc: s => s };
+    const location = { pathname: '/groups/111' };
+    const ctx = vm.createContext({ window: { __fb: G }, document: doc, location, HTMLInputElement: Input, HTMLTextAreaElement: Input, Event: class { constructor(t, o) { Object.assign(this, { type: t }, o); } } });
+    // after setVal fires 'input', refresh results (helper does not call _oninput; emulate here)
+    const origSetValCheck = search;
+    Object.defineProperty(search, 'value', { get() { return search._v || ''; }, set(v) { search._v = v; } });
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/act.js'), 'utf8'), ctx);
+    // patch: setVal dispatches generic input event; emulate browser by hooking dispatchEvent
+    search.dispatchEvent = ev => { if (ev.type === 'input') show(search._v); };
+    search._click = null;
+    return { G, state: () => ({ sent, cancelled, picked, dialogOpen, results }) };
+  }
+
+  { // two friends, dry run: exact counts, cancelled, nothing sent
+    const { G, state } = build();
+    const r = await G.groupInvite(['Alice Friend', 'Bob Friend'], true);
+    assert.strictEqual(r, 'selected\t2');
+    assert.strictEqual(state().sent, null);
+    assert.strictEqual(state().cancelled, 1);
+  }
+  { // real send
+    const { G } = build();
+    const r = await G.groupInvite(['Alice Friend'], false);
+    assert.strictEqual(r, 'invited\t1');
+  }
+  { // unknown friend: nothing sent
+    const { G, state } = build();
+    const r = await G.groupInvite(['No Such Person'], true);
+    assert.match(r, /no friend named/);
+    assert.strictEqual(state().sent, null);
+  }
+  { // duplicated name: nothing sent
+    const { G, state } = build();
+    const r = await G.groupInvite(['Tanya Warner'], true);
+    assert.match(r, /more than one/);
+    assert.strictEqual(state().sent, null);
+  }
+  console.log('js groupInvite ok');
+})().catch(e => { console.error(e); process.exit(1); });

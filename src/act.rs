@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// Mutations must run as the account they were started for (a `login` may swap it while we queue).
-fn same_account(b: &Browser, gen0: u64) -> Res<()> {
+pub(crate) fn same_account(b: &Browser, gen0: u64) -> Res<()> {
     if b.generation.load(std::sync::atomic::Ordering::SeqCst) == gen0 {
         Ok(())
     } else {

@@ -7,6 +7,8 @@ mod connect;
 mod daemon;
 mod dev;
 mod feed;
+mod group_create;
+mod group_invite;
 mod help;
 mod ipc;
 mod keys;

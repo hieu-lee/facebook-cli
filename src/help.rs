@@ -37,6 +37,8 @@ ACT
   group-join <group>                 join a group (reports joined / requested; membership questions come back as questions<TAB>n then q<TAB>text lines)
   group-apply <group> <answer>...    join a group by answering its membership questions in order (a choice question takes the option text)
   group-leave <group>                leave a group (reports not-a-member; a pending request is left alone)
+  group-create <name> --privacy public|private [--hidden] [--dry]   create a group; confirms with the new group's URL, never sends invitations
+  group-invite <group> <friend>... [--dry]   invite friends by exact name; reports invited<TAB>count
   sell <title> --price N [--condition new|like-new|good|fair] [--category name] [--desc text] [--img file]... [--video file]   create a Marketplace listing; price 0 = free; at least one photo or video, 10 max
   listing-message <listing> <text>   message a Marketplace seller from the listing page
   follow <ref|url|@handle|id>        follow their public posts without a friend request; --undo unfollows, --dry only reports

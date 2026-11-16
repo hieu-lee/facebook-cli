@@ -640,6 +640,24 @@ try{
   assert.match(await fb('group-apply','333','I collect chairs','Yes I agree'),/answers submitted/);
   assert.match(await fb('group-join','333'),/already pending/);
  });
+ await check('group create validates, dry-runs, and confirms only the new group page',async()=>{
+  await assert.rejects(()=>fb('group-create','No privacy'),/usage:/);
+  await assert.rejects(()=>fb('group-create','Bad','--privacy','friends'),/--privacy must be/);
+  await assert.rejects(()=>fb('group-create','Bad','--privacy','public','--hidden'),/--hidden needs a private/);
+  assert.match(await fb('group-create','Fixture group','--privacy','private','--hidden','--dry'),/dry: creation form filled/);
+  assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.gcCreated||"null"))'),null);
+  assert.equal(await fb('group-create','Fixture group','--privacy','private','--hidden'),'created\thttps://www.facebook.com/groups/9001');
+  assert.deepEqual(await evaluate('JSON.stringify(JSON.parse(localStorage.gcCreated||"null"))'),{name:'Fixture group',privacy:'private',hidden:true});
+ });
+ await check('group invite selects exact names, cancels on dry, and sends on action',async()=>{
+  await evaluate('localStorage["gs-111"]=JSON.stringify("joined");localStorage.removeItem("giSent");JSON.stringify(true)');
+  assert.match(await fb('group-invite','111','Alice Friend','Bob Friend','--dry'),/friends selected, not invited\t2/);
+  assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.giSent||"null"))'),null);
+  await assert.rejects(()=>fb('group-invite','111','No Such Person','--dry'),/no friend named/);
+  await assert.rejects(()=>fb('group-invite','111','Tanya Warner','--dry'),/more than one/);
+  assert.equal(await fb('group-invite','111','Alice Friend','Bob Friend'),'invited\t2');
+  assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.giSent||"null"))'),2);
+ });
  await check('group post uses the selected group composer and refuses mixed audiences',async()=>{
   await evaluate('localStorage["gs-111"]=JSON.stringify("joined");JSON.stringify(true)');
   try{
