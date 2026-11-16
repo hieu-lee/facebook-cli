@@ -983,6 +983,19 @@ try{
   assert.match(await fb('group-apply','555','No'),/answers submitted/);
   assert.deepEqual(await answers(555),{radio:'No'});
  });
+ await check('group post uses the selected group composer and refuses mixed audiences',async()=>{
+  await evaluate('localStorage["gs-111"]=JSON.stringify("joined");JSON.stringify(true)');
+  try{
+   await assert.rejects(()=>fb('post','wrong audience','--group','/groups/111','--to','public'),/one --group or --to/);
+   await assert.rejects(()=>fb('post','wrong destination','--group','https://evil.test/groups/111'),/Facebook group URL/);
+   assert.match(await fb('post','group draft','--group','https://www.facebook.com/groups/111/','--dry'),/dry: composer filled/);
+   assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.posts||"[]").some(p=>p.text==="group draft"))'),false);
+   const result=await fb('post','group publication','--group','https://www.facebook.com/groups/111/');
+   assert.match(result,/^posted\t/);
+   const created=await evaluate('JSON.stringify(JSON.parse(localStorage.posts).find(p=>p.text==="group publication"))');
+   assert.equal(created.group,'111');
+  }finally{await evaluate('localStorage.removeItem("gs-111");localStorage.posts=JSON.stringify(JSON.parse(localStorage.posts||"[]").filter(p=>p.text!=="group publication"));JSON.stringify(true)')}
+ });
  await check('post takes video and photo files',async()=>{
   const png=path.join(temp,'chair.png');await writeFile(png,Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==','base64'));
   const mp4=path.join(temp,'clip.mp4');await writeFile(mp4,Buffer.from('AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMW1wNDE=','base64'));

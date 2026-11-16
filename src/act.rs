@@ -83,14 +83,31 @@ async fn type_into(b: &Browser, t: &Tab, text: &str) -> Res<()> {
     Ok(())
 }
 
+fn post_group(a: &crate::ops::Args) -> Res<Option<String>> {
+    let groups = a.opts_all("group");
+    if groups.len() > 1 || (!groups.is_empty() && a.opt("to").is_some()) {
+        return Err("use one --group or --to, not both".into());
+    }
+    let Some(spec) = groups.first() else { return Ok(None); };
+    let path = crate::ops::fb_path(spec).ok_or("--group needs a Facebook group URL or /groups/id")?;
+    let path = path.trim_end_matches('/');
+    let id = path.strip_prefix("/groups/").filter(|id| {
+        !id.is_empty() && *id != "." && *id != ".."
+            && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+            && !matches!(*id, "feed" | "discover" | "joins" | "create" | "search" | "yourgroups")
+    }).ok_or("--group needs a Facebook group URL or /groups/id")?;
+    Ok(Some(format!("/groups/{id}")))
+}
+
 pub async fn post(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> {
-    let a = parse(args, &["img", "video", "to"], &["dry"])?;
+    let a = parse(args, &["img", "video", "to", "group"], &["dry"])?;
+    let group = post_group(&a)?;
     let text = a.pos.join(" ");
     let imgs = a.opts_all("img");
     let videos = a.opts_all("video");
     if text.is_empty() && imgs.is_empty() && videos.is_empty() {
         return Err(
-            "usage: post <text> [--img file]... [--video file]... [--to public|friends|me]".into(),
+            "usage: post <text> [--img file]... [--video file]... [--to public|friends|me | --group URL]".into(),
         );
     }
     let audience = a.opt("to").map(|s| match s {
@@ -116,9 +133,12 @@ pub async fn post(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> 
     let t = b.acquire().await?;
     same_account(&b, gen0)?;
     let r = async {
-        let profile = crate::ops::profile_path(d, &b, "me").await?;
-        b.goto(&t, &format!("https://www.facebook.com{profile}")).await?;
-        ok(&b.eval(&t, "window.__fb.composeOpen()").await?)?;
+        let destination = match &group {
+            Some(group) => group.clone(),
+            None => crate::ops::profile_path(d, &b, "me").await?,
+        };
+        b.goto(&t, &format!("https://www.facebook.com{destination}")).await?;
+        ok(&b.eval(&t, &format!("window.__fb.composeOpen({})", json!(group))).await?)?;
         if !text.is_empty() {
             ok(&b.eval(&t, "window.__fb.composeFocus()").await?)?;
             type_into(&b, &t, &text).await?;
@@ -131,11 +151,8 @@ pub async fn post(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> 
                 .await?)?;
         }
         if a.flag("dry") {
-            b.eval(
-                &t,
-                "document.querySelector('[role=dialog] [role=button]').click()",
-            )
-            .await?;
+            // Discard the draft without guessing which dialog button means Close.
+            b.cdp.call(Some(&t.session), "Page.navigate", json!({"url":"about:blank"})).await?;
             out.line("dry: composer filled, not posted");
             return Ok(());
         }
@@ -164,7 +181,8 @@ pub async fn post(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> 
             Ok(path)
         }.await;
         let _ = b.cdp.call(Some(&t.session), "Network.disable", json!({})).await;
-        let path = receipt.map_err(|e: String| format!("post may have been published, but no verified receipt: {e}; inspect `fb posts me` before retrying"))?;
+        let inspect = group.as_ref().map_or("`fb posts me`".to_string(), |g| format!("`fb posts {g}` and the group's pending posts"));
+        let path = receipt.map_err(|e: String| format!("post may have been published, but no verified receipt: {e}; inspect {inspect} before retrying"))?;
         out.line(format!("posted\t{}\t{path}", d.refs.put('p', &path)));
 
         Ok(())
@@ -865,6 +883,20 @@ pub async fn react(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn group_post_destination_is_explicit_and_unambiguous() {
+        let args = |values: &[&str]| parse(&values.iter().map(|s| s.to_string()).collect::<Vec<_>>(), &["to", "group"], &[]).unwrap();
+        assert_eq!(post_group(&args(&["--group", "https://www.facebook.com/groups/hikers.uk/"])).unwrap().as_deref(), Some("/groups/hikers.uk"));
+        assert_eq!(post_group(&args(&["--to", "me"])).unwrap(), None);
+        for values in [
+            vec!["--group", "/groups/123", "--to", "public"],
+            vec!["--group", "/groups/123", "--group", "/groups/456"],
+        ] { assert!(post_group(&args(&values)).is_err()); }
+        for bad in ["https://evil.test/groups/1", "https://www.facebook.com@evil.test/groups/1", "/me", "/groups/", "/groups/joins", "/groups/..", "/groups/%2e%2e", "/groups/1/posts/2", "/groups/1?ref=x", "/groups/1\\..", ""] {
+            assert!(post_group(&args(&["--group", bad])).is_err(), "{bad}");
+        }
+    }
 
     #[test]
     fn video_files_keep_a_video_mime_type() {
