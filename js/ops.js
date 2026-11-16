@@ -224,6 +224,30 @@
   },Math.min(120000,Math.max(25000,n*60)));
   return {rows:rows.map(r=>r.v)};
  };
+ // a group's photos, newest first: the Media tab's photo permalinks. Rows
+ // are [name, photo URL, description]; thumbnails without any label fall
+ // back to a numbered name so every row stays addressable.
+ F.groupPhotos=async(n)=>{
+  const ok=await waitFor(()=>document.querySelector('[role=main] a[href*="/photo/?fbid="]'),12000);
+  if(!ok)return {rows:[],note:'no photos visible'};
+  await sleep(600);
+  const rows=await gather(n,()=>{
+   const byId=new Map();
+   for(const a of document.querySelectorAll('[role=main] a[href*="/photo/?fbid="]')){
+    let h=abs(a.href||a.getAttribute('href')||'');if(!h)continue;if(h.startsWith('/'))h='https://www.facebook.com'+h;
+    const url=new URL(h);const id=url.searchParams.get('fbid');if(!id)continue;
+    const img=a.querySelector('img');
+    const desc=clean(a.getAttribute('aria-label')||a.title||(img&&(img.alt||img.title))||a.innerText||'');
+    const block=a.closest('[role=listitem]')||a.closest('[role=article]')||a.parentElement;
+    const blockText=block&&block!==a?clean(vtext(block).join(' ')):'';
+    const name=desc&&!/^no photo description/i.test(desc)?desc:(blockText&&!/^no photo description/i.test(blockText)?blockText:'Photo');
+    if(!byId.has(id))byId.set(id,{name:(/^(Photo|Foto|Фото)$/i.test(name)?`Photo ${byId.size+1}`:name),url:h,info:''});
+   }
+   return [...byId.values()].map(p=>({k:p.url,v:[trunc(p.name,120),p.url,p.info]}));
+  },Math.min(120000,Math.max(25000,n*120)));
+  if(!rows.length)return {rows:[],note:'no photos visible'};
+  return {rows:rows.map(r=>r.v)};
+ };
  F.notifs=async(n)=>{
   const ok=await waitFor(()=>document.querySelector('[role=main] [role=list] [role=listitem] a[href]')||document.querySelector('[role=list] [role=listitem] a[href]'),12000);
   if(!ok)return {rows:[],note:'no notifications'};

@@ -9,6 +9,7 @@ mod dev;
 mod feed;
 mod group_create;
 mod group_invite;
+mod group_photos;
 mod help;
 mod ipc;
 mod keys;

@@ -90,6 +90,7 @@ Run `fb help` for the exact list. `<who>` is `me`, a name, `@vanity`, an id, a U
 | `delete <post>` | your own posts |
 | `group-create <name> --privacy public\|private [--hidden] [--dry]` | verified `created<TAB>group-URL` receipt; never sends invitations |
 | `group-invite <group> <friend>... [--dry]` | exact-name search; verified `invited<TAB>count` receipt |
+| `group-photos <group> [-n 50]` | the group's photos, each with its permalink |
 
 | Other | |
 |---|---|

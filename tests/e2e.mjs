@@ -658,6 +658,13 @@ try{
   assert.equal(await fb('group-invite','111','Alice Friend','Bob Friend'),'invited\t2');
   assert.equal(await evaluate('JSON.stringify(JSON.parse(localStorage.giSent||"null"))'),2);
  });
+ await check('group photos list permalinks by newest first',async()=>{
+  const out=await fb('group-photos','111','-n','2');
+  const rows=out.trim().split('\n').map(l=>l.split('\t'));
+  assert.equal(rows.length,2);
+  assert.equal(rows[0][0],'Photo 1');assert.match(rows[0][1],/photo\/\?fbid=1001/);
+  assert.equal(rows[1][0],'Photo 2');assert.match(rows[1][1],/photo\/\?fbid=1002/);
+ });
  await check('group post uses the selected group composer and refuses mixed audiences',async()=>{
   await evaluate('localStorage["gs-111"]=JSON.stringify("joined");JSON.stringify(true)');
   try{

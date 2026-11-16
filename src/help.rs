@@ -39,6 +39,7 @@ ACT
   group-leave <group>                leave a group (reports not-a-member; a pending request is left alone)
   group-create <name> --privacy public|private [--hidden] [--dry]   create a group; confirms with the new group's URL, never sends invitations
   group-invite <group> <friend>... [--dry]   invite friends by exact name; reports invited<TAB>count
+  group-photos <group> [-n 50]        a group's photos: name, photo URL, description
   sell <title> --price N [--condition new|like-new|good|fair] [--category name] [--desc text] [--img file]... [--video file]   create a Marketplace listing; price 0 = free; at least one photo or video, 10 max
   listing-message <listing> <text>   message a Marketplace seller from the listing page
   follow <ref|url|@handle|id>        follow their public posts without a friend request; --undo unfollows, --dry only reports

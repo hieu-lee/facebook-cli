@@ -113,6 +113,10 @@ if(location.pathname.includes('/messages')){
   main.append(menu)};
  main.append(lab,field,privacy);
  main.append(button('Create',()=>{const created={name:field.value,privacy:priv,hidden:hid};save('gcCreated',created);history.pushState(null,'','/groups/9001');render()}));
+}else if(/^\/groups\/\w+\/media\/photos\/?$/.test(location.pathname)){
+ const gid=location.pathname.split('/')[2];
+ for(let i=1;i<=3;i++){const a=document.createElement('a');a.href='/photo/?fbid='+(1000+i)+'&set=g.'+gid;a.setAttribute('aria-label','Photo '+i);const im=document.createElement('img');im.alt='Description '+i;a.prepend(im);main.append(a)}
+ main.append(document.createElement('div')).textContent='';
 }else if(location.pathname==='/marketplace/create/item'){
  const wrap=document.createElement('div');
  const title=document.createElement('input');title.setAttribute('aria-label','Title');

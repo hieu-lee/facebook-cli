@@ -135,6 +135,7 @@ async fn run_inner(d: &Daemon, argv: &[String], _cwd: &str, out: &Out) -> Res<()
         "group-leave" => crate::act::group_leave(d, &argv[1..], out).await,
         "group-create" => crate::group_create::group_create(d, &argv[1..], out).await,
         "group-invite" => crate::group_invite::group_invite(d, &argv[1..], out).await,
+        "group-photos" => crate::group_photos::group_photos(d, &argv[1..], out).await,
         "sell" => crate::act::sell(d, &argv[1..], _cwd, out).await,
         "listing-message" => crate::act::listing_message(d, &argv[1..], out).await,
         "follow" => crate::act::follow(d, &argv[1..], out).await,
