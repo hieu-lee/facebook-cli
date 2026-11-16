@@ -162,8 +162,7 @@
  const addLines=(m,p,lines)=>{const cur=m.get(p);if(!cur){m.set(p,{name:lines[0],info:lines.slice(1)});return}for(const l of lines)if(l!==cur.name&&!cur.info.includes(l))cur.info.push(l)};
  /* details can render on a later scroll pass than the name, so every pass merges into one entry
     per path; hidden anchors never count toward n; names come from rendered lines, not text nodes */
- const linkList=async(n,sel,pathOf)=>{
-  const acc=new Map();
+ const linkList=async(n,sel,pathOf,acc=new Map())=>{
   const scan=()=>{
    for(const a of document.querySelectorAll(sel)){
     const p=pathOf(a.getAttribute('href'));if(!p||!linkShown(a))continue;
@@ -180,11 +179,12 @@
   await sleep(300);scan();
   return {rows:[...acc].slice(0,n).map(([p,g])=>[g.name,p,trunc(g.info.join(' · '),120)])};
  };
- F.groups=async(n)=>{
+ let groupScan;
+ F.groups=async(n,resume=false)=>{
   const ok=await waitFor(()=>document.querySelector('[role=main] a[href*="/groups/"]'),12000);
   if(!ok)return {rows:[],note:'no groups visible'};
   await sleep(600);
-  return linkList(n,'[role=main] a[href]',groupPath);
+  return linkList(n,'[role=main] a[href]',groupPath,resume?(groupScan??=new Map()):new Map());
  };
  // browsable hub lists (events, pages, places): anchors in main whose
  // canonical path matches the hub's own link shape, gathered like groups.

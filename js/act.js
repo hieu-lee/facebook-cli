@@ -22,17 +22,22 @@
  // shortcuts (Live video, Photo/video, ...). Menu buttons such as a profile's
  // "Share a thought..." note are not it.
  const isComposerTrigger=b=>{
+  if(window.__fbPostGroup&&(!F.visible(b)||b.closest('[aria-hidden=true],[hidden],[inert]')))return false;
   if(b.getAttribute('aria-label')||b.getAttribute('aria-haspopup')||btnText(b).length<=6)return false;
   let card=b.parentElement;
   while(card&&card.querySelectorAll('[role=button]').length<2)card=card.parentElement;
   const buttons=card?[...card.querySelectorAll('[role=button]')]:[];
   return buttons[0]===b&&buttons.length>=3&&buttons.length<=5&&buttons.slice(1).every(x=>x.getAttribute('aria-label'));
  };
- F.composeOpen=async()=>{
+ F.composeGroupCheck=group=>location.pathname.replace(/\/$/,'')===group?true:'the selected group is no longer open; nothing was posted';
+ F.composeOpen=async(group=null)=>{
+  window.__fbPostGroup=group;
+  if(group){const checked=F.composeGroupCheck(group);if(checked!==true)return checked;}
   const m=await waitFor(()=>main(),15000);
   if(!m)return 'no main';
   const trigger=await waitFor(()=>{
    const all=[...m.querySelectorAll('[role=button]')];
+   if(group)return all.find(isComposerTrigger)||null;
    const named=all.find(b=>/^(What.s on your mind|Bạn đang nghĩ gì|Exprimez-vous|Que voulez-vous dire|Что у вас нового|О чём вы думаете|Що у вас нового|Mida sa mõtled)/i.test(btnText(b)))||all.find(isComposerTrigger);
    if(named)return named;
    const regs=[...m.querySelectorAll('[role=region]')];
@@ -42,7 +47,7 @@
   if(!trigger)return 'no composer button';
   // Facebook loads the composer on first use: on a slow connection that takes well over
   // 10 seconds, and a click made before the page is ready does nothing. Click once more.
-  const composer=()=>dialogs().find(d=>d.querySelector('[role=textbox]'));
+  const composer=()=>dialogs().find(d=>(!group||F.visible(d)&&!d.closest('[aria-hidden=true],[hidden],[inert]'))&&d.querySelector('[role=textbox]'));
   trigger.click();
   let d=await waitFor(composer,12000);
   if(!d&&trigger.isConnected){trigger.click();d=await waitFor(composer,20000);}
@@ -55,9 +60,9 @@
   const tb=d.querySelector('[role=textbox]');tb.focus();
   return true;
  };
- F.composeDialog=()=>{const k=window.__fbComposer;return k&&k.isConnected?k:dialogs().find(d=>d.querySelector('[role=textbox]'));};
+ F.composeDialog=()=>{const exposed=d=>!window.__fbPostGroup||F.visible(d)&&!d.closest('[aria-hidden=true],[hidden],[inert]');const k=window.__fbComposer;return k&&k.isConnected&&exposed(k)?k:dialogs().find(d=>exposed(d)&&d.querySelector('[role=textbox]'));};
  F.composeFocus=()=>{const d=F.composeDialog();const tb=d&&d.querySelector('[role=textbox]');if(!tb)return false;tb.focus();return true;};
- F.composeCheck=text=>{const d=F.composeDialog();if(!d)return 'no composer; nothing was posted';const tb=d.querySelector('[role=textbox]');if(!tb&&window.__fbComposer)return true;const draft=clean(tb.innerText);return draft===clean(text)?true:!draft?'composer text is empty; nothing was posted':'composer text does not match the requested text; nothing was posted';};
+ F.composeCheck=text=>{if(window.__fbPostGroup){const checked=F.composeGroupCheck(window.__fbPostGroup);if(checked!==true)return checked;}const d=F.composeDialog();if(!d)return 'no composer; nothing was posted';const tb=d.querySelector('[role=textbox]');if(!tb&&window.__fbComposer)return true;const draft=clean(tb.innerText);return draft===clean(text)?true:!draft?'composer text is empty; nothing was posted':'composer text does not match the requested text; nothing was posted';};
  F.composeAttach=async(name,mime,b64)=>{
   const d=F.composeDialog();const inp=d&&d.querySelector('input[type=file]');
   if(!inp)return 'no file input';

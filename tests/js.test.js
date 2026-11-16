@@ -14,6 +14,42 @@ const src = fs.readFileSync(path.join(__dirname, '../js/lib.js'), 'utf8');
 new Function(src).call(global.window);
 const F = global.window.__fb;
 
+// A redirect must never turn a requested group post into a profile post.
+{
+  const vm = require('vm');
+  const G = {};
+  const location = { pathname: '/groups/111/' };
+  const ctx = vm.createContext({ window: { __fb: G }, location });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/act.js'), 'utf8'), ctx);
+  assert.strictEqual(G.composeGroupCheck('/groups/111'), true);
+  location.pathname = '/fixture';
+  assert.match(G.composeGroupCheck('/groups/111'), /selected group.*nothing was posted/);
+  location.pathname = '/groups/222';
+  assert.match(G.composeGroupCheck('/groups/111'), /selected group.*nothing was posted/);
+  const hidden={querySelector:()=>({}),closest:()=>({})},visible={querySelector:()=>({}),closest:()=>null};
+  ctx.document={querySelectorAll:()=>[hidden,visible]};
+  ctx.window.__fbPostGroup='/groups/111';
+  G.visible=()=>true;
+  assert.strictEqual(G.composeDialog(),visible,'all group composer steps ignore retained hidden dialogs');
+}
+
+// A scan resumes after its time budget even when earlier rows were virtualized away.
+(async () => {
+  const vm = require('vm');
+  let now=0, batch=1;
+  const anchor=()=>({innerText:'Group '+batch,getAttribute:()=>'/groups/'+batch,getClientRects:()=>[{}]});
+  const G={pageLoading:()=>false,clean:s=>String(s||'').trim(),groupPath:s=>s,addGroup:(m,k,lines)=>m.set(k,{name:lines[0],info:[]}),trunc:s=>s,
+    waitFor:async f=>f(),sleep:async ms=>{if(ms===220)now+=15000;}};
+  const ctx=vm.createContext({window:{__fb:G,scrollY:0,innerHeight:800,scrollBy:()=>batch++},document:{documentElement:{scrollHeight:100000},querySelector:()=>({}),querySelectorAll:()=>[anchor()]},
+    Date:{now:()=>now},innerHeight:800,getComputedStyle:()=>({visibility:'visible',display:'block'})});
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../js/ops.js'),'utf8'),ctx);
+  const first=await G.groups(10,true),second=await G.groups(10,true);
+  assert(second.rows.length>first.rows.length,'Load more advances beyond the per-call time budget');
+  assert.deepStrictEqual(Array.from(second.rows.slice(0,first.rows.length),r=>r[1]),Array.from(first.rows,r=>r[1]),'keep rows virtualized out of the DOM');
+})().catch(e=>{console.error(e);process.exitCode=1;});
+
+
+
 // Facebook can replace the composer node while mounting the audience picker.
 // Only the picker's explicit Done action may be pressed, never the Post button.
 (async () => {
