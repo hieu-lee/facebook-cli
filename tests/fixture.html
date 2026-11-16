@@ -91,7 +91,28 @@ if(location.pathname.includes('/messages')){
    const menu=document.createElement('div');menu.role='menu';const item=button('Leave group',()=>{menu.remove();const d=dialog();d.append('Leave this group?',button('Leave group',()=>{gs='out';save('gs-'+gid,gs);paint();d.remove()}),button('Cancel',()=>d.remove()))});item.role='menuitem';menu.append(item);document.body.append(menu);
   }
  };
- paint();head.append(jb);main.append(head);if(gs==='joined'){const compose=document.createElement('div');compose.append(button('Write something...',composer),button('Feeling/activity',()=>{},'Feeling/activity'),button('Check in',()=>{},'Check in'),button('Poll',()=>{},'Poll'));main.append(compose)}render();
+ paint();head.append(jb);main.append(head);if(gs==='joined'){const compose=document.createElement('div');compose.append(button('Write something...',composer),button('Feeling/activity',()=>{},'Feeling/activity'),button('Check in',()=>{},'Check in'),button('Poll',()=>{},'Poll'));main.append(compose);
+ const ib=button('Invite',()=>{const d=dialog();d.append('Invite friends to this group');const inp=document.createElement('input');inp.type='text';inp.setAttribute('aria-label','Search for friends by name');const res=document.createElement('div');const FRIENDS=['Alice Friend','Bob Friend','Tanya Warner','Tanya Warner'];let picked=0;const cnt=document.createElement('div');const paintCnt=()=>{cnt.textContent=picked+' friend'+(picked===1?'':'s')+' selected'};paintCnt();
+  const show=(q)=>{res.innerHTML='';FRIENDS.filter(f=>!q||f===q).forEach(f=>{const row=document.createElement('div');const s=document.createElement('span');s.textContent=f;row.append(s);row.onclick=()=>{picked++;paintCnt()};res.append(row)});};
+  show(null);inp.oninput=()=>show(inp.value);
+  d.append(inp,res,cnt,button('Cancel',()=>d.remove()),button('Send invites',()=>{save('giSent',picked);d.remove()}));document.body.append(d)});head.append(ib)}render();
+}else if(location.pathname==='/groups/create/'){
+ const field=document.createElement('input');field.type='text';field.setAttribute('aria-label','Group name');field.addEventListener('input',()=>save('gcName',field.value));
+ const privacy=document.createElement('label');privacy.role='combobox';privacy.setAttribute('aria-labelledby','gcPrivLab');privacy.innerText='Choose privacy';
+ const lab=document.createElement('div');lab.id='gcPrivLab';lab.textContent='Choose privacy';
+ let priv='public',hid=false;
+ const opt=(text,fn)=>{const row=document.createElement('div');const s=document.createElement('span');s.textContent=text;row.append(s);row.onclick=()=>fn();return row;};
+ let menu=null;
+ privacy.onclick=()=>{if(menu){menu.remove();menu=null;return}menu=document.createElement('div');
+  menu.append(opt('Public',()=>{priv='public';save('gcPrivacy',priv);menu.remove();menu=null}));
+  menu.append(opt('Private',()=>{priv='private';save('gcPrivacy',priv);menu.remove();menu=null;
+   const sub=document.createElement('div');
+   const openSub=()=>{sub.innerHTML='';sub.append(opt('Visible',()=>{hid=false;save('gcHidden',hid);openSub()}));sub.append(opt('Hidden',()=>{hid=true;save('gcHidden',hid)}));};
+   openSub();
+   main.append(sub)}));
+  main.append(menu)};
+ main.append(lab,field,privacy);
+ main.append(button('Create',()=>{const created={name:field.value,privacy:priv,hidden:hid};save('gcCreated',created);history.pushState(null,'','/groups/9001');render()}));
 }else if(location.pathname==='/marketplace/create/item'){
  const wrap=document.createElement('div');
  const title=document.createElement('input');title.setAttribute('aria-label','Title');

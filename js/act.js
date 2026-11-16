@@ -160,6 +160,107 @@ F.AUD=AUD;
   }
   return out||'unconfirmed';
  };
+ // ---- group creation (/groups/create/): name field, a privacy combobox
+ // (Public, or Private with Visible/Hidden under it), then Create. The
+ // request is only confirmed by landing on the new group's own page, so
+ // nothing is reported created on the form itself.
+ const GC_NAME=/^(Group name|Название группы|Grupi nimi|Nom du groupe|Nome do grupo|Gruppenname)$/i;
+ const GC_PRIVACY=/^(Choose privacy|Выберите конфиденциальность|Vali privaatsus|Loo konfidentsiaalsus|Choisissez la confidentialité|Escolhe a privacidade|Privatsphäre auswählen)$/i;
+ const GC_PUBLIC=/^(Public|Публичная|Avalik|Publique|Público)$/i;
+ const GC_PRIVATE=/^(Private|Приватная|Privaat|Privé|Privado|Privat)$/i;
+ const GC_HIDDEN=/^(Hidden|Скрытая|Peidetud|Masqué|Masqueado)$/i;
+ const GC_CREATE=/^(Create|Создать|Loo|Créer|Erstelle|Criar|Create group)$/i;
+ // The name field is the form's only text input (the friends search boxes are
+ // type=search); the privacy picker is a label element labelled "Choose
+ // privacy" via aria-labelledby, not aria-label.
+ const gcField=()=>[...document.querySelectorAll('input[type=text],[role=textbox]')].find(e=>F.visible(e)&&(GC_NAME.test(e.getAttribute('aria-label')||'')||e.tagName==='INPUT'));
+ const gcPrivacy=()=>[...document.querySelectorAll('[role=combobox]')].find(e=>F.visible(e)&&e.tagName==='LABEL'&&(GC_PRIVACY.test(e.getAttribute('aria-label')||'')||GC_PRIVACY.test((e.innerText||'').trim().split('\n')[0])||e.getAttribute('aria-labelledby')&&GC_PRIVACY.test(clean(document.getElementById(e.getAttribute('aria-labelledby'))?.innerText||''))));
+ F.groupCreate=async(name,privacy,hidden,dry)=>{
+  if(!/^\/(groups)\/create\/?$/.test(location.pathname))return 'not on the create form';
+  const field=await waitFor(gcField,12000);
+  if(!field)return 'no group name field on this page';
+  setVal(field,name);
+  const pick=await waitFor(gcPrivacy,12000);
+  if(!pick)return 'no privacy picker on this page';
+  pick.click();
+  // option rows are plain divs whose label is an exact text span; a click on
+  // the text element bubbles to the row, so the text element is the target
+  const option=async re=>{const el=await waitFor(()=>{const all=[...document.querySelectorAll('span,div')].filter(e=>e.innerText&&re.test(clean(e.innerText).split('\n')[0].trim())&&F.visible(e));return all.find(e=>e.children.length===0)||all.find(e=>e.children.length===1)||all[0];},8000);if(el)el.click();return !!el;};
+  const want=privacy==='private'?'Private':'Public';
+  const re=privacy==='private'?GC_PRIVATE:GC_PUBLIC;
+  if(!await option(re))return 'no '+want+' privacy option';
+  if(privacy==='private'){
+   // Private opens with Visible chosen; Hidden is one step deeper under it
+   const GC_VISIBLE=/^(Visible|Видимая|Nähtav|Visible|Visível)$/i;
+   if(!await option(GC_VISIBLE))return 'no Visible option under Private';
+   await sleep(300);
+   if(hidden&&!await option(GC_HIDDEN))return 'no Hidden option under Private';
+  }
+  if(dry)return 'form-filled';
+  await sleep(300);
+  const create=await waitFor(()=>[...main().querySelectorAll('[role=button]')].find(b=>GC_CREATE.test(clean(b.innerText||'').split('\n')[0].trim())&&F.visible(b)),8000);
+  if(!create)return 'no Create button on this page';
+  create.click();
+  const home=await waitFor(()=>{const p=location.pathname.replace(/\/$/,'');return p.startsWith('/groups/')&&!/^\/groups\/(create|joins|feed|discover|search|yourgroups)$/.test(p)?'https://www.facebook.com'+p:null;},90000,500);
+  return home?'created\t'+home:'unconfirmed';
+ };
+ // ---- group invitations: the Invite dialog suggests friends, searches by
+ // name, counts the selection, and only sends on Send invites. A name is
+ // selected only when exactly one visible row matches it exactly.
+ const GI_INVITE=/^(Invite|Пригласить|Kutsu|Inviter)$/i;
+ const GI_SEARCH=/^(Search for friends by name|Поиск друзей по имени|Otsi sõpru nime järgi|Rechercher des amis par nom)$/i;
+ const GI_SEND=/^(Send invites?|Отправить приглашения|Saada kutsed?|Envoyer les invitations?)$/i;
+ const GI_CANCEL=/^(Cancel|Отмена|Tühista|Annuler)$/i;
+ const giCount=d=>{const m=(d.innerText||'').match(/(\d+)\s+(friend|друг|друзей|sõber|sõpra|ami)/i);return m?parseInt(m[1],10):null;};
+ F.groupInvite=async(names,dry)=>{
+  const st=F.groupState();
+  if(st==='none')return 'no group membership button on this page';
+  if(st!=='joined')return 'not a member of this group; nothing was sent';
+  const open=await waitFor(()=>[...document.querySelectorAll('[role=main] [role=button]')].find(b=>GI_INVITE.test(clean(b.innerText||'').split('\n')[0].trim())&&F.visible(b)),10000);
+  if(!open)return 'no Invite button on this group page';
+  open.click();
+  const dialog=async()=>{const d=await waitFor(()=>{for(const x of dialogs()){if(x.querySelector('input[type=text]'))return x;}return null;},10000);return d||'no Invite dialog';};
+  let d=await dialog();if(d==='no Invite dialog')return d;
+  let picked=0;
+  for(const name of names){
+   const search=await waitFor(()=>d.querySelector('input[type=text]'),8000);
+   if(!search)return 'no friend search field; nothing was sent';
+   setVal(search,'');
+   setVal(search,name);
+   const row=await waitFor(()=>{const hits=[...d.querySelectorAll('div,span')].filter(e=>e.children.length===0&&clean(e.innerText||'')===clean(name)&&F.visible(e));return hits.length===1?hits[0]:null;},8000);
+   if(!row){
+    const hits=[...d.querySelectorAll('div,span')].filter(e=>e.children.length===0&&clean(e.innerText||'')===clean(name)&&F.visible(e));
+    const cancel=[...d.querySelectorAll('[role=button]')].find(b=>GI_CANCEL.test(clean(b.innerText||'')));
+    if(cancel)cancel.click();
+    return hits.length>1?`more than one "${name}" matches; nothing was sent`:`no friend named "${name}"; nothing was sent`;
+   }
+   row.click();
+   const want=picked+1;
+   const ok=await waitFor(()=>giCount(d)===want?true:null,8000);
+   if(!ok){
+    const cancel=[...d.querySelectorAll('[role=button]')].find(b=>GI_CANCEL.test(clean(b.innerText||'')));
+    if(cancel)cancel.click();
+    return `selection for "${name}" was not confirmed; nothing was sent`;
+   }
+   picked=want;
+   d=await dialog();
+   if(d==='no Invite dialog')return 'invite dialog closed unexpectedly; nothing was sent';
+  }
+  if(dry){
+   const cancel=[...d.querySelectorAll('[role=button]')].find(b=>GI_CANCEL.test(clean(b.innerText||'')));
+   if(cancel)cancel.click();
+   return 'selected\t'+picked;
+  }
+  const send=await waitFor(()=>[...d.querySelectorAll('[role=button]')].find(b=>GI_SEND.test(clean(b.innerText||'').split('\n')[0].trim())&&F.visible(b)),8000);
+  if(!send){
+   const cancel=[...d.querySelectorAll('[role=button]')].find(b=>GI_CANCEL.test(clean(b.innerText||'')));
+   if(cancel)cancel.click();
+   return 'no Send invites button; nothing was sent';
+  }
+  send.click();
+  const gone=await waitFor(()=>dialogs().every(x=>x!==d||!x.querySelector('input[type=text]'))?true:null,15000);
+  return gone?'invited\t'+picked:'send not confirmed; check the group before trying again';
+ };
  F.groupLeave=async()=>{
   const st=F.groupState();if(st!=='joined')return st;
   const b=groupButton();if(!b)return 'none';b.click();

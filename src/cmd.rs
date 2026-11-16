@@ -41,7 +41,10 @@ pub async fn run(d: &Daemon, argv: &[String], cwd: &str, out: &Out) -> Res<()> {
         } else {
             0
         };
-        let post = if argv.first().map(String::as_str) == Some("post") {
+        let post = if matches!(
+            argv.first().map(String::as_str),
+            Some("post" | "group-create")
+        ) {
             POST_EXTRA_SECS
         } else {
             0
@@ -130,6 +133,8 @@ async fn run_inner(d: &Daemon, argv: &[String], _cwd: &str, out: &Out) -> Res<()
         "group-join" => crate::act::group_join(d, &argv[1..], out).await,
         "group-apply" => crate::act::group_apply(d, &argv[1..], out).await,
         "group-leave" => crate::act::group_leave(d, &argv[1..], out).await,
+        "group-create" => crate::group_create::group_create(d, &argv[1..], out).await,
+        "group-invite" => crate::group_invite::group_invite(d, &argv[1..], out).await,
         "sell" => crate::act::sell(d, &argv[1..], _cwd, out).await,
         "listing-message" => crate::act::listing_message(d, &argv[1..], out).await,
         "follow" => crate::act::follow(d, &argv[1..], out).await,

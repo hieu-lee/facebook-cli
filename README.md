@@ -88,6 +88,8 @@ Run `fb help` for the exact list. `<who>` is `me`, a name, `@vanity`, an id, a U
 | `comment <post> <text>` | |
 | `react <post> [like\|love\|care\|haha\|wow\|sad\|angry\|none]` | idempotent |
 | `delete <post>` | your own posts |
+| `group-create <name> --privacy public\|private [--hidden] [--dry]` | verified `created<TAB>group-URL` receipt; never sends invitations |
+| `group-invite <group> <friend>... [--dry]` | exact-name search; verified `invited<TAB>count` receipt |
 
 | Other | |
 |---|---|
