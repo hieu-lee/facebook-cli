@@ -206,12 +206,13 @@
   return {rows:rows.map(r=>r.v),complete:!!listRoot&&listRoot.isConnected&&main()?.contains(listRoot)&&friendRoot()===listRoot&&hasCards&&!unparsed.size&&rows.length<n&&bottomSince!==null&&Date.now()-bottomSince>=2500&&!(listRoot||main())?.querySelector('[aria-busy="true"],[role=progressbar]')};
  };
  const linkShown=a=>{const s=getComputedStyle(a);return s.visibility==='visible'&&(a.getClientRects().length>0||s.display==='contents'&&!!clean(a.innerText))};
- F.groups=async(n)=>{
+ let groupScan;
+ F.groups=async(n,resume=false)=>{
   const ok=await waitFor(()=>document.querySelector('[role=main] a[href*="/groups/"]'),12000);
   if(!ok)return {rows:[],note:'no groups visible'};
   await sleep(600);
   /* details can render on a later scroll pass than the name, so merge every pass into one entry per group */
-  const acc=new Map();
+  const acc=resume?(groupScan??=new Map()):new Map();
   const scan=()=>{
    for(const a of document.querySelectorAll('[role=main] a[href]')){
     const p=groupPath(a.getAttribute('href'));if(!p||!linkShown(a))continue;

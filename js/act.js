@@ -5,24 +5,35 @@
  const dialogs=()=>[...document.querySelectorAll('[role=dialog]')];
  const btnText=b=>clean(b.innerText||'');
  // ---- post composer
- F.composeOpen=async()=>{
+ F.composeGroupCheck=group=>location.pathname.replace(/\/$/,'')===group?true:'the selected group is no longer open; nothing was posted';
+ F.composeOpen=async(group=null)=>{
+  window.__fbPostGroup=group;
+  if(group){const checked=F.composeGroupCheck(group);if(checked!==true)return checked;}
   const m=await waitFor(()=>main(),15000);
   if(!m)return 'no main';
   const trigger=await waitFor(()=>{
+   if(group)return [...m.querySelectorAll('[role=button]')].find(b=>{
+    if(!F.visible(b)||b.closest('[aria-hidden=true],[hidden],[inert]')||b.getAttribute('aria-label')||b.getAttribute('aria-haspopup')||btnText(b).length<=6)return false;
+    let card=b.parentElement;
+    while(card&&card.querySelectorAll('[role=button]').length<2)card=card.parentElement;
+    const buttons=card?[...card.querySelectorAll('[role=button]')]:[];
+    return buttons[0]===b&&buttons.length>=3&&buttons.length<=5&&buttons.slice(1).every(x=>x.getAttribute('aria-label'));
+   })||null;
    const regs=[...m.querySelectorAll('[role=region]')];
    for(const r of regs){const h=r.querySelector('h1,h2,h3,h4');if(!h)continue;const b=[...r.querySelectorAll('[role=button]')].find(b=>btnText(b).length>6);if(b)return b;}
    return [...m.querySelectorAll('[role=button]')].find(b=>/^(What.s on your mind|Bạn đang nghĩ gì|Exprimez-vous|Que voulez-vous dire)/i.test(btnText(b)))||null;
   },15000);
   if(!trigger)return 'no composer button';
   trigger.click();
-  const d=await waitFor(()=>dialogs().find(d=>d.querySelector('[role=textbox]')),10000);
+  const d=await waitFor(()=>dialogs().find(d=>(!group||F.visible(d)&&!d.closest('[aria-hidden=true],[hidden],[inert]'))&&d.querySelector('[role=textbox]')),10000);
   if(!d)return 'composer did not open';
+  if(group&&!await waitFor(()=>d.querySelector('input[type=file]'),3000))return 'opened the wrong dialog instead of the group post composer; nothing was posted';
   const tb=d.querySelector('[role=textbox]');tb.focus();
   return true;
  };
- F.composeDialog=()=>dialogs().find(d=>d.querySelector('[role=textbox]'));
+ F.composeDialog=()=>dialogs().find(d=>(!window.__fbPostGroup||F.visible(d)&&!d.closest('[aria-hidden=true],[hidden],[inert]'))&&d.querySelector('[role=textbox]'));
  F.composeFocus=()=>{const d=F.composeDialog();const tb=d&&d.querySelector('[role=textbox]');if(!tb)return false;tb.focus();return true;};
- F.composeCheck=text=>{const d=F.composeDialog();if(!d)return 'no composer; nothing was posted';const draft=clean(d.querySelector('[role=textbox]').innerText);return draft===clean(text)?true:!draft?'composer text is empty; nothing was posted':'composer text does not match the requested text; nothing was posted';};
+ F.composeCheck=text=>{if(window.__fbPostGroup){const checked=F.composeGroupCheck(window.__fbPostGroup);if(checked!==true)return checked;}const d=F.composeDialog();if(!d)return 'no composer; nothing was posted';const draft=clean(d.querySelector('[role=textbox]').innerText);return draft===clean(text)?true:!draft?'composer text is empty; nothing was posted':'composer text does not match the requested text; nothing was posted';};
  // the bytes arrive beforehand as base64 chunks (upBegin/upChunk in msg.js), one CDP call each
  F.composeAttach=async(name,mime)=>{
   const parts=window.__fbUp;window.__fbUp=null;
