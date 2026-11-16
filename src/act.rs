@@ -156,10 +156,19 @@ pub async fn post(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> 
             return Err(e);
         }
         let receipt = async {
-            ok(&b.eval(&t, &format!("window.__fb.composePress({})", json!(text))).await?)?;
-            let path = tokio::time::timeout(Duration::from_secs(15), created_post(&b, &t, &uid, &mut events)).await.map_err(|_| "creation response timed out".to_string())??;
+            let press = async { ok(&b.eval(&t, &format!("window.__fb.composePress({})", json!(text))).await?) };
+            // Read the network events while Post is pressed: composePress can wait 90 s for the
+            // dialog to close, and events left unread that long can overflow the queue. FB's
+            // composer may also take minutes to answer on a slow connection, and giving up
+            // early aborts the in-flight publish.
+            let create = async {
+                tokio::time::timeout(Duration::from_secs(90), created_post(&b, &t, &uid, &mut events))
+                    .await
+                    .map_err(|_| "creation response timed out".to_string())?
+            };
+            let ((), path) = tokio::try_join!(press, create)?;
             b.goto(&t, &format!("https://www.facebook.com{path}")).await?;
-            let readback = b.eval(&t, &format!("window.__fb.waitFor(()=>{{window.__fbFeed.expand();const r=window.__fb.postRoot();return r&&window.__fb.postText(r.querySelector('[data-ad-rendering-role=story_message]'))===window.__fb.clean({})}},15000)", json!(text))).await?;
+            let readback = b.eval(&t, &format!("window.__fb.waitFor(()=>{{window.__fbFeed.expand();const r=window.__fb.postRoot();const p=s=>s.replace(/\\n+/g,'\\n');return r&&p(window.__fb.postText(r.querySelector('[data-ad-rendering-role=story_message]')))===p(window.__fb.clean({}))}},15000)", json!(text))).await?;
             if readback != Value::Bool(true) { return Err("created post content could not be read back".into()); }
             Ok(path)
         }.await;
@@ -182,10 +191,12 @@ async fn created_post(
 ) -> Res<String> {
     let mut request: Option<String> = None;
     loop {
-        let event = events
-            .recv()
-            .await
-            .map_err(|_| "creation events lost".to_string())?;
+        let event = match events.recv().await {
+            Ok(event) => event,
+            // Other tabs' events overflowed the queue; the creation answer may still come.
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+            Err(_) => return Err("creation events lost".into()),
+        };
         if event.session.as_deref() != Some(&t.session) {
             continue;
         }
