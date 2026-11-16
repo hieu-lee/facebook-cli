@@ -168,7 +168,7 @@ pub async fn post(d: &Daemon, args: &[String], cwd: &str, out: &Out) -> Res<()> 
             };
             let ((), path) = tokio::try_join!(press, create)?;
             b.goto(&t, &format!("https://www.facebook.com{path}")).await?;
-            let readback = b.eval(&t, &format!("window.__fb.waitFor(()=>{{window.__fbFeed.expand();const r=window.__fb.postRoot();const p=s=>s.replace(/\\n+/g,'\\n');return r&&p(window.__fb.postText(r.querySelector('[data-ad-rendering-role=story_message]')))===p(window.__fb.clean({})}},15000)", json!(text))).await?;
+            let readback = b.eval(&t, &format!("window.__fb.waitFor(()=>{{window.__fbFeed.expand();const r=window.__fb.postRoot();const p=s=>s.replace(/\\n+/g,'\\n');return r&&p(window.__fb.postText(r.querySelector('[data-ad-rendering-role=story_message]')))===p(window.__fb.clean({}))}},15000)", json!(text))).await?;
             if readback != Value::Bool(true) { return Err("created post content could not be read back".into()); }
             Ok(path)
         }.await;
