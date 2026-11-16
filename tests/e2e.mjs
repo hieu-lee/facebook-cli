@@ -422,6 +422,53 @@ try{
   }
   await fb('page','posttext','close');
  });
+ await check('posts continuation retains overflow and isolates profile, format and missing state',async()=>{
+  await fb('page','posts-control','open','https://www.facebook.com/fixture');
+  const control=js=>fb('page','posts-control','eval',js);
+  const saved=JSON.parse(await control('JSON.stringify(JSON.parse(localStorage.posts||"null"))'));
+  const stories=Array.from({length:6},(_,i)=>({id:String(950+i),text:'Continuation '+i,aud:'me'}));
+  const setPosts=rows=>control(`localStorage.posts=JSON.stringify(${JSON.stringify(rows)});true`);
+  const rows=s=>s.split('\n').filter(Boolean);
+  const mutatePosts=async js=>{for(const sessionId of targetSessions.values()){
+   try{await call('Runtime.evaluate',{expression:`if(window.__fbPosts){${js}}`},sessionId)}catch(e){if(!(e instanceof TargetClosed))throw e}
+  }};
+  try{
+   await setPosts([stories[0],stories[0],...stories.slice(1)]);
+   const first=rows(await fb('posts','me','--continue','--urls','-n','2'));
+   assert.equal(first.length,2);
+   const changed=stories.map(p=>({...p,text:'Changed '+p.id}));
+   await setPosts(changed);
+   const more=rows(await fb('posts','me','--continue','--urls','-n','6'));
+   assert.deepEqual(more.slice(0,2),first,'continuation repeats the cumulative prefix');
+   assert.equal(more.length,6);
+   assert.equal(new Set(more.map(r=>r.split('\t')[0])).size,6,'duplicate URLs do not count twice');
+   for(const story of stories)assert(more.some(r=>r.endsWith(story.text)),'step overflow survives without navigation');
+   await mutatePosts(`document.querySelector('main').append(postNode({id:'999',text:'Later post'}))`);
+   const extended=rows(await fb('posts','me','--continue','--urls','-n','7'));
+   assert.deepEqual(extended.slice(0,6),more);
+   assert.equal(extended.length,7);
+   assert(extended[6].endsWith('Later post'),'newly loaded rows follow the saved prefix');
+   const full=await fb('posts','me','--continue','--urls','--full','-n','2');
+   assert(full.includes('Changed 950'),'format change starts from the top');
+   await setPosts(stories);
+   const other=await fb('posts','/fixture','--continue','--urls','--full','-n','2');
+   assert(other.includes('Continuation 0'),'another profile cannot reuse the prior snapshot');
+   await setPosts(changed);
+   const short=await fb('posts','/fixture','--continue','--full','-n','2');
+   assert.match(short,/^p[a-z0-9]+\t/,'URL format changes cannot return cached URL rows');
+   assert(short.includes('Changed 950'));
+   await fb('posts','/fixture','--continue','--urls','--full','-n','2');
+   for(const value of ['undefined','{lines:[1],seen_urls:[]}']){
+    await setPosts(stories.map(p=>({...p,text:'Reset '+value+' '+p.id})));
+    await mutatePosts(`window.__fbPosts=${value}`);
+    const reset=await fb('posts','/fixture','--continue','--urls','--full','-n','2');
+    assert(reset.includes('Reset '+value+' 950'),'missing or corrupt state forces navigation');
+    await setPosts(stories);
+   }
+   const fresh=await fb('posts','/fixture','--urls','--full','-n','2');
+   assert(fresh.includes('Continuation 0'),'omitting --continue always reloads');
+  }finally{await setPosts(saved);await fb('page','posts-control','close')}
+ });
  await check('feed and post lists expand full text before deduplication',async()=>{
   const saved=await evaluate('JSON.stringify(JSON.parse(localStorage.posts||"null"))');
   const stories=Array.from({length:3},(_,i)=>({id:String(900+i),text:('Full story '+i+' ').repeat(60)+'END '+i,aud:'me'}));

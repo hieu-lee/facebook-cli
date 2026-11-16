@@ -152,16 +152,39 @@ async fn resolve(b: &Browser, t: &Tab, p: &Value) -> Res<Option<Post>> {
     }))
 }
 
-/// One-shot scroll of any page whose posts use the feed layout (profiles, pages, groups).
-async fn collect(d: &Daemon, b: &Browser, t: &Tab, url: &str, args: &Args, out: &Out) -> Res<()> {
+/// Scroll a profile, page or group; keep all rows from each step for a later cumulative request.
+async fn collect(
+    d: &Daemon,
+    b: &Browser,
+    t: &Tab,
+    url: &str,
+    args: &Args,
+    out: &Out,
+    kind: &str,
+) -> Res<()> {
     let (n, urls) = (args.n.unwrap_or(10), args.flag("urls"));
-    b.goto(t, url).await?;
+    let cached = if args.flag("continue") && t.kind == kind {
+        serde_json::from_value::<(Vec<String>, std::collections::HashSet<String>)>(
+            b.eval(t, "window.__fbPosts").await?,
+        )
+        .ok()
+    } else {
+        None
+    };
+    let (mut lines, mut seen_urls) = match cached {
+        Some(snapshot) => snapshot,
+        None => {
+            b.goto(t, url).await?;
+            Default::default()
+        }
+    };
     wait_main(b, t).await?;
     let t0 = Instant::now();
-    let mut count = 0;
-    let mut seen_urls = std::collections::HashSet::new();
+    for line in lines.iter().take(n) {
+        out.line(line);
+    }
     let mut last = Instant::now();
-    while count < n
+    while lines.len() < n
         && last.elapsed() < Duration::from_secs(12)
         && t0.elapsed() < Duration::from_secs(90)
     {
@@ -169,29 +192,39 @@ async fn collect(d: &Daemon, b: &Browser, t: &Tab, url: &str, args: &Args, out: 
         if !posts.is_empty() {
             last = Instant::now();
         }
-        for p in posts
-            .into_iter()
-            .filter(|p| p.url.is_empty() || seen_urls.insert(p.url.clone()))
-            .take(n - count)
-        {
-            count += 1;
-            out.line(format_post(&d.refs, &p, urls));
+        for p in posts {
+            if p.url.is_empty() || seen_urls.insert(p.url.clone()) {
+                let line = format_post(&d.refs, &p, urls);
+                if lines.len() < n {
+                    out.line(&line);
+                }
+                lines.push(line);
+            }
         }
         b.eval(t, "window.__fbFeed.scroll()").await?;
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
+    b.eval(
+        t,
+        &format!(
+            "window.__fbPosts={};true",
+            serde_json::to_string(&(lines, seen_urls)).map_err(|e| e.to_string())?
+        ),
+    )
+    .await?;
     Ok(())
 }
 
 async fn collect_url(d: &Daemon, b: &Arc<Browser>, url: &str, args: &Args, out: &Out) -> Res<()> {
-    let t = b.acquire().await?;
-    let r = collect(d, b, &t, url, args, out).await;
-    b.release(t).await;
+    let kind = format!("posts:{url}:{}:{}", args.flag("full"), args.flag("urls"));
+    let t = b.acquire_kind(&kind).await?;
+    let r = collect(d, b, &t, url, args, out, &kind).await;
+    b.release_as(t, if r.is_ok() { &kind } else { "" }).await;
     r
 }
 
 pub async fn posts(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
-    let a = crate::ops::parse(args, &[], &["full", "urls"])?;
+    let a = crate::ops::parse(args, &[], &["full", "urls", "continue"])?;
     let b = d.browser(out).await?;
     let who = a.pos.first().map(String::as_str).unwrap_or("me");
     let p = crate::ops::profile_path(d, &b, who).await?;
