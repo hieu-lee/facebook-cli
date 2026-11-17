@@ -147,9 +147,16 @@
   const done=await waitFor(()=>{if(qDialog())return null;const s=F.groupState();return s==='joined'||s==='pending'?s:'submitted';},10000,250);
   return done||'unconfirmed';
  };
- const FRIEND_ADD=/^(Add friend|Thêm bạn bè|Ajouter un ami|Ajouter)$/i;
- const FRIEND_SENT=/^(Friend request sent|Cancel request|Đã gửi lời mời kết bạn|Demande envoyée|Annuler la demande)$/i;
- const FRIEND_IS=/^(Friends|Bạn bè|Amis)$/i;
+ // The label sets cover every language the composer POST list recognizes:
+ // with only English, Vietnamese and French, an existing friend's button
+ // on e.g. a Czech interface ("Přátelé") matched nothing and friend-add
+ // reported "no Add friend button on this profile" for a person already
+ // in the user's friend list. The Friends set mirrors the composer's
+ // audience Friends set, which already covers these languages.
+ const FRIEND_ADD=/^(Add friend|Thêm bạn bè|Ajouter un ami|Ajouter|Añadir a amigos|Agregar a amigos|Freund hinzufügen|Aggiungi agli amici|Vriend toevoegen|Dodaj do znajomych|Přidat si mezi přátele|Přidat přítele|Pridať si medzi priateľov|Pridať priateľa|Adicionar amigo|Adicionar aos amigos|Arkadaş ekle|Добавить в друзья|Додати в друзі|Lägg till vän|Legg til venn|Tilføj ven|Lisää kaveriksi|Lisää ystäväksi)$/i;
+ const FRIEND_SENT=/^(Friend request sent|Request sent|Cancel request|Đã gửi lời mời kết bạn|Demande envoyée|Annuler la demande|Solicitud enviada|Cancelar solicitud|Freundschaftsanfrage gesendet|Anfrage gesendet|Richiesta inviata|Annulla richiesta|Verzoek verzonden|Verzoek annuleren|Wysłano zaproszenie|Anuluj zaproszenie|Žádost odeslána|Žádost o přátelství odeslána|Zrušit žádost|Žiadosť odoslaná|Žiadosť o priateľstvo odoslaná|Zrušiť žiadosť|Solicitação enviada|Cancelar solicitação|İstek gönderildi|İsteği iptal et|Заявка отправлена|Отменить заявку|Запит надіслано|Скасувати запит|Förfrågan skickad|Avbryt förfrågan|Forespørsel sendt|Avbryt forespørsel|Anmodning sendt|Annuller anmodning|Pyyntö lähetetty|Peruuta pyyntö)$/i;
+ const FRIEND_IS=/^(Friends|Bạn bè|Amis|Amigos|Přátelé|Priatelia|Znajomi|Freunde|Amici|Vrienden|Arkadaşlar|Друзья|Друзі|Vänner|Venner|Kaverit)$/i;
+ F.FRIEND={add:FRIEND_ADD,sent:FRIEND_SENT,is:FRIEND_IS};
  // Only controls in the profile header (above the tab strip, outside feed/list/article/dialog regions) belong to the requested profile; recommendations and feed cards live elsewhere.
  const friendControls=()=>{const m=main();const tl=m&&m.querySelector('[role=tablist]');if(!tl)return [];return [...m.querySelectorAll('[role=button]')].filter(x=>!x.closest('[role=tablist],[role=feed],[role=list],[role=article],[role=dialog]')&&(tl.compareDocumentPosition(x)&Node.DOCUMENT_POSITION_PRECEDING)&&F.visible(x)).filter(x=>{const t=btnText(x).split('\n')[0].trim();return FRIEND_ADD.test(t)||FRIEND_SENT.test(t)||FRIEND_IS.test(t);});};
  const friendButton=()=>{const bs=friendControls();return bs.length===1?bs[0]:null;};
