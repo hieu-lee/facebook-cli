@@ -74,8 +74,9 @@
      const author=shortBadge(clean(profile.innerText));if(author&&!head.includes(author))head.push(author);
     }
     /* A shared post's original author heads its own header without the profile_name marker: a
-       linked heading (h3 on a profile, h4 in the feed) whose first link is the name. */
-    for(const h of u.querySelectorAll('h2,h3,h4')){
+       linked heading (h3 on a profile, h4 in the feed, h5 for a reel shared in the feed) whose
+       first link is the name. */
+    for(const h of u.querySelectorAll('h2,h3,h4,h5,h6')){
      const a=h.querySelector('a[href]');
      if(!a||!window.__fb.visible(h)||h.closest('blockquote,[data-ad-rendering-role=profile_name],[data-ad-rendering-role=story_message]')||h.querySelector('[data-ad-rendering-role=profile_name]')||(reactions&&!(h.compareDocumentPosition(reactions)&Node.DOCUMENT_POSITION_FOLLOWING)))continue;
      const author=shortBadge(clean(a.innerText));if(author&&!head.includes(author))head.push(author);

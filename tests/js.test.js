@@ -648,7 +648,7 @@ console.log('js removed-newest ok');
     const msgEl = { querySelectorAll: () => [] };
     const card = {
       querySelector: sel => (sel.includes('profile_name') ? profileEl : sel.includes('story_message') ? msgEl : null),
-      querySelectorAll: sel => (sel === 'a[href]' ? [timeAnchor] : sel.includes('profile_name') ? [profileEl] : sel === 'h2,h3,h4' ? [heading] : []),
+      querySelectorAll: sel => (sel === 'a[href]' ? [timeAnchor] : sel.includes('profile_name') ? [profileEl] : sel === 'h2,h3,h4,h5,h6' ? [heading] : []),
       getAttribute: () => null,
     };
     // its own context: the other async blocks still use the shared globals
@@ -681,7 +681,7 @@ console.log('js removed-newest ok');
     const msgEl = { querySelectorAll: () => [] };
     const card = {
       querySelector: sel => (sel.includes('profile_name') ? profileEl : sel.includes('story_message') ? msgEl : null),
-      querySelectorAll: sel => (sel === 'a[href]' ? [timeAnchor] : sel.includes('profile_name') ? [profileEl] : sel === 'h2,h3,h4' ? [heading] : []),
+      querySelectorAll: sel => (sel === 'a[href]' ? [timeAnchor] : sel.includes('profile_name') ? [profileEl] : sel === 'h2,h3,h4,h5,h6' ? [heading] : []),
       getAttribute: () => null,
     };
     const document = { createTreeWalker: () => ({ nextNode: () => null }), querySelectorAll: () => [], querySelector: () => null, getElementById: () => null };
