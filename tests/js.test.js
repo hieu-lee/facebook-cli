@@ -84,6 +84,17 @@ const F = global.window.__fb;
   buttons[0].onEvent = event => { if (event === 'click') present = false; };
   assert.strictEqual(await G.composePress(''), true, 'attachment-only posts remain supported');
   assert(buttons[0].events.includes('click'));
+  // Friend button labels beyond English/Vietnamese/French: with the old
+  // three-language lists an existing friend on a Czech interface read as
+  // "no Add friend button on this profile".
+  for (const t of ['Add friend', 'Přidat si mezi přátele', 'Pridať si medzi priateľov', 'Freund hinzufügen', 'Dodaj do znajomych'])
+    assert(G.FRIEND.add.test(t), 'FRIEND add should match: ' + t);
+  for (const t of ['Friends', 'Přátelé', 'Priatelia', 'Freunde', 'Znajomi', 'Друзья'])
+    assert(G.FRIEND.is.test(t), 'FRIEND is should match: ' + t);
+  for (const t of ['Friend request sent', 'Žádost odeslána', 'Žiadosť odoslaná', 'Anfrage gesendet'])
+    assert(G.FRIEND.sent.test(t), 'FRIEND sent should match: ' + t);
+  assert(!G.FRIEND.is.test('Friends except…'), 'FRIEND is must not match a different button');
+  console.log('js friend labels ok');
   console.log('js composer ok');
 })().catch(e => { console.error(e); process.exit(1); });
 
