@@ -833,7 +833,7 @@ console.log('js removed-newest ok');
   class Input {}
   Object.defineProperty(Input.prototype, 'value', { get() { return this._v || ''; }, set(v) { this._v = v; } });
 
-  function build() {
+  function build(adminView = false) {
     let sent = null, cancelled = 0, picked = 0, dialogOpen = false;
     const joinedBtn = el('div', 'Joined'); joinedBtn._attrs.role = 'button';
     const mainEl = el('main');
@@ -851,7 +851,7 @@ console.log('js removed-newest ok');
     const sendBtn = el('div', 'Send invites'); sendBtn._attrs.role = 'button';
     sendBtn._click = () => { sent = picked; dialogOpen = false; };
     inviteBtn._click = () => { dialogOpen = true; };
-    mainEl.querySelectorAll = () => [joinedBtn, inviteBtn];
+    mainEl.querySelectorAll = () => adminView ? [inviteBtn] : [joinedBtn, inviteBtn];
     const FRIENDS = ['Alice Friend', 'Bob Friend', 'Tanya Warner', 'Tanya Warner'];
     const show = q => { results = FRIENDS.filter(f => !q || f === q).map(f => row(f, () => { picked++; paintCount(); })); };
     show(null);
@@ -895,6 +895,12 @@ console.log('js removed-newest ok');
     const { G, state } = build();
     const r = await G.groupInvite(['Tanya Warner'], true);
     assert.match(r, /more than one/);
+    assert.strictEqual(state().sent, null);
+  }
+  { // admin view has no membership button, only Invite: dry run still selects
+    const { G, state } = build(true);
+    const r = await G.groupInvite(['Alice Friend'], true);
+    assert.strictEqual(r, 'selected\t1');
     assert.strictEqual(state().sent, null);
   }
   console.log('js groupInvite ok');

@@ -214,20 +214,28 @@ F.AUD=AUD;
  const giCount=d=>{const m=(d.innerText||'').match(/(\d+)\s+(friend|друг|друзей|sõber|sõpra|ami)/i);return m?parseInt(m[1],10):null;};
  F.groupInvite=async(names,dry)=>{
   const st=F.groupState();
-  if(st==='none')return 'no group membership button on this page';
-  if(st!=='joined')return 'not a member of this group; nothing was sent';
-  const open=await waitFor(()=>[...document.querySelectorAll('[role=main] [role=button]')].find(b=>GI_INVITE.test(clean(b.innerText||'').split('\n')[0].trim())&&F.visible(b)),10000);
+  // Admins see Invite/Share/More instead of a membership button, so their
+  // state reads 'none'; an Invite button on the page still proves membership.
+  const inviteBtn=()=>[...document.querySelectorAll('[role=main] [role=button]')].find(b=>GI_INVITE.test(clean(b.innerText||'').split('\n')[0].trim())&&F.visible(b));
+  if(st==='none'&&!inviteBtn())return 'no group membership button on this page';
+  if(st!=='joined'&&st!=='none')return 'not a member of this group; nothing was sent';
+  const open=await waitFor(()=>inviteBtn(),10000);
   if(!open)return 'no Invite button on this group page';
   open.click();
-  const dialog=async()=>{const d=await waitFor(()=>{for(const x of dialogs()){if(x.querySelector('input[type=text]'))return x;}return null;},10000);return d||'no Invite dialog';};
+  // The new invite dialog lists two cards (friends, email); the friends card
+  // opens a suggested list with no search field. Older pages show a search
+  // field instead, so selection below handles both.
+  const friendCard=()=>[...document.querySelectorAll('[role=button],[role=menuitem]')].find(b=>/Invite Facebook friends/i.test(b.innerText||'')&&F.visible(b));
+  const card=await waitFor(()=>friendCard(),5000);
+  if(card)card.click();
+  const hasInput=x=>!!x.querySelector('input[type=text]');
+  const dialog=async()=>{const d=await waitFor(()=>{for(const x of dialogs()){if(hasInput(x)||/friends selected/i.test(x.innerText||''))return x;}return null;},10000);return d||'no Invite dialog';};
   let d=await dialog();if(d==='no Invite dialog')return d;
   let picked=0;
   for(const name of names){
-   const search=await waitFor(()=>d.querySelector('input[type=text]'),8000);
-   if(!search)return 'no friend search field; nothing was sent';
-   setVal(search,'');
-   setVal(search,name);
-   const row=await waitFor(()=>{const hits=[...d.querySelectorAll('div,span')].filter(e=>e.children.length===0&&clean(e.innerText||'')===clean(name)&&F.visible(e));return hits.length===1?hits[0]:null;},8000);
+   const search=hasInput(d)?await waitFor(()=>d.querySelector('input[type=text]'),8000):null;
+   if(search){setVal(search,'');setVal(search,name);}
+   const row=await waitFor(()=>{const hits=[...d.querySelectorAll('div,span')].filter(e=>e.children.length===0&&clean(e.innerText||'')===clean(name)&&F.visible(e));return hits.length===1?hits[0]:null;},search?8000:5000);
    if(!row){
     const hits=[...d.querySelectorAll('div,span')].filter(e=>e.children.length===0&&clean(e.innerText||'')===clean(name)&&F.visible(e));
     const cancel=[...d.querySelectorAll('[role=button]')].find(b=>GI_CANCEL.test(clean(b.innerText||'')));
@@ -258,7 +266,7 @@ F.AUD=AUD;
    return 'no Send invites button; nothing was sent';
   }
   send.click();
-  const gone=await waitFor(()=>dialogs().every(x=>x!==d||!x.querySelector('input[type=text]'))?true:null,15000);
+  const gone=await waitFor(()=>dialogs().every(x=>x!==d)?true:null,15000);
   return gone?'invited\t'+picked:'send not confirmed; check the group before trying again';
  };
  F.groupLeave=async()=>{
