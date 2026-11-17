@@ -621,6 +621,7 @@ pub fn is_post_path(p: &str) -> bool {
             .is_some_and(|i| i + 1 < segs.len())
     };
     after("posts")
+        || after("permalink")
         || after("videos")
         || after("reel")
         || segs.iter().any(|s| s.starts_with("pfbid") && s.len() > 5)
@@ -716,6 +717,7 @@ mod tests {
         for ok in [
             "/page/posts/pfbid0X",
             "/groups/1/posts/2",
+            "/groups/1/permalink/2/",
             "/photo/?fbid=1&set=a.2",
             "/reel/123/",
             "/permalink.php?story_fbid=1&id=2",
