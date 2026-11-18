@@ -421,13 +421,15 @@ pub async fn comment(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
 /// What follows the reaction name in a long selected label ("… from
 /// <author>'s post", French "… de la publication de <author>"): the reaction
 /// name is what precedes it, so cut there before suffix matching.
-const TARGET_SEPARATORS: [&str; 5] = [
+const TARGET_SEPARATORS: [&str; 6] = [
     " from ",
     " de la publication",
     " à la publication",
     " sur la publication",
     // Russian: "Удалить Ух ты! из публикации <author>"
     " из публикации",
+    // Estonian: "Eemalda Ohhoo! kasutaja <author> postitusest"
+    " kasutaja ",
 ];
 
 /// Which picker entry the button label ("Remove Love") names: the longest picker label it ends with
@@ -472,7 +474,10 @@ fn reaction_neutral(label: &str, picker: &[String]) -> bool {
                 || l.starts_with(&format!("react with {first} to "))
                 || l.starts_with(&format!("réagir avec {first} à "))
                 // Russian: "Поставить Нравится публикации <author>"
-                || l.starts_with(&format!("поставить {first} ")))
+                || l.starts_with(&format!("поставить {first} "))
+                // Estonian: "Reageeri kasutaja <author> postitusele reaktsiooniga Meeldib"
+                || (l.starts_with("reageeri kasutaja ")
+                    && l.ends_with(&format!(" postitusele reaktsiooniga {first}"))))
     })
 }
 
@@ -932,6 +937,23 @@ mod tests {
         assert_eq!(current_reaction("Gỡ Thích", &picker), Some(0));
         assert_eq!(current_reaction("Gỡ Haha", &picker), Some(3));
         assert_eq!(current_reaction("Bày tỏ cảm xúc", &picker), None);
+    }
+
+    #[test]
+    fn estonian_reaction_labels() {
+        let picker: Vec<String> = ["meeldib", "armastan", "hoolin", "hahaa!", "ohhoo!", "kurb", "vihane"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let selected = "Eemalda Ohhoo! kasutaja Ласнамяэ / Lasnamäe postitusest";
+        assert!(!reaction_neutral(selected, &picker));
+        assert_eq!(current_reaction(selected, &picker), Some(4));
+        assert!(reaction_landed(selected, &picker, 4));
+        let neutral = "Reageeri kasutaja Ласнамяэ / Lasnamäe postitusele reaktsiooniga Meeldib";
+        assert!(reaction_neutral(neutral, &picker));
+        for idx in 0..picker.len() {
+            assert!(!reaction_landed(neutral, &picker, idx), "{idx}");
+        }
     }
 
     #[test]
