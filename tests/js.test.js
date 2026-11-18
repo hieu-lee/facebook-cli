@@ -46,6 +46,39 @@ const F = global.window.__fb;
   assert.deepStrictEqual(Array.from(second.rows.slice(0,first.rows.length),r=>r[1]),Array.from(first.rows,r=>r[1]),'keep rows virtualized out of the DOM');
 })().catch(e=>{console.error(e);process.exitCode=1;});
 
+// Anonymous group posts: the switch must really swap the author, and Post is never taken for the notice.
+(async () => {
+  const vm = require('vm');
+  const make = ({offered = true, notice = true, swaps = true} = {}) => {
+    const control = (text, extra = {}) => ({innerText: text, attrs: {role: 'button'}, clicks: 0, enabled: true, closest: () => null, querySelector: () => null, getAttribute(n) { return this.attrs[n] ?? null; }, click() { this.clicks++; this.onClick?.(); }, ...extra});
+    const box = {innerText: '', attrs: {'aria-label': 'Create a public post'}, getAttribute(n) { return this.attrs[n] ?? null; }};
+    const post = control('Post', {enabled: false});
+    const sw = control('', {attrs: {role: 'switch', 'aria-checked': 'false'}});
+    const buttons = [post];
+    const turnOn = () => { sw.attrs['aria-checked'] = 'true'; if (swaps) box.attrs['aria-label'] = 'Submit an anonymous post'; };
+    sw.onClick = () => { if (notice) { const accept = control('Got it'); accept.onClick = turnOn; buttons.push(accept); } else turnOn(); };
+    const dialog = {querySelector: s => s === '[role=textbox]' ? box : null, querySelectorAll: s => s === '[role=switch]' ? (offered ? [sw] : []) : s.includes('[role=button]') ? buttons : []};
+    const F = {clean: s => String(s || '').trim(), vtext: () => [], sleep: async () => {}, visible: () => true, enabled: b => b.enabled !== false,
+      waitFor: async (fn) => { for (let i = 0; i < 5; i++) { const v = await fn(); if (v) return v; } return null; }};
+    const ctx = vm.createContext({window: {__fb: F}, location: {pathname: '/groups/9'}, document: {documentElement: {lang: 'en'}, querySelector: () => null, querySelectorAll: s => s === '[role=dialog]' ? [dialog] : []}});
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/act.js'), 'utf8'), ctx);
+    return {F, ctx, sw, post, box};
+  };
+  const first = make();
+  assert.strictEqual(await first.F.composeAnonymous(), true, 'the first-use notice is accepted');
+  assert.strictEqual(first.post.clicks, 0, 'Post is never pressed while turning the switch on');
+  first.ctx.window.__fbPostGroup = null;
+  assert.match(first.F.composeCheck('words'), /text is empty/, 'the draft is still checked');
+  first.box.innerText = 'words';
+  assert.strictEqual(first.F.composeCheck('words'), true);
+  first.sw.attrs['aria-checked'] = 'false';
+  assert.match(first.F.composeCheck('words'), /no longer on; nothing was posted/, 'a switch turned off stops the post');
+  assert.strictEqual(await make({notice: false}).F.composeAnonymous(), true, 'no notice after the first use');
+  assert.match(await make({offered: false}).F.composeAnonymous(), /does not offer anonymous posts; nothing was posted/);
+  assert.match(await make({swaps: false}).F.composeAnonymous(), /did not turn on anonymous posting; nothing was posted/, 'a switch that keeps the named author is refused');
+  console.log('js anonymous group post ok');
+})().catch(e => { console.error(e); process.exit(1); });
+
 // Composer timeouts use an immediate waitFor so every failure state is checked without a minute's delay.
 (async () => {
   const vm = require('vm');
