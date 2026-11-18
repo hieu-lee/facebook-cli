@@ -87,6 +87,36 @@ const F = global.window.__fb;
   console.log('js composer ok');
 })().catch(e => { console.error(e); process.exit(1); });
 
+// composeOpen on a Czech profile page: the prompt is named in Czech, and the
+// first headed region is the profile header, whose first long button opens a
+// dialog titled with the owner's name — never the composer. The named prompt
+// must win over the region fallback.
+(async () => {
+  const vm = require('vm');
+  async function open(prompt) {
+    let opened = false, headerClicked = false;
+    const trigger = { innerText: prompt, getAttribute: () => null, click() { opened = true; } };
+    const headerBtn = { innerText: 'Add to story and more', getAttribute: () => null, click() { headerClicked = true; } };
+    const header = { querySelector: () => ({}), querySelectorAll: () => [headerBtn] };
+    const main = { querySelectorAll: s => s === '[role=button]' ? [trigger] : s === '[role=region]' ? [header] : [] };
+    const textbox = { focus() {} };
+    const dialog = { querySelector: s => s === '[role=textbox]' ? textbox : null };
+    const G = { clean: s => String(s || '').trim(), vtext: () => [], visible: () => true,
+      sleep: async () => {},
+      waitFor: async f => { for (let i = 0; i < 60; i++) { const v = await f(); if (v) return v; } return null; } };
+    const ctx = vm.createContext({ window: { __fb: G }, location: { pathname: '/' },
+      document: { querySelector: s => s === '[role=main]' ? main : null,
+        querySelectorAll: s => s === '[role=dialog]' ? (opened ? [dialog] : []) : [] } });
+    vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/act.js'), 'utf8'), ctx);
+    const result = await G.composeOpen();
+    assert.strictEqual(headerClicked, false, 'the profile header button must not be clicked');
+    return result;
+  }
+  assert.strictEqual(await open('Co máte na mysli, Michale?'), true, 'Czech prompt opens the composer');
+  assert.strictEqual(await open('Čo máte na mysli, Michal?'), true, 'Slovak prompt opens the composer');
+  console.log('js composeOpen Czech profile ok');
+})().catch(e => { console.error(e); process.exit(1); });
+
 for (const t of ['3 giờ trước', '22 phút', 'Hôm qua lúc 14:00', '17 Tháng 6', '4 tháng 10 lúc 22:05', '2h', '5 minutes ago', 'Just now', 'il y a 3 jours', 'Oct 4 at 10:05 PM'])
   assert(F.TIME.test(t), 'TIME should match: ' + t);
 for (const t of ['Thích', 'Hieu Lee', '22 bình luận', 'Trả lời'])
