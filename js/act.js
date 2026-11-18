@@ -9,9 +9,16 @@
   const m=await waitFor(()=>main(),15000);
   if(!m)return 'no main';
   const trigger=await waitFor(()=>{
+   // The named prompt first: on a profile page the first headed region is
+   // the profile header (its heading is the owner's name), so the region
+   // fallback below can click a header button and open a dialog titled
+   // with the owner's name instead of the composer. The prompt list covers
+   // Czech and Slovak, whose prompts matched nothing before.
+   const named=[...m.querySelectorAll('[role=button]')].find(b=>/^(What.s on your mind|Bạn đang nghĩ gì|Exprimez-vous|Que voulez-vous dire|Что у вас нового|О чём вы думаете|Що у вас нового|Mida sa mõtled|Co máte na mysli|Čo máte na mysli|Was machst du gerade|Qué estás pensando|Que estás pensando|A cosa stai pensando|Co słychać|No que você está pensando|Em que você está pensando|Ne düşünüyorsun|Vad tänker du på|Hva tenker du på|Hvad tænker du på|Mitä mietit|Wat ben je aan het doen)/i.test(btnText(b)));
+   if(named)return named;
    const regs=[...m.querySelectorAll('[role=region]')];
    for(const r of regs){const h=r.querySelector('h1,h2,h3,h4');if(!h)continue;const b=[...r.querySelectorAll('[role=button]')].find(b=>btnText(b).length>6);if(b)return b;}
-   return [...m.querySelectorAll('[role=button]')].find(b=>/^(What.s on your mind|Bạn đang nghĩ gì|Exprimez-vous|Que voulez-vous dire)/i.test(btnText(b)))||null;
+   return null;
   },15000);
   if(!trigger)return 'no composer button';
   trigger.click();
