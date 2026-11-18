@@ -418,16 +418,67 @@ pub async fn comment(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     r
 }
 
+/// What follows the reaction name in a long selected label ("… from
+/// <author>'s post", French "… de la publication de <author>"): the reaction
+/// name is what precedes it, so cut there before suffix matching.
+const TARGET_SEPARATORS: [&str; 6] = [
+    " from ",
+    " de la publication",
+    " à la publication",
+    " sur la publication",
+    // Russian: "Удалить Ух ты! из публикации <author>"
+    " из публикации",
+    // Estonian: "Eemalda Ohhoo! kasutaja <author> postitusest"
+    " kasutaja ",
+];
+
 /// Which picker entry the button label ("Remove Love") names: the longest picker label it ends with
 /// (in Vietnamese "Yêu thích" also ends with "thích", so the longest match wins).
+/// A picker entry's reaction name. A selected Like turns its entry into a removal
+/// in some languages (Russian: "Удалить реакцию «Нравится»"), which must still
+/// name Like for the label checks below.
+fn picker_name(label: &str) -> String {
+    let l = label.to_lowercase();
+    let l = l.strip_prefix("удалить реакцию ").unwrap_or(&l);
+    l.trim_matches(|c| matches!(c, '"' | '«' | '»' | '“' | '”' | '„'))
+        .to_owned()
+}
+
 fn current_reaction(label: &str, picker: &[String]) -> Option<usize> {
     let l = label.to_lowercase();
+    let head = TARGET_SEPARATORS
+        .iter()
+        .filter_map(|separator| l.split_once(separator).map(|(head, _)| head))
+        .min_by_key(|head| head.len())
+        .unwrap_or(l.as_str());
     picker
         .iter()
         .enumerate()
-        .filter(|(_, p)| !p.is_empty() && l.ends_with(p.as_str()))
+        .filter(|(_, p)| !p.is_empty() && head.ends_with(p.as_str()))
         .max_by_key(|(_, p)| p.len())
         .map(|(i, _)| i)
+}
+
+/// The button in its neutral (nothing selected) state, per language: the
+/// plain first label, the count form ("J'aime, 28 réactions"), or the long
+/// invitation form ("Réagir avec J'aime à la publication de …"). The long
+/// form names the first reaction, so it suffix-matches index 0 although
+/// nothing is selected.
+fn reaction_neutral(label: &str, picker: &[String]) -> bool {
+    let l = label.to_lowercase();
+    picker.first().is_some_and(|first| {
+        !first.is_empty()
+            && (l == *first
+                || l.starts_with(&format!("{first} "))
+                || l.starts_with(&format!("{first},"))
+                || l.starts_with(&format!("react with {first} to "))
+                || l.starts_with(&format!("réagir avec {first} à "))
+                // Russian: "Поставить Нравится публикации <author>"
+                || l.starts_with(&format!("поставить {first} "))
+                // Estonian: "Reageeri kasutaja <author> postitusele reaktsiooniga Meeldib"
+                || (l.starts_with("reageeri kasutaja ")
+                    && l.ends_with(&format!(" postitusele reaktsiooniga {first}"))))
+    })
 }
 
 /// A reaction has landed only when the button shows a SELECTED state naming
@@ -438,6 +489,7 @@ fn reaction_landed(label: &str, picker: &[String], idx: usize) -> bool {
     picker
         .first()
         .is_some_and(|first| !first.is_empty() && label != first)
+        && !reaction_neutral(label, picker)
         && current_reaction(label, picker) == Some(idx)
 }
 
@@ -756,14 +808,15 @@ pub async fn react(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
         let labels: Vec<String> = match pick["labels"].as_array() {
             Some(a) if !a.is_empty() => a
                 .iter()
-                .map(|l| l.as_str().unwrap_or("").to_lowercase())
+                .map(|l| picker_name(l.as_str().unwrap_or("")))
                 .collect(),
             _ => return Err("reaction picker did not open (nothing was changed)".into()),
         };
         let label = label0.clone();
         let liked = labels
             .first()
-            .is_some_and(|first| !first.is_empty() && label != *first);
+            .is_some_and(|first| !first.is_empty() && label != *first)
+            && !reaction_neutral(&label, &labels);
         let current = if liked {
             current_reaction(&label, &labels)
         } else {
@@ -887,6 +940,23 @@ mod tests {
     }
 
     #[test]
+    fn estonian_reaction_labels() {
+        let picker: Vec<String> = ["meeldib", "armastan", "hoolin", "hahaa!", "ohhoo!", "kurb", "vihane"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let selected = "Eemalda Ohhoo! kasutaja Ласнамяэ / Lasnamäe postitusest";
+        assert!(!reaction_neutral(selected, &picker));
+        assert_eq!(current_reaction(selected, &picker), Some(4));
+        assert!(reaction_landed(selected, &picker, 4));
+        let neutral = "Reageeri kasutaja Ласнамяэ / Lasnamäe postitusele reaktsiooniga Meeldib";
+        assert!(reaction_neutral(neutral, &picker));
+        for idx in 0..picker.len() {
+            assert!(!reaction_landed(neutral, &picker, idx), "{idx}");
+        }
+    }
+
+    #[test]
     fn reaction_landed_requires_a_selected_state() {
         let picker: Vec<String> = ["like", "love", "haha"]
             .iter()
@@ -901,5 +971,87 @@ mod tests {
         assert!(reaction_landed("remove love", &picker, 1));
         assert!(!reaction_landed("remove love", &picker, 0));
         assert!(!reaction_landed("remove haha", &picker, 1));
+    }
+
+    #[test]
+    fn russian_reaction_labels() {
+        // Labels seen on a Russian Facebook account (2026-11-14).
+        let picker: Vec<String> = [
+            "нравится",
+            "супер",
+            "мы вместе",
+            "ха-ха",
+            "ух ты!",
+            "сочувствую",
+            "возмутительно",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(picker_name("Удалить реакцию \"Нравится\""), "нравится");
+        assert_eq!(picker_name("Удалить реакцию «Нравится»"), "нравится");
+        assert_eq!(picker_name("Ух ты!"), "ух ты!");
+        let neutral = "Поставить Нравится публикации Анна Петрова";
+        assert!(reaction_neutral(neutral, &picker));
+        assert!(!reaction_landed(neutral, &picker, 0));
+        for (i, name) in [
+            "Нравится",
+            "Супер",
+            "Мы вместе",
+            "Ха-ха",
+            "Ух ты!",
+            "Сочувствую",
+            "Возмутительно",
+        ]
+        .iter()
+        .enumerate()
+        {
+            let label = format!("Удалить {name} из публикации Иван Иванов");
+            assert!(!reaction_neutral(&label, &picker), "{label}");
+            assert!(reaction_landed(&label, &picker, i), "{label}");
+        }
+    }
+
+    #[test]
+    fn french_reaction_labels() {
+        // Labels seen on a French Facebook account; the picker gives the names.
+        let picker: Vec<String> = [
+            "j’aime",
+            "j’adore",
+            "solidaire",
+            "haha",
+            "wouah",
+            "triste",
+            "grrr",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        // The long neutral form names the first reaction but selects nothing.
+        assert!(reaction_neutral(
+            "réagir avec j’aime à la publication de logic nation",
+            &picker
+        ));
+        assert!(reaction_neutral("j’aime, 28 réactions", &picker));
+        assert!(!reaction_landed(
+            "réagir avec j’aime à la publication de logic nation",
+            &picker,
+            0
+        ));
+        // The long selected form: the reaction precedes the target separator.
+        assert!(!reaction_neutral(
+            "retirer j’adore de la publication de logic nation",
+            &picker
+        ));
+        assert_eq!(
+            current_reaction("retirer j’adore de la publication de logic nation", &picker),
+            Some(1)
+        );
+        assert_eq!(current_reaction("supprimer haha", &picker), Some(3));
+        assert!(reaction_landed(
+            "retirer j’aime de la publication de x",
+            &picker,
+            0
+        ));
     }
 }
