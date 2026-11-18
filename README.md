@@ -88,7 +88,7 @@ Run `fb help` for the exact list. `<who>` is `me`, a name, `@vanity`, an id, a U
 
 | Act | |
 |---|---|
-| `post <text> [--img file]... [--video file]... [--to public\|friends\|me]` | verified `posted<TAB>ref<TAB>path` receipt; directly usable by `view`/`delete` |
+| `post <text> [--img file]... [--video file]... [--to public\|friends\|me \| --group URL [--anonymous]]` | post to your profile or one group; verified `posted<TAB>ref<TAB>path` receipt; directly usable by `view`/`delete` |
 | `comment <post> <text>` | |
 | `react <post> [like\|love\|care\|haha\|wow\|sad\|angry\|none]` | idempotent |
 | `delete <post>` | your own posts |
