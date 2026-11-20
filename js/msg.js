@@ -84,6 +84,49 @@
   for(let j=first-1;j>=0;j--)if(out[j].d){if(j!==first)res.push(out[j]);break;}
   return {msgs:res.reverse()};
  };
+ // Delete one chat from the list: same row menu as archive, then
+ // Facebook's own confirmation dialog, which this command presses —
+ // callers confirm with the user before invoking it. The proof is the
+ // row leaving the inbox list, same as archive.
+ F.deleteChat=async(path,dry)=>{
+  await dismissRestore();
+  const g=await waitFor(()=>document.querySelector('[role=grid]'),10000);
+  if(!g)return 'no chat list';
+  const norm=p=>(p||'').replace(/\/$/,'');
+  const rowOf=()=>[...g.querySelectorAll('[role=row]')].find(r=>{const a=r.querySelector('a[href*="/t/"]');return a&&norm(a.getAttribute('href'))===norm(path)});
+  let row=rowOf();
+  if(!row){
+   const sc=scroller(g)||g.parentElement;
+   const t0=Date.now();
+   while(!row&&sc&&Date.now()-t0<20000){
+    if(sc.scrollTop+sc.clientHeight>=sc.scrollHeight-2)break;
+    sc.scrollTop=Math.min(sc.scrollTop+Math.max(sc.clientHeight*0.7,100),sc.scrollHeight);
+    await sleep(300);
+    row=rowOf();
+   }
+  }
+  if(!row)return 'chat is not in the inbox list';
+  row.scrollIntoView({block:'center'});
+  await sleep(300);
+  const btn=row.querySelector('[aria-haspopup="menu"],[aria-haspopup="true"]');
+  if(!btn)return 'chat row has no actions menu';
+  F.press(btn);
+  const DELETE=/^(Delete|Supprimer|Xóa|Удалить|Smazat|Vymazať|Kustuta)/i;
+  const firstLine=s=>clean(s||'').split('\n')[0].trim();
+  const item=await waitFor(()=>[...document.querySelectorAll('[role=menuitem]')].find(i=>F.visible(i)&&DELETE.test(firstLine(i.innerText))),5000);
+  if(!item){
+   const menu=[...document.querySelectorAll('[role=menuitem]')].map(i=>clean(i.innerText));
+   document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+   return 'delete is not offered for this chat; menu: '+JSON.stringify(menu);
+  }
+  if(dry)return {dry:true};
+  F.press(item);
+  // Facebook asks once more in a dialog: press its Delete button
+  const dlgBtn=await waitFor(()=>{const d=dialogs()[0];if(!d)return null;return [...d.querySelectorAll('[role=button]')].find(b=>DELETE.test(firstLine(b.innerText)))||null},2500);
+  if(dlgBtn)F.press(dlgBtn);
+  const gone=await waitFor(()=>!rowOf(),8000,200);
+  return gone?{ok:true}:'delete was pressed but the chat is still in the inbox list';
+ };
  F.chats=async n=>{
   await dismissRestore();
   const g=await waitFor(async()=>{await dismissRestore();const g=document.querySelector('[role=grid]');return g&&g.querySelector('[role=row] a[href*="/t/"]')&&g},15000);
