@@ -101,18 +101,46 @@ fn parse_chats(json: &str) -> Res<(Vec<Chat>, bool)> {
     Ok((list, page.complete))
 }
 
+/// Scan the chat list grid on the tab's current page (inbox or archived view alike).
 /// `complete`: the scan actually reached the end of the chat list (not just a time budget or a
 /// stall that gave up partway). Only then may "fewer rows than asked for" be read as "that is everything".
+async fn scan_open_list(b: &Browser, t: &Tab, n: usize) -> Res<(Vec<Chat>, bool)> {
+    let v = b
+        .eval(t, &format!("window.__fb.chats({n}).then(JSON.stringify)"))
+        .await?;
+    parse_chats(v.as_str().unwrap_or("{}"))
+}
+
 async fn fetch_chats(b: &std::sync::Arc<Browser>, n: usize) -> Res<(Vec<Chat>, bool)> {
     let t = b.acquire_kind("messages").await?;
     let r = async {
         if t.kind != "messages" {
             b.goto(&t, "https://www.facebook.com/messages/t/").await?;
         }
-        let v = b
-            .eval(&t, &format!("window.__fb.chats({n}).then(JSON.stringify)"))
+        scan_open_list(b, &t, n).await
+    }
+    .await;
+    b.release_as(t, if r.is_ok() { "messages" } else { "" })
+        .await;
+    r
+}
+
+/// Archived chats live on their own view, outside the inbox list and its cache.
+/// Arrival must be proven: if Facebook redirects back to the inbox, the inbox
+/// grid must never be read as "the archived list".
+async fn fetch_archived_chats(b: &std::sync::Arc<Browser>, n: usize) -> Res<(Vec<Chat>, bool)> {
+    let t = b.acquire_kind("messages").await?;
+    let r = async {
+        b.goto(&t, "https://www.facebook.com/messages/archived/")
             .await?;
-        parse_chats(v.as_str().unwrap_or("{}"))
+        let at = b.eval(&t, "location.pathname").await?;
+        let at = at.as_str().unwrap_or("");
+        if !at.contains("archived") {
+            return Err(format!(
+                "Facebook did not open the archived chats view (landed on {at}); the archived list could not be read"
+            ));
+        }
+        scan_open_list(b, &t, n).await
     }
     .await;
     b.release_as(t, if r.is_ok() { "messages" } else { "" })
@@ -270,7 +298,7 @@ pub fn trunc(s: &str, n: usize) -> String {
 }
 
 pub async fn chats(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
-    let a = crate::ops::parse(args, &[], &["unread"])?;
+    let a = crate::ops::parse(args, &[], &["unread", "archived"])?;
     let n = a.n.unwrap_or(20);
     let only_unread = a.flag("unread");
     let q = (!a.pos.is_empty()).then(|| a.pos.join(" ").to_lowercase());
@@ -280,7 +308,13 @@ pub async fn chats(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     } else {
         n.max(30)
     };
-    let (list, _complete) = chat_list(d, &b, want, Duration::ZERO).await?;
+    // archived chats are not in the inbox cache: always a fresh scan of the archived view
+    let (list, _complete) = if a.flag("archived") {
+        fetch_archived_chats(&b, want).await?
+    } else {
+        let (list, complete) = chat_list(d, &b, want, Duration::ZERO).await?;
+        ((*list).clone(), complete)
+    };
     let mut shown = 0;
     for c in list.iter() {
         if only_unread && !c.unread {
