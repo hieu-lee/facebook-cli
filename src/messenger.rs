@@ -632,6 +632,61 @@ pub async fn read(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     r
 }
 
+/// Members of a group chat, read from the open thread's details panel.
+/// Output mirrors `members` for groups: name, ref, role (admin or empty).
+pub async fn chatmembers(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
+    let a = crate::ops::parse(args, &[], &[])?;
+    let n = a.n.unwrap_or(200);
+    let spec = a.pos.join(" ");
+    if spec.is_empty() {
+        return Err("usage: chatmembers <chat> [-n 200]".into());
+    }
+    let b = d.browser(out).await?;
+    let gen0 = b.generation.load(std::sync::atomic::Ordering::SeqCst);
+    let target = resolve(d, &b, &spec).await?;
+    let path = target.path.clone();
+    let t = b.acquire_kind("messages").await?;
+    if b.generation.load(std::sync::atomic::Ordering::SeqCst) != gen0 {
+        return Err(
+            "the account changed while this command waited; nothing was done, try again".into(),
+        );
+    }
+    let r = async {
+        open_thread(&b, &t, &path).await?;
+        let v = b
+            .eval(&t, &format!("window.__fb.chatMembers({n}).then(JSON.stringify)"))
+            .await?;
+        let v: Value =
+            serde_json::from_str(v.as_str().unwrap_or("{}")).map_err(|e| e.to_string())?;
+        if let Some(e) = v["err"].as_str() {
+            return Err(e.to_string());
+        }
+        for m in v["members"].as_array().cloned().unwrap_or_default() {
+            let name = m["name"].as_str().unwrap_or("");
+            let href = m["ref"].as_str().unwrap_or("");
+            let p = href
+                .strip_prefix("https://www.facebook.com")
+                .unwrap_or(href);
+            let ref_ = if p.starts_with('/') {
+                d.refs.put('u', p)
+            } else {
+                p.to_owned()
+            };
+            out.line(format!(
+                "{}\t{}\t{}",
+                name.replace(['\t', '\n'], " "),
+                ref_,
+                m["role"].as_str().unwrap_or("")
+            ));
+        }
+        Ok(())
+    }
+    .await;
+    b.release_as(t, if r.is_ok() { "messages" } else { "" })
+        .await;
+    r
+}
+
 /// Insert the whole draft in one browser operation; no per-line focus races or round trips.
 async fn type_text(b: &std::sync::Arc<Browser>, t: &Tab, text: &str) -> Res<()> {
     if b.eval(t, "window.__fb.focusComposer()").await? != Value::Bool(true) {

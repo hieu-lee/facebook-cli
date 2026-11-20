@@ -84,6 +84,60 @@
   for(let j=first-1;j>=0;j--)if(out[j].d){if(j!==first)res.push(out[j]);break;}
   return {msgs:res.reverse()};
  };
+ // Members of the open group chat, from its details panel. One-to-one
+ // chats have no members section: that comes back as an error saying so.
+ // Rows are collected while scrolling the panel, like the chat list scan:
+ // the panel virtualizes long member lists the same way.
+ F.chatMembers=async n=>{
+  const MEMBERS=/^(Members|Membres|Thành viên|Участники|Члены|Členové|Členovia|Liikmed)$/i;
+  const ADMIN=/admin|administrateur|quản trị|админ|správc|administrátor/i;
+  const heading=()=>[...document.querySelectorAll('h1,h2,h3,h4,[role=heading]')].find(e=>MEMBERS.test(clean(e.innerText||'').trim()));
+  let head=heading();
+  if(!head){
+   // open the details panel from the thread header's information button
+   const btn=[...document.querySelectorAll('[role=button]')].find(b=>F.visible(b)&&/information|details|détails|informations/i.test(b.getAttribute('aria-label')||''));
+   if(btn){F.press(btn);head=await waitFor(heading,6000);}
+  }
+  if(!head){
+   const saw=[...document.querySelectorAll('h1,h2,h3,h4,[role=heading]')].map(e=>clean(e.innerText||'').trim()).filter(Boolean);
+   return {err:'no members section in this chat (one-to-one chats have none); headings: '+JSON.stringify(saw.slice(0,12))};
+  }
+  // a collapsed section is its own toggle: open it and wait for rows
+  const region=()=>{let p=head;while(p&&p!==document.body){if(p.querySelector('a[href],[role=listitem]'))return p;p=p.parentElement;}return document.body;};
+  if(!region().querySelector('a[href*="facebook.com/"],a[href^="/"],[role=listitem]')){
+   const toggle=head.closest('[role=button]')||head;
+   F.press(toggle);
+   await sleep(800);
+  }
+  const sc=scroller(head)||region();
+  if(sc&&sc.scrollTop!==undefined)sc.scrollTop=0;
+  const seen=new Map();
+  const collect=()=>{
+   const root=region();
+   for(const a of root.querySelectorAll('a[href]')){
+    const href=a.getAttribute('href')||'';
+    if(!/\/t\/|messages/.test(href)&&!/profile\.php|people\/|\.com\/[^/?#]+$/.test(href))continue;
+    const lines=clean(a.innerText||'').split('\n').map(s=>s.trim()).filter(Boolean);
+    const name=lines[0]||clean(a.getAttribute('aria-label')||'').trim();
+    if(!name||MEMBERS.test(name))continue;
+    const row=a.closest('[role=listitem],li,div');
+    const role=lines.slice(1).find(l=>ADMIN.test(l))||(row&&ADMIN.test(clean(row.innerText||''))?'admin':'');
+    if(!seen.has(name))seen.set(name,{name,ref:href,role:role?'admin':''});
+   }
+  };
+  const t0=Date.now();
+  let stall=0,prev=-1;
+  while(Date.now()-t0<20000&&seen.size<n){
+   collect();
+   if(!sc||sc.scrollTop+sc.clientHeight>=sc.scrollHeight-2)break;
+   if(seen.size===prev){if(++stall>=8)break;}else stall=0;
+   prev=seen.size;
+   sc.scrollTop=Math.min(sc.scrollTop+Math.max(sc.clientHeight*0.7,100),sc.scrollHeight);
+   await sleep(300);
+  }
+  collect();
+  return {members:[...seen.values()].slice(0,n)};
+ };
  F.chats=async n=>{
   await dismissRestore();
   const g=await waitFor(async()=>{await dismissRestore();const g=document.querySelector('[role=grid]');return g&&g.querySelector('[role=row] a[href*="/t/"]')&&g},15000);
