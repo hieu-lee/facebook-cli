@@ -60,12 +60,15 @@
   await waitFor(labelled,6000,100);
   const msgCount=l=>l.filter(m=>!m.d).length;
   let acc=snapshot(log);
-  let prev=-1,stable=0;
+  let prev=-1,stable=0,complete=false;
+  // a full-history read (--all passes a huge n) needs far more scroll rounds
+  // than a page; the round cap scales with what was asked for
+  const maxRounds=n>500?600:60;
   // scroll up until enough history is mounted; rows that get unmounted on the way stay in `acc`
-  for(let i=0;i<60&&msgCount(acc)<n+3;i++){
+  for(let i=0;i<maxRounds&&msgCount(acc)<n+3;i++){
    await dismissRestore();
    const have=msgCount(acc);
-   if(have===prev){if(++stable>=4)break;}else stable=0; // ~1s without growth = start of the conversation
+   if(have===prev){if(++stable>=4){complete=true;break;}}else stable=0; // ~1s without growth = start of the conversation
    prev=have;
    if(sc)sc.scrollTop=0;else window.scrollTo(0,0);
    await sleep(250);
@@ -82,7 +85,7 @@
   for(let i=out.length-1;i>=0;i--){first=i;res.push(out[i]);if(!out[i].d&&++msgs>=n)break;}
   // keep the nearest date header above the oldest returned message
   for(let j=first-1;j>=0;j--)if(out[j].d){if(j!==first)res.push(out[j]);break;}
-  return {msgs:res.reverse()};
+  return {msgs:res.reverse(),complete};
  };
  F.chats=async n=>{
   await dismissRestore();
