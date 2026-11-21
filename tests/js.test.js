@@ -245,6 +245,70 @@ console.log('js removed-newest ok');
   assert.strictEqual(lazy.complete, true);
   console.log('js chats ok');
 
+  // Regression: /messages/archived/ is retired — it serves the "content
+  // isn't available" page, so navigating there can only ever find "no chat
+  // list". openArchived must drive the inbox settings menu instead and
+  // prove arrival by the pane heading.
+  {
+    const state = { menuOpen: false, view: 'inbox' };
+    const settingsBtn = { getAttribute: s => (s === 'aria-label' ? 'Settings, help and more' : null), innerText: '' };
+    const archivedItem = { innerText: 'Archived chats', getAttribute: () => null };
+    const requestsItem = { innerText: 'Message requests', getAttribute: () => null };
+    const F8 = {
+      ...F, sleep: async () => {}, waitFor: async fn => fn(), dismissRestore: async () => true,
+      visible: () => true,
+      press: el => {
+        if (el === settingsBtn) state.menuOpen = !state.menuOpen;
+        if (el === archivedItem) { state.view = 'archived'; state.menuOpen = false; }
+      },
+    };
+    global.window = { __fb: F8 };
+    global.document = {
+      body: {},
+      querySelector: () => null,
+      querySelectorAll: s => {
+        if (s === 'button,[role=button]') return [settingsBtn];
+        if (s === '[role=menuitem]') return state.menuOpen ? [requestsItem, archivedItem] : [];
+        if (s === 'h1') return [{ innerText: state.view === 'archived' ? 'Archived chats' : 'Chats' }];
+        return [];
+      },
+    };
+    new Function(fs.readFileSync(path.join(__dirname, '../js/msg.js'), 'utf8')).call(global.window);
+    assert.deepStrictEqual(await F8.openArchived(), { ok: true }, 'openArchived opens the view from the settings menu');
+    assert.strictEqual(state.view, 'archived');
+    assert.deepStrictEqual(await F8.openArchived(), { ok: true }, 'openArchived is a no-op when the view is open');
+    console.log('js openArchived ok');
+  }
+
+  // Same regression: a settings menu without an Archived entry must fail
+  // with the menu contents in the error, not a bare "no chat list".
+  {
+    const settingsBtn = { getAttribute: s => (s === 'aria-label' ? 'Settings, help and more' : null), innerText: '' };
+    const requestsItem = { innerText: 'Message requests', getAttribute: () => null };
+    let open = false;
+    const F9 = {
+      ...F, sleep: async () => {}, waitFor: async fn => fn(), dismissRestore: async () => true,
+      visible: () => true,
+      press: el => { if (el === settingsBtn) open = !open; },
+    };
+    global.window = { __fb: F9 };
+    global.document = {
+      body: {},
+      querySelector: () => null,
+      querySelectorAll: s => {
+        if (s === 'button,[role=button]') return [settingsBtn];
+        if (s === '[role=menuitem]') return open ? [requestsItem] : [];
+        if (s === 'h1') return [{ innerText: 'Chats' }];
+        return [];
+      },
+    };
+    new Function(fs.readFileSync(path.join(__dirname, '../js/msg.js'), 'utf8')).call(global.window);
+    const res = await F9.openArchived();
+    assert.match(res.err, /no Archived chats entry/, 'missing entry is reported');
+    assert.match(res.err, /Message requests/, 'error lists what the menu offered');
+    console.log('js openArchived missing-entry ok');
+  }
+
   // composer focus: Facebook keeps a hidden notifications dialog mounted, which must not block input;
   // a visible dialog still does
   const load = (dialogs, focused = false) => {

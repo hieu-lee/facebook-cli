@@ -84,6 +84,30 @@
   for(let j=first-1;j>=0;j--)if(out[j].d){if(j!==first)res.push(out[j]);break;}
   return {msgs:res.reverse()};
  };
+ // Facebook retired the /messages/archived/ route — it now serves the
+ // "content isn't available" page, with no list at all. The archived view
+ // only opens from the inbox, through the "Settings, help and more" menu.
+ // Arrival is proven by the pane itself (its heading or its grid carries
+ // the archived name), never by the URL, which does not change.
+ F.openArchived=async()=>{
+  await dismissRestore();
+  const STEM=/archiv|архив|lưu trữ/i;
+  const arrived=()=>{const g=document.querySelector('[role=grid]');if(g&&STEM.test(g.getAttribute('aria-label')||''))return true;return [...document.querySelectorAll('h1')].some(h=>STEM.test(clean(h.innerText)));};
+  if(arrived())return {ok:true};
+  const SETTINGS=/settings|paramètres|cài đặt|настрой|nastaven|seaded/i;
+  const buttons=[...document.querySelectorAll('button,[role=button]')].filter(b=>F.visible(b)&&SETTINGS.test(b.getAttribute('aria-label')||''));
+  let menuSeen=[];
+  for(const b of buttons){
+   F.press(b);
+   const item=await waitFor(()=>[...document.querySelectorAll('[role=menuitem]')].find(i=>F.visible(i)&&STEM.test(clean(i.innerText))),4000);
+   if(!item){menuSeen=[...document.querySelectorAll('[role=menuitem]')].map(i=>clean(i.innerText)).filter(Boolean);F.press(b);await sleep(300);continue;}
+   F.press(item);
+   const ok=await waitFor(()=>arrived()||null,10000);
+   if(ok)return {ok:true};
+   return {err:'the Archived chats view did not open after choosing it from the inbox settings menu'};
+  }
+  return {err:'no Archived chats entry found in the inbox settings menu'+(menuSeen.length?'; menu: '+JSON.stringify(menuSeen):' (no settings button found)')};
+ };
  F.chats=async n=>{
   await dismissRestore();
   let g=await waitFor(async()=>{await dismissRestore();const g=document.querySelector('[role=grid]');return g&&g.querySelector('[role=row] a[href*="/t/"]')&&g},15000);

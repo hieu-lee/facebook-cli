@@ -126,21 +126,26 @@ async fn fetch_chats(b: &std::sync::Arc<Browser>, n: usize) -> Res<(Vec<Chat>, b
 }
 
 /// Archived chats live on their own view, outside the inbox list and its cache.
-/// Arrival must be proven: if Facebook redirects back to the inbox, the inbox
-/// grid must never be read as "the archived list".
+/// Facebook retired the /messages/archived/ route (it serves the "content
+/// isn't available" page), so the view is opened from the inbox through its
+/// settings menu; arrival is proven by the pane itself (see F.openArchived),
+/// never by the URL, which does not change.
 async fn fetch_archived_chats(b: &std::sync::Arc<Browser>, n: usize) -> Res<(Vec<Chat>, bool)> {
     let t = b.acquire_kind("messages").await?;
     let r = async {
-        b.goto(&t, "https://www.facebook.com/messages/archived/")
+        b.goto(&t, "https://www.facebook.com/messages/").await?;
+        let v = b
+            .eval(&t, "window.__fb.openArchived().then(JSON.stringify)")
             .await?;
-        let at = b.eval(&t, "location.pathname").await?;
-        let at = at.as_str().unwrap_or("");
-        if !at.contains("archived") {
-            return Err(format!(
-                "Facebook did not open the archived chats view (landed on {at}); the archived list could not be read"
-            ));
+        let v: Value =
+            serde_json::from_str(v.as_str().unwrap_or("{}")).map_err(|e| e.to_string())?;
+        if let Some(e) = v["err"].as_str() {
+            return Err(e.to_string());
         }
-        scan_open_list(b, &t, n).await
+        let r = scan_open_list(b, &t, n).await;
+        // leave the shared tab back on the inbox for its next user
+        let _ = b.goto(&t, "https://www.facebook.com/messages/t/").await;
+        r
     }
     .await;
     b.release_as(t, if r.is_ok() { "messages" } else { "" })
