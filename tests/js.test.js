@@ -250,12 +250,19 @@ console.log('js removed-newest ok');
   // list". openArchived must drive the inbox settings menu instead and
   // prove arrival by the pane heading.
   {
-    const state = { menuOpen: false, view: 'inbox' };
+    const state = { menuOpen: false, view: 'inbox', settingsChecks: 0 };
     const settingsBtn = { getAttribute: s => (s === 'aria-label' ? 'Settings, help and more' : null), innerText: '' };
     const archivedItem = { innerText: 'Archived chats', getAttribute: () => null };
     const requestsItem = { innerText: 'Message requests', getAttribute: () => null };
     const F8 = {
-      ...F, sleep: async () => {}, waitFor: async fn => fn(), dismissRestore: async () => true,
+      ...F, sleep: async () => {}, dismissRestore: async () => true,
+      waitFor: async fn => {
+        for (let i = 0; i < 3; i++) {
+          const result = await fn();
+          if (result) return result;
+        }
+        return null;
+      },
       visible: () => true,
       press: el => {
         if (el === settingsBtn) state.menuOpen = !state.menuOpen;
@@ -267,14 +274,14 @@ console.log('js removed-newest ok');
       body: {},
       querySelector: () => null,
       querySelectorAll: s => {
-        if (s === 'button,[role=button]') return [settingsBtn];
+        if (s === 'button,[role=button]') return ++state.settingsChecks > 1 ? [settingsBtn] : [];
         if (s === '[role=menuitem]') return state.menuOpen ? [requestsItem, archivedItem] : [];
         if (s === 'h1') return [{ innerText: state.view === 'archived' ? 'Archived chats' : 'Chats' }];
         return [];
       },
     };
     new Function(fs.readFileSync(path.join(__dirname, '../js/msg.js'), 'utf8')).call(global.window);
-    assert.deepStrictEqual(await F8.openArchived(), { ok: true }, 'openArchived opens the view from the settings menu');
+    assert.deepStrictEqual(await F8.openArchived(), { ok: true }, 'openArchived waits for the inbox settings menu to mount');
     assert.strictEqual(state.view, 'archived');
     assert.deepStrictEqual(await F8.openArchived(), { ok: true }, 'openArchived is a no-op when the view is open');
     console.log('js openArchived ok');

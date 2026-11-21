@@ -95,7 +95,11 @@
   const arrived=()=>{const g=document.querySelector('[role=grid]');if(g&&STEM.test(g.getAttribute('aria-label')||''))return true;return [...document.querySelectorAll('h1')].some(h=>STEM.test(clean(h.innerText)));};
   if(arrived())return {ok:true};
   const SETTINGS=/settings|paramètres|cài đặt|настрой|nastaven|seaded/i;
-  const buttons=[...document.querySelectorAll('button,[role=button]')].filter(b=>F.visible(b)&&SETTINGS.test(b.getAttribute('aria-label')||''));
+  const buttons=await waitFor(async()=>{
+   await dismissRestore();
+   const choices=[...document.querySelectorAll('button,[role=button]')].filter(b=>F.visible(b)&&SETTINGS.test(b.getAttribute('aria-label')||''));
+   return choices.length?choices:null;
+  },12000,100)||[];
   let menuSeen=[];
   for(const b of buttons){
    F.press(b);
