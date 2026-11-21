@@ -466,14 +466,14 @@
  // Archive, then prove the row left the inbox. The row may sit below the
  // fold of a virtualized list, so scroll the list until it mounts.
  F.archiveChat=async(path,dry)=>{
-  await dismissRestore();
+  await F.dismissRestore();
   const g=await waitFor(()=>document.querySelector('[role=grid]'),10000);
   if(!g)return 'no chat list';
   const norm=p=>(p||'').replace(/\/$/,'');
   const rowOf=()=>[...g.querySelectorAll('[role=row]')].find(r=>{const a=r.querySelector('a[href*="/t/"]');return a&&norm(a.getAttribute('href'))===norm(path)});
   let row=rowOf();
   if(!row){
-   const sc=scroller(g)||g.parentElement;
+   const sc=F.scroller(g)||g.parentElement;
    const t0=Date.now();
    while(!row&&sc&&Date.now()-t0<20000){
     if(sc.scrollTop+sc.clientHeight>=sc.scrollHeight-2)break;
