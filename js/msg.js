@@ -86,8 +86,15 @@
  };
  F.chats=async n=>{
   await dismissRestore();
-  const g=await waitFor(async()=>{await dismissRestore();const g=document.querySelector('[role=grid]');return g&&g.querySelector('[role=row] a[href*="/t/"]')&&g},15000);
-  if(!g)return {err:'no chat list'};
+  let g=await waitFor(async()=>{await dismissRestore();const g=document.querySelector('[role=grid]');return g&&g.querySelector('[role=row] a[href*="/t/"]')&&g},15000);
+  if(!g){
+   // A view with nothing in it (an archived list nobody has archived into yet)
+   // mounts the grid but never a row: that is an empty list, not a broken page.
+   // Only a settled grid counts — one still loading may yet grow its rows.
+   const empty=await waitFor(()=>{const e=document.querySelector('[role=grid]');return e&&!F.pageLoading(e)&&e},5000);
+   if(empty)return {chats:[],complete:true};
+   return {err:'no chat list'};
+  }
   const sc=scroller(g)||g.parentElement;
   if(sc){sc.scrollTop=0;await sleep(400);}
   const atBottom=()=>!sc||sc.scrollTop+sc.clientHeight>=sc.scrollHeight-2;
