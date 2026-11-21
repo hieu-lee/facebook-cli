@@ -100,6 +100,7 @@ async fn run_inner(d: &Daemon, argv: &[String], _cwd: &str, out: &Out) -> Res<()
         "group-leave" => crate::act::group_leave(d, &argv[1..], out).await,
         "friend-add" => crate::act::friend_add(d, &argv[1..], out).await,
         "unsend" => crate::messenger::unsend(d, &argv[1..], out).await,
+        "archive" => crate::messenger::archive(d, &argv[1..], out).await,
         "msgreact" => crate::messenger::msgreact(d, &argv[1..], out).await,
         "reply" => crate::messenger::reply(d, &argv[1..], _cwd, out).await,
         "unlock" => crate::messenger::unlock(d, &argv[1..], out).await,

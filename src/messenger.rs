@@ -1112,6 +1112,79 @@ pub async fn unsend(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     r.map(|_| ())
 }
 
+/// Archive a chat: move it from the inbox to the archived view. Acts on the
+/// chat list, not an open thread, and proves the row left the inbox.
+pub async fn archive(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
+    let a = crate::ops::parse(args, &[], &["dry", "fuzzy"])?;
+    let spec = a.pos.join(" ");
+    if spec.is_empty() {
+        return Err("usage: archive <chat> [--dry]".into());
+    }
+    let b = d.browser(out).await?;
+    let gen0 = b.generation.load(std::sync::atomic::Ordering::SeqCst);
+    // mutations hold the shared side of the account lock; an account import takes the exclusive side
+    let _account = d.account.read().await;
+    if b.generation.load(std::sync::atomic::Ordering::SeqCst) != gen0 {
+        return Err(
+            "the account changed while this command waited; nothing was done, try again".into(),
+        );
+    }
+    let target = resolve(d, &b, &spec).await?;
+    require_exact(d, &target, &spec, a.flag("fuzzy"))?;
+    let t = b.acquire_kind("messages").await?;
+    if b.generation.load(std::sync::atomic::Ordering::SeqCst) != gen0 {
+        return Err(
+            "the account changed while this command waited; nothing was done, try again".into(),
+        );
+    }
+    let name = target.name.clone().unwrap_or_default();
+    let r = async {
+        // the inbox grid is the target; a tab parked on the archived view or
+        // outside Messenger must be brought back to the inbox first
+        let at = b.eval(&t, "location.pathname").await?;
+        let at = at.as_str().unwrap_or("");
+        if !at.starts_with("/messages") || at.contains("archived") {
+            b.goto(&t, "https://www.facebook.com/messages/t/").await?;
+        }
+        if b.generation.load(std::sync::atomic::Ordering::SeqCst) != gen0 {
+            return Err("the account changed meanwhile; nothing was archived".into());
+        }
+        if out.cancelled() {
+            return Err("cancelled by client; nothing was archived".into());
+        }
+        let v = b
+            .eval(
+                &t,
+                &format!(
+                    "window.__fb.archiveChat({}, {})",
+                    json!(target.path),
+                    a.flag("dry")
+                ),
+            )
+            .await?;
+        match &v {
+            Value::String(e) => Err(e.clone()),
+            v if v["dry"] == Value::Bool(true) => {
+                out.line(format!("dry: would archive\t{}", one_line(&name)));
+                Ok(false) // the menu was opened: never reuse this tab
+            }
+            v if v["ok"] == Value::Bool(true) => {
+                out.line(format!("archived\t{}", one_line(&name)));
+                Ok(true)
+            }
+            other => Err(format!("unexpected: {other}")),
+        }
+    }
+    .await;
+    // a failed or dry run may leave a menu open: never reuse the tab then
+    if matches!(r, Ok(true)) {
+        b.release_as(t, "messages").await;
+    } else {
+        b.close(t).await;
+    }
+    r.map(|_| ())
+}
+
 /// React to one message in a chat (the newest, or the newest containing
 /// --match text). Mirrors unsend's shape: resolve, open, one JS step that
 /// finds the message's toolbar and picks the emoji, verify by re-reading

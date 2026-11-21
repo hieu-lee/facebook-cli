@@ -462,6 +462,49 @@
   await sleep(600);
   return gone?true:'not confirmed by messenger';
  };
+ // Archive one chat from the list: open the row's actions menu, press
+ // Archive, then prove the row left the inbox. The row may sit below the
+ // fold of a virtualized list, so scroll the list until it mounts.
+ F.archiveChat=async(path,dry)=>{
+  await F.dismissRestore();
+  const g=await waitFor(()=>document.querySelector('[role=grid]'),10000);
+  if(!g)return 'no chat list';
+  const norm=p=>(p||'').replace(/\/$/,'');
+  const rowOf=()=>[...g.querySelectorAll('[role=row]')].find(r=>{const a=r.querySelector('a[href*="/t/"]');return a&&norm(a.getAttribute('href'))===norm(path)});
+  let row=rowOf();
+  if(!row){
+   const sc=F.scroller(g)||g.parentElement;
+   const t0=Date.now();
+   while(!row&&sc&&Date.now()-t0<20000){
+    if(sc.scrollTop+sc.clientHeight>=sc.scrollHeight-2)break;
+    sc.scrollTop=Math.min(sc.scrollTop+Math.max(sc.clientHeight*0.7,100),sc.scrollHeight);
+    await sleep(300);
+    row=rowOf();
+   }
+  }
+  if(!row)return 'chat is not in the inbox list (already archived?)';
+  row.scrollIntoView({block:'center'});
+  await sleep(300);
+  // the row's actions button renders on hover/focus and carries a menu popup
+  const btn=row.querySelector('[aria-haspopup="menu"],[aria-haspopup="true"]');
+  if(!btn)return 'chat row has no actions menu';
+  F.press(btn);
+  const ARCHIVE=/^(Archive|Archiver|Lưu trữ|Архивировать|Archivovat|Archivovať|Arhiveeri)/i;
+  const firstLine=s=>clean(s||'').split('\n')[0].trim();
+  const item=await waitFor(()=>[...document.querySelectorAll('[role=menuitem]')].find(i=>F.visible(i)&&ARCHIVE.test(firstLine(i.innerText))),5000);
+  if(!item){
+   const menu=[...document.querySelectorAll('[role=menuitem]')].map(i=>clean(i.innerText));
+   document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+   return 'archive is not offered for this chat; menu: '+JSON.stringify(menu);
+  }
+  if(dry)return {dry:true};
+  F.press(item);
+  // no confirm dialog is expected; if one opens with an Archive button, press it
+  const dlgBtn=await waitFor(()=>{const d=dialogs()[0];if(!d)return null;return [...d.querySelectorAll('[role=button]')].find(b=>ARCHIVE.test(firstLine(b.innerText)))||null},1500);
+  if(dlgBtn)F.press(dlgBtn);
+  const gone=await waitFor(()=>!rowOf(),8000,200);
+  return gone?{ok:true}:'archive was pressed but the chat is still in the inbox list';
+ };
  // Find one message in the open thread: the newest whose text contains
  // `match` (any sender), or the newest message at all. `nth` counts
  // matches from the newest (0 = the newest), so a caller that shows the
