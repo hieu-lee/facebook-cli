@@ -93,7 +93,16 @@
   await dismissRestore();
   const STEM=/archiv|архив|lưu trữ/i;
   const arrived=()=>{const g=document.querySelector('[role=grid]');if(g&&STEM.test(g.getAttribute('aria-label')||''))return true;return [...document.querySelectorAll('h1')].some(h=>STEM.test(clean(h.innerText)));};
-  if(arrived())return {ok:true};
+  F.archivedArrived=arrived;
+  // The pane's heading and label flip to the archived name before its rows
+  // do: the same grid element still shows the inbox rows for a beat, and a
+  // scan taken then returns the inbox as if it were the archived list
+  // (BlindFB #27). Wait until the row set stops changing while the pane
+  // still proves itself archived. An empty archived list has no rows to
+  // settle: its empty signature is stable at once.
+  const rowsSig=()=>{const g=document.querySelector('[role=grid]');if(!g)return '';return [...g.querySelectorAll('[role=row] a[href*="/t/"]')].map(a=>a.getAttribute('href')).join('|');};
+  const settleRows=async()=>{let prev=null,stable=0;for(let i=0;i<24;i++){if(!arrived())return false;const sig=rowsSig();if(sig===prev){if(++stable>=3)return true;}else{stable=0;prev=sig;}await sleep(250);}return arrived();};
+  if(arrived()){await settleRows();return {ok:true};}
   const SETTINGS=/settings|paramètres|cài đặt|настрой|nastaven|seaded/i;
   const buttons=await waitFor(async()=>{
    await dismissRestore();
@@ -107,7 +116,7 @@
    if(!item){menuSeen=[...document.querySelectorAll('[role=menuitem]')].map(i=>clean(i.innerText)).filter(Boolean);F.press(b);await sleep(300);continue;}
    F.press(item);
    const ok=await waitFor(()=>arrived()||null,10000);
-   if(ok)return {ok:true};
+   if(ok){await settleRows();return {ok:true};}
    return {err:'the Archived chats view did not open after choosing it from the inbox settings menu'};
   }
   return {err:'no Archived chats entry found in the inbox settings menu'+(menuSeen.length?'; menu: '+JSON.stringify(menuSeen):' (no settings button found)')};

@@ -143,6 +143,23 @@ async fn fetch_archived_chats(b: &std::sync::Arc<Browser>, n: usize) -> Res<(Vec
             return Err(e.to_string());
         }
         let r = scan_open_list(b, &t, n).await;
+        // The pane can fall back to the inbox mid-scan (its rows are then the
+        // inbox's, under an archived label the caller trusts). Only trust the
+        // rows while the pane still proves itself archived (BlindFB #27).
+        let r = match r {
+            Ok(list) => {
+                let still = b
+                    .eval(&t, "window.__fb.archivedArrived()")
+                    .await
+                    .unwrap_or_default();
+                if still == Value::Bool(true) {
+                    Ok(list)
+                } else {
+                    Err("the archived view closed before its list could be read".into())
+                }
+            }
+            Err(e) => Err(e),
+        };
         // leave the shared tab back on the inbox for its next user
         let _ = b.goto(&t, "https://www.facebook.com/messages/t/").await;
         r

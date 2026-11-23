@@ -287,6 +287,60 @@ console.log('js removed-newest ok');
     console.log('js openArchived ok');
   }
 
+  // Regression (BlindFB #27): the archived pane's heading flips before its
+  // rows do — the same grid still shows the inbox rows for a beat, and a scan
+  // taken then returns the inbox as if it were the archived list.
+  // openArchived must not report arrival until the row set has settled.
+  {
+    const state = { menuOpen: false, view: 'inbox', gridChecks: 0 };
+    const settingsBtn = { getAttribute: s => (s === 'aria-label' ? 'Settings, help and more' : null), innerText: '' };
+    const archivedItem = { innerText: 'Archived chats', getAttribute: () => null };
+    const anchor = href => ({ getAttribute: s => (s === 'href' ? href : null) });
+    const grid = {
+      getAttribute: s => (s === 'aria-label' ? (state.view === 'archived' ? 'Archived chats' : 'Chats') : null),
+      querySelectorAll: s => {
+        if (s !== '[role=row] a[href*="/t/"]') return [];
+        // the rows lag the heading: the first checks still see inbox rows
+        const hrefs = state.gridChecks >= 6 ? ['/t/901/', '/t/902/'] : ['/t/101/', '/t/102/'];
+        return hrefs.map(anchor);
+      },
+    };
+    const F10 = {
+      ...F, sleep: async () => {}, dismissRestore: async () => true,
+      waitFor: async fn => {
+        for (let i = 0; i < 3; i++) {
+          const result = await fn();
+          if (result) return result;
+        }
+        return null;
+      },
+      visible: () => true,
+      press: el => {
+        if (el === settingsBtn) state.menuOpen = !state.menuOpen;
+        if (el === archivedItem) { state.view = 'archived'; state.menuOpen = false; }
+      },
+    };
+    global.window = { __fb: F10 };
+    global.document = {
+      body: {},
+      querySelector: s => {
+        if (s === '[role=grid]') { state.gridChecks++; return grid; }
+        return null;
+      },
+      querySelectorAll: s => {
+        if (s === 'button,[role=button]') return [settingsBtn];
+        if (s === '[role=menuitem]') return state.menuOpen ? [archivedItem] : [];
+        if (s === 'h1') return [{ innerText: state.view === 'archived' ? 'Archived chats' : 'Chats' }];
+        return [];
+      },
+    };
+    new Function(fs.readFileSync(path.join(__dirname, '../js/msg.js'), 'utf8')).call(global.window);
+    assert.deepStrictEqual(await F10.openArchived(), { ok: true }, 'openArchived waits out the row lag');
+    assert.ok(state.gridChecks >= 8, `openArchived returned before the rows settled (${state.gridChecks} grid checks)`);
+    assert.strictEqual(F10.archivedArrived(), true, 'archivedArrived proves the pane after arrival');
+    console.log('js openArchived row lag ok');
+  }
+
   // Same regression: a settings menu without an Archived entry must fail
   // with the menu contents in the error, not a bare "no chat list".
   {
