@@ -146,7 +146,7 @@ dependencies = [
 name = "fb"
 version = "0.1.8"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "futures-util",
  "libc",
  "reqwest",

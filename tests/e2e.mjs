@@ -993,7 +993,7 @@ try{
   const saved=await evaluate('JSON.stringify(localStorage.posts||null)');
   await evaluate('localStorage.posts=JSON.stringify([{id:"100",text:"Badge post",aud:"me",badge:true}]);JSON.stringify(true)');
   try{
-   const feed=await fb('feed');
+   const feed=await fb('feed','--refresh','-n','1');
    assert.ok(feed.includes('Verified'),'badge shortened to Verified');
    assert.ok(!feed.includes('Accounts with a verified badge'),'tooltip sentence gone');
   }finally{await evaluate(saved==='null'?'localStorage.removeItem("posts");JSON.stringify(true)':'localStorage.posts='+saved+';JSON.stringify(true)');}
