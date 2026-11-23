@@ -631,3 +631,33 @@ console.log('js removed-newest ok');
   ]) assert.strictEqual(kindOf(href), kind, href);
   console.log('js search kinds ok');
 })();
+
+// profile: a profile page whose layout never mounts a [role=tablist] must
+// still read — only the header h1 is guaranteed. Before the fix this
+// returned 'profile not found / not accessible' even when signed in.
+(async () => {
+  const vm = require('vm');
+  const nameEl = { children: [], innerText: 'Fixture User' };
+  const mainEl = {
+    querySelector: sel => (sel === 'h1' ? nameEl : null),
+    querySelectorAll: sel => (sel === 'h1,h2,span,div' ? [nameEl] : []),
+  };
+  const G = {
+    sleep: async () => {}, clean: s => String(s || '').trim(), vtext: () => [],
+    waitFor: async f => f() || null, canon: h => h, trunc: s => s,
+    groupPath: s => s, profilePath: s => s, TIME: /$^/, SPON: /$^/, ACT: /$^/,
+    scrollerOf: () => null, num: () => 0, pageLoading: () => false,
+  };
+  const ctx = vm.createContext({
+    window: { __fb: G },
+    document: { querySelector: sel => (sel === '[role=main]' ? mainEl : null), querySelectorAll: () => [], title: 'Fixture User' },
+    location: { href: 'https://www.facebook.com/profile.php?id=123' },
+    URL, Node: { DOCUMENT_POSITION_PRECEDING: 2 },
+    getComputedStyle: () => ({ fontSize: '28px' }),
+  });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/ops.js'), 'utf8'), ctx);
+  const out = await G.profile(0);
+  assert(!out.err, 'profile without tablist should read, got: ' + (out && out.err));
+  assert(out.lines.some(l => l.startsWith('name\tFixture User')), 'profile name line missing: ' + JSON.stringify(out.lines));
+  console.log('js profile no-tablist ok');
+})().catch(e => { console.error(e); process.exit(1); });
