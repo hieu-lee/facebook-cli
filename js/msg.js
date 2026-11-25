@@ -101,8 +101,17 @@
   // still proves itself archived. An empty archived list has no rows to
   // settle: its empty signature is stable at once.
   const rowsSig=()=>{const g=document.querySelector('[role=grid]');if(!g)return '';return [...g.querySelectorAll('[role=row] a[href*="/t/"]')].map(a=>a.getAttribute('href')).join('|');};
-  const settleRows=async()=>{let prev=null,stable=0;for(let i=0;i<24;i++){if(!arrived())return false;const sig=rowsSig();if(sig===prev){if(++stable>=3)return true;}else{stable=0;prev=sig;}await sleep(250);}return arrived();};
-  if(arrived()){await settleRows();return {ok:true};}
+  // Stability alone is not proof (BlindFB #30): the inbox rows can sit
+  // unchanged for well over a second under the flipped archived heading
+  // before Facebook swaps them, so a stable-signature wait still returns
+  // the inbox. A chat is either archived or in the inbox, never both, so
+  // when the inbox rows were seen before opening the view, the archived
+  // list has only arrived once the row set no longer equals that inbox
+  // signature — and then stays put. No pre-open signature (the view was
+  // already open) falls back to stability alone.
+  const settleRows=async(excludeSig)=>{let prev=null,stable=0;for(let i=0;i<40;i++){if(!arrived())return false;const sig=rowsSig();const fresh=!excludeSig||sig!==excludeSig;if(fresh&&sig===prev){if(++stable>=3)return true;}else{stable=0;prev=sig;}await sleep(250);}return false;};
+  if(arrived()){await settleRows(null);return {ok:true};}
+  const inboxSig=rowsSig();
   const SETTINGS=/settings|paramètres|cài đặt|настрой|nastaven|seaded/i;
   const buttons=await waitFor(async()=>{
    await dismissRestore();
@@ -116,7 +125,7 @@
    if(!item){menuSeen=[...document.querySelectorAll('[role=menuitem]')].map(i=>clean(i.innerText)).filter(Boolean);F.press(b);await sleep(300);continue;}
    F.press(item);
    const ok=await waitFor(()=>arrived()||null,10000);
-   if(ok){await settleRows();return {ok:true};}
+   if(ok){if(await settleRows(inboxSig))return {ok:true};return {err:'the Archived chats view opened but its list never replaced the inbox rows — refusing to read the inbox as archived chats'};}
    return {err:'the Archived chats view did not open after choosing it from the inbox settings menu'};
   }
   return {err:'no Archived chats entry found in the inbox settings menu'+(menuSeen.length?'; menu: '+JSON.stringify(menuSeen):' (no settings button found)')};

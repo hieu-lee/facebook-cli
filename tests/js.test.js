@@ -370,6 +370,59 @@ console.log('js removed-newest ok');
     console.log('js openArchived missing-entry ok');
   }
 
+  // Regression (BlindFB #30): the inbox rows can sit unchanged under the
+  // flipped archived heading for many polls — longer than the old
+  // stability window — before Facebook swaps them. A stable signature is
+  // not arrival: openArchived must keep waiting while the row set still
+  // equals the inbox rows captured before the view was opened.
+  {
+    const state = { menuOpen: false, view: 'inbox', gridChecks: 0 };
+    const settingsBtn = { getAttribute: s => (s === 'aria-label' ? 'Settings, help and more' : null), innerText: '' };
+    const archivedItem = { innerText: 'Archived chats', getAttribute: () => null };
+    const anchor = href => ({ getAttribute: s => (s === 'href' ? href : null) });
+    const grid = {
+      getAttribute: s => (s === 'aria-label' ? (state.view === 'archived' ? 'Archived chats' : 'Chats') : null),
+      querySelectorAll: s => {
+        if (s !== '[role=row] a[href*="/t/"]') return [];
+        const hrefs = state.gridChecks >= 30 ? ['/t/901/', '/t/902/'] : ['/t/101/', '/t/102/'];
+        return hrefs.map(anchor);
+      },
+    };
+    const F11 = {
+      ...F, sleep: async () => {}, dismissRestore: async () => true,
+      waitFor: async fn => {
+        for (let i = 0; i < 3; i++) {
+          const result = await fn();
+          if (result) return result;
+        }
+        return null;
+      },
+      visible: () => true,
+      press: el => {
+        if (el === settingsBtn) state.menuOpen = !state.menuOpen;
+        if (el === archivedItem) { state.view = 'archived'; state.menuOpen = false; }
+      },
+    };
+    global.window = { __fb: F11 };
+    global.document = {
+      body: {},
+      querySelector: s => {
+        if (s === '[role=grid]') { state.gridChecks++; return grid; }
+        return null;
+      },
+      querySelectorAll: s => {
+        if (s === 'button,[role=button]') return [settingsBtn];
+        if (s === '[role=menuitem]') return state.menuOpen ? [archivedItem] : [];
+        if (s === 'h1') return [{ innerText: state.view === 'archived' ? 'Archived chats' : 'Chats' }];
+        return [];
+      },
+    };
+    new Function(fs.readFileSync(path.join(__dirname, '../js/msg.js'), 'utf8')).call(global.window);
+    assert.deepStrictEqual(await F11.openArchived(), { ok: true }, 'openArchived waits out a long inbox-row lag');
+    assert.ok(state.gridChecks >= 30, `openArchived returned on the inbox rows (${state.gridChecks} grid checks)`);
+    console.log('js openArchived long row lag ok');
+  }
+
   // composer focus: Facebook keeps a hidden notifications dialog mounted, which must not block input;
   // a visible dialog still does
   const load = (dialogs, focused = false) => {
