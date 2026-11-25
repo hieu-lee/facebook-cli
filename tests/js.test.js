@@ -423,6 +423,41 @@ console.log('js removed-newest ok');
     console.log('js openArchived long row lag ok');
   }
 
+  // The page can keep BOTH grids mounted — the inbox grid stays in the
+  // document, first in order, while the archived view's grid mounts beside
+  // it. A first-grid scan then returns the inbox as if it were the
+  // archived list. chats(n, true) must read the archived grid only.
+  {
+    const row = (name, href) => ({
+      text: [name, 'hi', '·', '1h'],
+      querySelector: q => (q.includes('a[') ? { getAttribute: k => (k === 'href' ? href : null) } : null),
+    });
+    const gridWith = (label, rows) => ({
+      parentElement: null,
+      getAttribute: s => (s === 'aria-label' ? label : null),
+      scrollHeight: 100, clientHeight: 500, scrollTop: 0,
+      querySelector: () => true,
+      querySelectorAll: s => (s === '[role=row]' ? rows : []),
+    });
+    const inboxGrid = gridWith('Chats', [row('Inbox pal', '/t/101/')]);
+    const archivedGridEl = gridWith('Archived chats', [row('Archived pal', '/t/901/')]);
+    const F10 = { ...F, vtext: r => r.text, sleep: async () => {}, dismissRestore: async () => true };
+    global.window = { __fb: F10 };
+    global.document = {
+      body: {}, documentElement: {},
+      querySelector: s => (s === '[role=grid]' ? inboxGrid : null),
+      querySelectorAll: s => (s === '[role=grid]' ? [inboxGrid, archivedGridEl] : []),
+    };
+    global.getComputedStyle = () => ({ overflowY: 'auto', fontWeight: '400' });
+    new Function(fs.readFileSync(path.join(__dirname, '../js/msg.js'), 'utf8')).call(global.window);
+    assert.strictEqual(F10.archivedGrid(), archivedGridEl, 'the archived grid is identified by its label, not document order');
+    const archived = await F10.chats(10, true);
+    assert.deepStrictEqual(archived.chats.map(c => c.href), ['/t/901/'], 'an archived scan returns the archived grid rows only');
+    const inbox = await F10.chats(10);
+    assert.deepStrictEqual(inbox.chats.map(c => c.href), ['/t/101/'], 'an inbox scan still reads the first grid');
+    console.log('js chats archived grid ok');
+  }
+
   // composer focus: Facebook keeps a hidden notifications dialog mounted, which must not block input;
   // a visible dialog still does
   const load = (dialogs, focused = false) => {

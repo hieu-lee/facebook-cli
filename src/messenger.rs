@@ -104,9 +104,12 @@ fn parse_chats(json: &str) -> Res<(Vec<Chat>, bool)> {
 /// Scan the chat list grid on the tab's current page (inbox or archived view alike).
 /// `complete`: the scan actually reached the end of the chat list (not just a time budget or a
 /// stall that gave up partway). Only then may "fewer rows than asked for" be read as "that is everything".
-async fn scan_open_list(b: &Browser, t: &Tab, n: usize) -> Res<(Vec<Chat>, bool)> {
+async fn scan_open_list(b: &Browser, t: &Tab, n: usize, archived: bool) -> Res<(Vec<Chat>, bool)> {
     let v = b
-        .eval(t, &format!("window.__fb.chats({n}).then(JSON.stringify)"))
+        .eval(
+            t,
+            &format!("window.__fb.chats({n},{archived}).then(JSON.stringify)"),
+        )
         .await?;
     parse_chats(v.as_str().unwrap_or("{}"))
 }
@@ -117,7 +120,7 @@ async fn fetch_chats(b: &std::sync::Arc<Browser>, n: usize) -> Res<(Vec<Chat>, b
         if t.kind != "messages" {
             b.goto(&t, "https://www.facebook.com/messages/t/").await?;
         }
-        scan_open_list(b, &t, n).await
+        scan_open_list(b, &t, n, false).await
     }
     .await;
     b.release_as(t, if r.is_ok() { "messages" } else { "" })
@@ -142,7 +145,7 @@ async fn fetch_archived_chats(b: &std::sync::Arc<Browser>, n: usize) -> Res<(Vec
         if let Some(e) = v["err"].as_str() {
             return Err(e.to_string());
         }
-        let r = scan_open_list(b, &t, n).await;
+        let r = scan_open_list(b, &t, n, true).await;
         // The pane can fall back to the inbox mid-scan (its rows are then the
         // inbox's, under an archived label the caller trusts). Only trust the
         // rows while the pane still proves itself archived (BlindFB #27).

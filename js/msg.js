@@ -84,6 +84,15 @@
   for(let j=first-1;j>=0;j--)if(out[j].d){if(j!==first)res.push(out[j]);break;}
   return {msgs:res.reverse()};
  };
+ // The page can keep more than one chat grid mounted at once: the inbox
+ // grid stays in the document while the archived view's grid mounts beside
+ // it, and every first-grid lookup then reads the inbox forever, however
+ // long it waits. The archived view's grid is the one whose own label
+ // names it; grid identity, not document order, decides.
+ const ARCHIVE_STEM=/archiv|архив|lưu trữ/i;
+ const allGrids=()=>{const all=[...document.querySelectorAll('[role=grid]')];const one=document.querySelector('[role=grid]');if(one&&!all.includes(one))all.unshift(one);return all;};
+ const archivedGrid=()=>allGrids().find(g=>ARCHIVE_STEM.test(g.getAttribute('aria-label')||''))||null;
+ F.archivedGrid=archivedGrid;
  // Facebook retired the /messages/archived/ route — it now serves the
  // "content isn't available" page, with no list at all. The archived view
  // only opens from the inbox, through the "Settings, help and more" menu.
@@ -91,8 +100,8 @@
  // the archived name), never by the URL, which does not change.
  F.openArchived=async()=>{
   await dismissRestore();
-  const STEM=/archiv|архив|lưu trữ/i;
-  const arrived=()=>{const g=document.querySelector('[role=grid]');if(g&&STEM.test(g.getAttribute('aria-label')||''))return true;return [...document.querySelectorAll('h1')].some(h=>STEM.test(clean(h.innerText)));};
+  const STEM=ARCHIVE_STEM;
+  const arrived=()=>{if(archivedGrid())return true;return [...document.querySelectorAll('h1')].some(h=>STEM.test(clean(h.innerText)));};
   F.archivedArrived=arrived;
   // The pane's heading and label flip to the archived name before its rows
   // do: the same grid element still shows the inbox rows for a beat, and a
@@ -100,7 +109,13 @@
   // (BlindFB #27). Wait until the row set stops changing while the pane
   // still proves itself archived. An empty archived list has no rows to
   // settle: its empty signature is stable at once.
-  const rowsSig=()=>{const g=document.querySelector('[role=grid]');if(!g)return '';return [...g.querySelectorAll('[role=row] a[href*="/t/"]')].map(a=>a.getAttribute('href')).join('|');};
+  // Rows are read from the archived view's own grid when it can be told
+  // apart. Several mounted grids with none of them labelled archived is
+  // ambiguous — a null signature, which never settles, so the refusal
+  // below names the grids instead of returning some other view's rows.
+  // No grid at all keeps the empty signature the settle has always used.
+  const rowsSig=()=>{const all=allGrids();const g=archivedGrid()||(all.length===1?all[0]:null);if(!g)return all.length?null:'';return [...g.querySelectorAll('[role=row] a[href*="/t/"]')].map(a=>a.getAttribute('href')).join('|');};
+  const gridNames=()=>JSON.stringify(allGrids().map(g=>g.getAttribute('aria-label')));
   // Stability alone is not proof (BlindFB #30): the inbox rows can sit
   // unchanged for well over a second under the flipped archived heading
   // before Facebook swaps them, so a stable-signature wait still returns
@@ -109,8 +124,9 @@
   // list has only arrived once the row set no longer equals that inbox
   // signature — and then stays put. No pre-open signature (the view was
   // already open) falls back to stability alone.
-  const settleRows=async(excludeSig)=>{let prev=null,stable=0;for(let i=0;i<40;i++){if(!arrived())return false;const sig=rowsSig();const fresh=!excludeSig||sig!==excludeSig;if(fresh&&sig===prev){if(++stable>=3)return true;}else{stable=0;prev=sig;}await sleep(250);}return false;};
-  if(arrived()){await settleRows(null);return {ok:true};}
+  const settleRows=async(excludeSig)=>{let prev=null,stable=0;for(let i=0;i<40;i++){if(!arrived())return false;const sig=rowsSig();if(sig===null){stable=0;prev=null;await sleep(250);continue;}const fresh=!excludeSig||sig!==excludeSig;if(fresh&&sig===prev){if(++stable>=3)return true;}else{stable=0;prev=sig;}await sleep(250);}return false;};
+  if(arrived()){if(await settleRows(null))return {ok:true};return {err:'the Archived chats view looks open but its list could not be verified — refusing to read it; grids on the page: '+gridNames()};}
+
   const inboxSig=rowsSig();
   const SETTINGS=/settings|paramètres|cài đặt|настрой|nastaven|seaded/i;
   const buttons=await waitFor(async()=>{
@@ -125,19 +141,24 @@
    if(!item){menuSeen=[...document.querySelectorAll('[role=menuitem]')].map(i=>clean(i.innerText)).filter(Boolean);F.press(b);await sleep(300);continue;}
    F.press(item);
    const ok=await waitFor(()=>arrived()||null,10000);
-   if(ok){if(await settleRows(inboxSig))return {ok:true};return {err:'the Archived chats view opened but its list never replaced the inbox rows — refusing to read the inbox as archived chats'};}
+   if(ok){if(await settleRows(inboxSig))return {ok:true};return {err:'the Archived chats view opened but its list never replaced the inbox rows — refusing to read the inbox as archived chats; grids on the page: '+gridNames()};}
+
    return {err:'the Archived chats view did not open after choosing it from the inbox settings menu'};
   }
   return {err:'no Archived chats entry found in the inbox settings menu'+(menuSeen.length?'; menu: '+JSON.stringify(menuSeen):' (no settings button found)')};
  };
- F.chats=async n=>{
+ F.chats=async(n,archived)=>{
   await dismissRestore();
-  let g=await waitFor(async()=>{await dismissRestore();const g=document.querySelector('[role=grid]');return g&&g.querySelector('[role=row] a[href*="/t/"]')&&g},15000);
+  // An archived scan must read the archived view's own grid: with both
+  // grids mounted, the first grid in the document can be the inbox, and
+  // its rows are not archived chats however settled they look.
+  const pick=()=>archived?archivedGrid():document.querySelector('[role=grid]');
+  let g=await waitFor(async()=>{await dismissRestore();const g=pick();return g&&g.querySelector('[role=row] a[href*="/t/"]')&&g},15000);
   if(!g){
    // A view with nothing in it (an archived list nobody has archived into yet)
    // mounts the grid but never a row: that is an empty list, not a broken page.
    // Only a settled grid counts — one still loading may yet grow its rows.
-   const empty=await waitFor(()=>{const e=document.querySelector('[role=grid]');return e&&!F.pageLoading(e)&&e},5000);
+   const empty=await waitFor(()=>{const e=pick();return e&&!F.pageLoading(e)&&e},5000);
    if(empty)return {chats:[],complete:true};
    return {err:'no chat list'};
   }
