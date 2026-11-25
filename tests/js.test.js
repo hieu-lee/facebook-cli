@@ -245,6 +245,38 @@ console.log('js removed-newest ok');
   assert.strictEqual(lazy.complete, true);
   console.log('js chats ok');
 
+  // Regression (BlindFB #30): Facebook can accept the PIN and still fail
+  // the restore itself — "Messenger could not restore your history."
+  // pinDone must surface that as a restore failure, never as success or
+  // as a wrong PIN.
+  {
+    const errText = 'Messenger could not restore your history. Check the PIN, or restore history in Messenger and retry.';
+    const input = { type: 'text', value: '123456' };
+    const dialog = {
+      innerText: 'Enter your PIN ' + errText,
+      querySelector: s => (s.includes('input') ? input : null),
+      querySelectorAll: s => {
+        if (s === '[aria-label]') return [];
+        if (s.includes('input')) return [input];
+        if (s.includes('[role=alert]')) return [{ innerText: errText }];
+        return [];
+      },
+    };
+    const F12 = { ...F, sleep: async () => {}, dismissRestore: async () => true };
+    global.window = { __fb: F12 };
+    global.document = {
+      body: {},
+      querySelector: () => null,
+      querySelectorAll: s => (s.includes('[role=dialog]') ? [dialog] : []),
+    };
+    new Function(fs.readFileSync(path.join(__dirname, '../js/msg.js'), 'utf8')).call(global.window);
+    const res = await F12.pinDone(5000);
+    assert.strictEqual(typeof res, 'string', 'pinDone must not report success on a failed restore');
+    assert.match(res, /could not restore your chat history/i);
+    assert.match(res, /Messenger app first/);
+    console.log('js pinDone restore failure ok');
+  }
+
   // composer focus: Facebook keeps a hidden notifications dialog mounted, which must not block input;
   // a visible dialog still does
   const load = (dialogs, focused = false) => {
@@ -631,3 +663,4 @@ console.log('js removed-newest ok');
   ]) assert.strictEqual(kindOf(href), kind, href);
   console.log('js search kinds ok');
 })();
+
