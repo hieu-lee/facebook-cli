@@ -348,10 +348,21 @@
   // caller leaves the tab running instead of freezing the restore dead.
   const SUBMIT=/^(Continue|Restore|Restore messages|Next|Submit|Done|Tiếp tục|Khôi phục|Tiếp theo|Continuer|Restaurer|Suivant)$/i;
   const BAD=/incorrect|wrong PIN|invalid PIN|PIN (was )?not accepted|không đúng|sai mã|erroné/i;
+  // Facebook can accept the PIN and still fail the restore itself
+  // (BlindFB #30): "Messenger could not restore your history. Check the
+  // PIN, or restore history in Messenger and retry." That is a terminal
+  // restore failure, not a wrong PIN and not success — the dialog may
+  // close afterwards, which the gone-check below would otherwise call
+  // unlocked. Name it wherever it appears, dialog or full page.
+  const RESTORE_FAIL=/could not restore|couldn't restore|cannot restore|unable to restore/i;
+  const restoreFail=()=>{for(const d of document.querySelectorAll('[role=dialog],[role=main]')){const t=F.clean(d.innerText||'');if(t.length<1000&&RESTORE_FAIL.test(t))return t;}return null;};
+  const failMsg=t=>'Facebook could not restore your chat history: '+t+' — this can happen even with the correct PIN; restore your history in the Messenger app first, then retry unlock here.';
   const clicked=new WeakSet();
   const end=Date.now()+(budget||240000);
   let gone=0;
   while(Date.now()<end){
+   const rf=restoreFail();
+   if(rf)return failMsg(rf);
    const d=pinRoot();
    if(!d){
     if(!gone)gone=Date.now();else if(Date.now()-gone>1000)return true;
@@ -366,6 +377,8 @@
    if(btn&&filled>=4&&!clicked.has(btn)){clicked.add(btn);F.press(btn);}
    await F.sleep(250);
   }
+  const rf=restoreFail();
+  if(rf)return failMsg(rf);
   const d=pinRoot();
   if(!d)return true;
   const inputs=pinInputs(d);
