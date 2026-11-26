@@ -245,6 +245,252 @@ console.log('js removed-newest ok');
   assert.strictEqual(lazy.complete, true);
   console.log('js chats ok');
 
+  // Regression: /messages/archived/ is retired — it serves the "content
+  // isn't available" page, so navigating there can only ever find "no chat
+  // list". openArchived must drive the inbox settings menu instead and
+  // prove arrival by the pane heading.
+  {
+    const state = { menuOpen: false, view: 'inbox', settingsChecks: 0 };
+    const settingsBtn = { getAttribute: s => (s === 'aria-label' ? 'Settings, help and more' : null), innerText: '' };
+    const archivedItem = { innerText: 'Archived chats', getAttribute: () => null };
+    const requestsItem = { innerText: 'Message requests', getAttribute: () => null };
+    const F8 = {
+      ...F, sleep: async () => {}, dismissRestore: async () => true,
+      waitFor: async fn => {
+        for (let i = 0; i < 3; i++) {
+          const result = await fn();
+          if (result) return result;
+        }
+        return null;
+      },
+      visible: () => true,
+      press: el => {
+        if (el === settingsBtn) state.menuOpen = !state.menuOpen;
+        if (el === archivedItem) { state.view = 'archived'; state.menuOpen = false; }
+      },
+    };
+    global.window = { __fb: F8 };
+    global.document = {
+      body: {},
+      querySelector: () => null,
+      querySelectorAll: s => {
+        if (s === 'button,[role=button]') return ++state.settingsChecks > 1 ? [settingsBtn] : [];
+        if (s === '[role=menuitem]') return state.menuOpen ? [requestsItem, archivedItem] : [];
+        if (s === 'h1') return [{ innerText: state.view === 'archived' ? 'Archived chats' : 'Chats' }];
+        return [];
+      },
+    };
+    new Function(fs.readFileSync(path.join(__dirname, '../js/msg.js'), 'utf8')).call(global.window);
+    assert.deepStrictEqual(await F8.openArchived(), { ok: true }, 'openArchived waits for the inbox settings menu to mount');
+    assert.strictEqual(state.view, 'archived');
+    assert.deepStrictEqual(await F8.openArchived(), { ok: true }, 'openArchived is a no-op when the view is open');
+    console.log('js openArchived ok');
+  }
+
+  // Regression (BlindFB #27): the archived pane's heading flips before its
+  // rows do — the same grid still shows the inbox rows for a beat, and a scan
+  // taken then returns the inbox as if it were the archived list.
+  // openArchived must not report arrival until the row set has settled.
+  {
+    const state = { menuOpen: false, view: 'inbox', gridChecks: 0 };
+    const settingsBtn = { getAttribute: s => (s === 'aria-label' ? 'Settings, help and more' : null), innerText: '' };
+    const archivedItem = { innerText: 'Archived chats', getAttribute: () => null };
+    const anchor = href => ({ getAttribute: s => (s === 'href' ? href : null) });
+    const grid = {
+      getAttribute: s => (s === 'aria-label' ? (state.view === 'archived' ? 'Archived chats' : 'Chats') : null),
+      querySelectorAll: s => {
+        if (s !== '[role=row] a[href*="/t/"]') return [];
+        // the rows lag the heading: the first checks still see inbox rows
+        const hrefs = state.gridChecks >= 6 ? ['/t/901/', '/t/902/'] : ['/t/101/', '/t/102/'];
+        return hrefs.map(anchor);
+      },
+    };
+    const F10 = {
+      ...F, sleep: async () => {}, dismissRestore: async () => true,
+      waitFor: async fn => {
+        for (let i = 0; i < 3; i++) {
+          const result = await fn();
+          if (result) return result;
+        }
+        return null;
+      },
+      visible: () => true,
+      press: el => {
+        if (el === settingsBtn) state.menuOpen = !state.menuOpen;
+        if (el === archivedItem) { state.view = 'archived'; state.menuOpen = false; }
+      },
+    };
+    global.window = { __fb: F10 };
+    global.document = {
+      body: {},
+      querySelector: s => {
+        if (s === '[role=grid]') { state.gridChecks++; return grid; }
+        return null;
+      },
+      querySelectorAll: s => {
+        if (s === 'button,[role=button]') return [settingsBtn];
+        if (s === '[role=menuitem]') return state.menuOpen ? [archivedItem] : [];
+        if (s === 'h1') return [{ innerText: state.view === 'archived' ? 'Archived chats' : 'Chats' }];
+        return [];
+      },
+    };
+    new Function(fs.readFileSync(path.join(__dirname, '../js/msg.js'), 'utf8')).call(global.window);
+    assert.deepStrictEqual(await F10.openArchived(), { ok: true }, 'openArchived waits out the row lag');
+    assert.ok(state.gridChecks >= 8, `openArchived returned before the rows settled (${state.gridChecks} grid checks)`);
+    assert.strictEqual(F10.archivedArrived(), true, 'archivedArrived proves the pane after arrival');
+    console.log('js openArchived row lag ok');
+  }
+
+  // Same regression: a settings menu without an Archived entry must fail
+  // with the menu contents in the error, not a bare "no chat list".
+  {
+    const settingsBtn = { getAttribute: s => (s === 'aria-label' ? 'Settings, help and more' : null), innerText: '' };
+    const requestsItem = { innerText: 'Message requests', getAttribute: () => null };
+    let open = false;
+    const F9 = {
+      ...F, sleep: async () => {}, waitFor: async fn => fn(), dismissRestore: async () => true,
+      visible: () => true,
+      press: el => { if (el === settingsBtn) open = !open; },
+    };
+    global.window = { __fb: F9 };
+    global.document = {
+      body: {},
+      querySelector: () => null,
+      querySelectorAll: s => {
+        if (s === 'button,[role=button]') return [settingsBtn];
+        if (s === '[role=menuitem]') return open ? [requestsItem] : [];
+        if (s === 'h1') return [{ innerText: 'Chats' }];
+        return [];
+      },
+    };
+    new Function(fs.readFileSync(path.join(__dirname, '../js/msg.js'), 'utf8')).call(global.window);
+    const res = await F9.openArchived();
+    assert.match(res.err, /no Archived chats entry/, 'missing entry is reported');
+    assert.match(res.err, /Message requests/, 'error lists what the menu offered');
+    console.log('js openArchived missing-entry ok');
+  }
+
+  // Regression (BlindFB #30): the inbox rows can sit unchanged under the
+  // flipped archived heading for many polls — longer than the old
+  // stability window — before Facebook swaps them. A stable signature is
+  // not arrival: openArchived must keep waiting while the row set still
+  // equals the inbox rows captured before the view was opened.
+  {
+    const state = { menuOpen: false, view: 'inbox', gridChecks: 0 };
+    const settingsBtn = { getAttribute: s => (s === 'aria-label' ? 'Settings, help and more' : null), innerText: '' };
+    const archivedItem = { innerText: 'Archived chats', getAttribute: () => null };
+    const anchor = href => ({ getAttribute: s => (s === 'href' ? href : null) });
+    const grid = {
+      getAttribute: s => (s === 'aria-label' ? (state.view === 'archived' ? 'Archived chats' : 'Chats') : null),
+      querySelectorAll: s => {
+        if (s !== '[role=row] a[href*="/t/"]') return [];
+        const hrefs = state.gridChecks >= 30 ? ['/t/901/', '/t/902/'] : ['/t/101/', '/t/102/'];
+        return hrefs.map(anchor);
+      },
+    };
+    const F11 = {
+      ...F, sleep: async () => {}, dismissRestore: async () => true,
+      waitFor: async fn => {
+        for (let i = 0; i < 3; i++) {
+          const result = await fn();
+          if (result) return result;
+        }
+        return null;
+      },
+      visible: () => true,
+      press: el => {
+        if (el === settingsBtn) state.menuOpen = !state.menuOpen;
+        if (el === archivedItem) { state.view = 'archived'; state.menuOpen = false; }
+      },
+    };
+    global.window = { __fb: F11 };
+    global.document = {
+      body: {},
+      querySelector: s => {
+        if (s === '[role=grid]') { state.gridChecks++; return grid; }
+        return null;
+      },
+      querySelectorAll: s => {
+        if (s === 'button,[role=button]') return [settingsBtn];
+        if (s === '[role=menuitem]') return state.menuOpen ? [archivedItem] : [];
+        if (s === 'h1') return [{ innerText: state.view === 'archived' ? 'Archived chats' : 'Chats' }];
+        return [];
+      },
+    };
+    new Function(fs.readFileSync(path.join(__dirname, '../js/msg.js'), 'utf8')).call(global.window);
+    assert.deepStrictEqual(await F11.openArchived(), { ok: true }, 'openArchived waits out a long inbox-row lag');
+    assert.ok(state.gridChecks >= 30, `openArchived returned on the inbox rows (${state.gridChecks} grid checks)`);
+    console.log('js openArchived long row lag ok');
+  }
+
+  // The page can keep BOTH grids mounted — the inbox grid stays in the
+  // document, first in order, while the archived view's grid mounts beside
+  // it. A first-grid scan then returns the inbox as if it were the
+  // archived list. chats(n, true) must read the archived grid only.
+  {
+    const row = (name, href) => ({
+      text: [name, 'hi', '·', '1h'],
+      querySelector: q => (q.includes('a[') ? { getAttribute: k => (k === 'href' ? href : null) } : null),
+    });
+    const gridWith = (label, rows) => ({
+      parentElement: null,
+      getAttribute: s => (s === 'aria-label' ? label : null),
+      scrollHeight: 100, clientHeight: 500, scrollTop: 0,
+      querySelector: () => true,
+      querySelectorAll: s => (s === '[role=row]' ? rows : []),
+    });
+    const inboxGrid = gridWith('Chats', [row('Inbox pal', '/t/101/')]);
+    const archivedGridEl = gridWith('Archived chats', [row('Archived pal', '/t/901/')]);
+    const F10 = { ...F, vtext: r => r.text, sleep: async () => {}, dismissRestore: async () => true };
+    global.window = { __fb: F10 };
+    global.document = {
+      body: {}, documentElement: {},
+      querySelector: s => (s === '[role=grid]' ? inboxGrid : null),
+      querySelectorAll: s => (s === '[role=grid]' ? [inboxGrid, archivedGridEl] : []),
+    };
+    global.getComputedStyle = () => ({ overflowY: 'auto', fontWeight: '400' });
+    new Function(fs.readFileSync(path.join(__dirname, '../js/msg.js'), 'utf8')).call(global.window);
+    assert.strictEqual(F10.archivedGrid(), archivedGridEl, 'the archived grid is identified by its label, not document order');
+    const archived = await F10.chats(10, true);
+    assert.deepStrictEqual(archived.chats.map(c => c.href), ['/t/901/'], 'an archived scan returns the archived grid rows only');
+    const inbox = await F10.chats(10);
+    assert.deepStrictEqual(inbox.chats.map(c => c.href), ['/t/101/'], 'an inbox scan still reads the first grid');
+    console.log('js chats archived grid ok');
+  }
+
+  // Regression (BlindFB #31): the archived view can be the ONLY grid on
+  // the page while its grid carries no archived label (the pane's heading
+  // carries the name instead, which is how openArchived proved arrival
+  // and settled). openArchived's settle accepts that single grid, so the
+  // scan must too — a pick that insists on a labelled grid can only ever
+  // answer "no chat list" on such a page.
+  {
+    const row = (name, href) => ({
+      text: [name, 'hi', '·', '1h'],
+      querySelector: q => (q.includes('a[') ? { getAttribute: k => (k === 'href' ? href : null) } : null),
+    });
+    const gridWith = (label, rows) => ({
+      parentElement: null,
+      getAttribute: s => (s === 'aria-label' ? label : null),
+      scrollHeight: 100, clientHeight: 500, scrollTop: 0,
+      querySelector: () => true,
+      querySelectorAll: s => (s === '[role=row]' ? rows : []),
+    });
+    const onlyGrid = gridWith(null, [row('Archived pal', '/t/901/')]);
+    const F11 = { ...F, vtext: r => r.text, sleep: async () => {}, dismissRestore: async () => true };
+    global.window = { __fb: F11 };
+    global.document = {
+      body: {}, documentElement: {},
+      querySelector: s => (s === '[role=grid]' ? onlyGrid : null),
+      querySelectorAll: s => (s === '[role=grid]' ? [onlyGrid] : []),
+    };
+    global.getComputedStyle = () => ({ overflowY: 'auto', fontWeight: '400' });
+    new Function(fs.readFileSync(path.join(__dirname, '../js/msg.js'), 'utf8')).call(global.window);
+    const archived = await F11.chats(10, true);
+    assert.deepStrictEqual(archived.chats.map(c => c.href), ['/t/901/'], 'an archived scan reads the only grid even when it is unlabelled');
+    console.log('js chats archived single unlabelled grid ok');
+  }
+
   // composer focus: Facebook keeps a hidden notifications dialog mounted, which must not block input;
   // a visible dialog still does
   const load = (dialogs, focused = false) => {

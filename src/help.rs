@@ -16,7 +16,7 @@ READ
   Media output: d<TAB>directory, then numbered filenames; join them to form paths. Search names first and use a ref.
   notifs [-n 15]                     time, !=unread, text, ref
 MESSENGER
-  chats [-n 20] [--unread] [name]    ref, flags(! unread, g group, e e2ee), time, name, preview
+  chats [-n 20] [--unread] [--archived] [name]    ref, flags(! unread, g group, e e2ee), time, name, preview; --archived lists the archived view instead of the inbox
   read <chat> [-n 20]                `# date` lines, then `HH:MM sender: text` ([img] [file], {emoji} reactions)
   send <chat> <text> [--file path]... [--dry]   file or image, 25MB max each, one message per file then the text. Options BEFORE `--`; after `--` is text. Exact nickname or unique friend name (or use profile ref / @handle; --fuzzy for partial chat names)
   unsend <chat> [--match text] [--dry]   remove your newest loaded message (containing text) for everyone

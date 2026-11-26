@@ -101,18 +101,71 @@ fn parse_chats(json: &str) -> Res<(Vec<Chat>, bool)> {
     Ok((list, page.complete))
 }
 
+/// Scan the chat list grid on the tab's current page (inbox or archived view alike).
 /// `complete`: the scan actually reached the end of the chat list (not just a time budget or a
 /// stall that gave up partway). Only then may "fewer rows than asked for" be read as "that is everything".
+async fn scan_open_list(b: &Browser, t: &Tab, n: usize, archived: bool) -> Res<(Vec<Chat>, bool)> {
+    let v = b
+        .eval(
+            t,
+            &format!("window.__fb.chats({n},{archived}).then(JSON.stringify)"),
+        )
+        .await?;
+    parse_chats(v.as_str().unwrap_or("{}"))
+}
+
 async fn fetch_chats(b: &std::sync::Arc<Browser>, n: usize) -> Res<(Vec<Chat>, bool)> {
     let t = b.acquire_kind("messages").await?;
     let r = async {
         if t.kind != "messages" {
             b.goto(&t, "https://www.facebook.com/messages/t/").await?;
         }
+        scan_open_list(b, &t, n, false).await
+    }
+    .await;
+    b.release_as(t, if r.is_ok() { "messages" } else { "" })
+        .await;
+    r
+}
+
+/// Archived chats live on their own view, outside the inbox list and its cache.
+/// Facebook retired the /messages/archived/ route (it serves the "content
+/// isn't available" page), so the view is opened from the inbox through its
+/// settings menu; arrival is proven by the pane itself (see F.openArchived),
+/// never by the URL, which does not change.
+async fn fetch_archived_chats(b: &std::sync::Arc<Browser>, n: usize) -> Res<(Vec<Chat>, bool)> {
+    let t = b.acquire_kind("messages").await?;
+    let r = async {
+        b.goto(&t, "https://www.facebook.com/messages/").await?;
         let v = b
-            .eval(&t, &format!("window.__fb.chats({n}).then(JSON.stringify)"))
+            .eval(&t, "window.__fb.openArchived().then(JSON.stringify)")
             .await?;
-        parse_chats(v.as_str().unwrap_or("{}"))
+        let v: Value =
+            serde_json::from_str(v.as_str().unwrap_or("{}")).map_err(|e| e.to_string())?;
+        if let Some(e) = v["err"].as_str() {
+            return Err(e.to_string());
+        }
+        let r = scan_open_list(b, &t, n, true).await;
+        // The pane can fall back to the inbox mid-scan (its rows are then the
+        // inbox's, under an archived label the caller trusts). Only trust the
+        // rows while the pane still proves itself archived (BlindFB #27).
+        let r = match r {
+            Ok(list) => {
+                let still = b
+                    .eval(&t, "window.__fb.archivedArrived()")
+                    .await
+                    .unwrap_or_default();
+                if still == Value::Bool(true) {
+                    Ok(list)
+                } else {
+                    Err("the archived view closed before its list could be read".into())
+                }
+            }
+            Err(e) => Err(e),
+        };
+        // leave the shared tab back on the inbox for its next user
+        let _ = b.goto(&t, "https://www.facebook.com/messages/t/").await;
+        r
     }
     .await;
     b.release_as(t, if r.is_ok() { "messages" } else { "" })
@@ -270,7 +323,7 @@ pub fn trunc(s: &str, n: usize) -> String {
 }
 
 pub async fn chats(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
-    let a = crate::ops::parse(args, &[], &["unread"])?;
+    let a = crate::ops::parse(args, &[], &["unread", "archived"])?;
     let n = a.n.unwrap_or(20);
     let only_unread = a.flag("unread");
     let q = (!a.pos.is_empty()).then(|| a.pos.join(" ").to_lowercase());
@@ -280,7 +333,13 @@ pub async fn chats(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     } else {
         n.max(30)
     };
-    let (list, _complete) = chat_list(d, &b, want, Duration::ZERO).await?;
+    // archived chats are not in the inbox cache: always a fresh scan of the archived view
+    let (list, _complete) = if a.flag("archived") {
+        fetch_archived_chats(&b, want).await?
+    } else {
+        let (list, complete) = chat_list(d, &b, want, Duration::ZERO).await?;
+        ((*list).clone(), complete)
+    };
     let mut shown = 0;
     for c in list.iter() {
         if only_unread && !c.unread {
