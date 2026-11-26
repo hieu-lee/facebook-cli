@@ -92,7 +92,7 @@
   if(sc){sc.scrollTop=0;await sleep(400);}
   const atBottom=()=>!sc||sc.scrollTop+sc.clientHeight>=sc.scrollHeight-2;
   const seen=new Map();
-  let stall=0,prevSeen=-1,prevTop=-1,complete=false,bottomSeen=-1,bottomH=-1;
+  let stall=0,prevSeen=-1,prevTop=-1,complete=false,bottomSeen=-1,bottomH=-1,bottomSince=0;
   const t0=Date.now();
   // time-budgeted, not iteration-budgeted: a large account must actually be scanned, not truncated early
   while(Date.now()-t0<20000){
@@ -111,11 +111,20 @@
    }
    // genuine exhaustion, checked BEFORE consulting `n`: a cap must never get mislabelled as the real end
    if(atBottom()){
-    // bottom of what is mounted so far: lazy pagination may still be fetching, so require one settled recheck
-    if(!sc||(seen.size===bottomSeen&&sc.scrollHeight===bottomH)){complete=true;break;}
-    bottomSeen=seen.size;bottomH=sc.scrollHeight;
-    await sleep(700);continue;
+    // Bottom of what is mounted so far is not the end of the list: lazy
+    // pagination fetches the next page once the bottom is reached, and on a
+    // slow connection that fetch lands seconds later, not within one
+    // recheck — a single settled recheck proved lists "complete" at one
+    // mounted page. Only a bottom that stays unchanged, with no load in
+    // flight, for the whole settle window is the real end; re-pin the
+    // scroll meanwhile so the fetch stays asked.
+    let loading=false;try{loading=typeof F.pageLoading==='function'&&F.pageLoading(sc||g);}catch(_){}
+    if(seen.size!==bottomSeen||(sc&&sc.scrollHeight!==bottomH)||loading){bottomSeen=seen.size;bottomH=sc?sc.scrollHeight:-1;bottomSince=Date.now();}
+    else if(Date.now()-bottomSince>=3500){complete=true;break;}
+    if(sc)sc.scrollTop=sc.scrollHeight;
+    await sleep(400);continue;
    }
+   bottomSince=0;
    if(seen.size>=n)break;                 // enough for the caller; completeness stays unproven (false)
    // stuck = nothing new AND the list did not move: scrolling that still advances is progress, not a stall
    const top=sc?sc.scrollTop:0;
