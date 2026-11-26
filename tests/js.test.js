@@ -458,6 +458,39 @@ console.log('js removed-newest ok');
     console.log('js chats archived grid ok');
   }
 
+  // Regression (BlindFB #31): the archived view can be the ONLY grid on
+  // the page while its grid carries no archived label (the pane's heading
+  // carries the name instead, which is how openArchived proved arrival
+  // and settled). openArchived's settle accepts that single grid, so the
+  // scan must too — a pick that insists on a labelled grid can only ever
+  // answer "no chat list" on such a page.
+  {
+    const row = (name, href) => ({
+      text: [name, 'hi', '·', '1h'],
+      querySelector: q => (q.includes('a[') ? { getAttribute: k => (k === 'href' ? href : null) } : null),
+    });
+    const gridWith = (label, rows) => ({
+      parentElement: null,
+      getAttribute: s => (s === 'aria-label' ? label : null),
+      scrollHeight: 100, clientHeight: 500, scrollTop: 0,
+      querySelector: () => true,
+      querySelectorAll: s => (s === '[role=row]' ? rows : []),
+    });
+    const onlyGrid = gridWith(null, [row('Archived pal', '/t/901/')]);
+    const F11 = { ...F, vtext: r => r.text, sleep: async () => {}, dismissRestore: async () => true };
+    global.window = { __fb: F11 };
+    global.document = {
+      body: {}, documentElement: {},
+      querySelector: s => (s === '[role=grid]' ? onlyGrid : null),
+      querySelectorAll: s => (s === '[role=grid]' ? [onlyGrid] : []),
+    };
+    global.getComputedStyle = () => ({ overflowY: 'auto', fontWeight: '400' });
+    new Function(fs.readFileSync(path.join(__dirname, '../js/msg.js'), 'utf8')).call(global.window);
+    const archived = await F11.chats(10, true);
+    assert.deepStrictEqual(archived.chats.map(c => c.href), ['/t/901/'], 'an archived scan reads the only grid even when it is unlabelled');
+    console.log('js chats archived single unlabelled grid ok');
+  }
+
   // composer focus: Facebook keeps a hidden notifications dialog mounted, which must not block input;
   // a visible dialog still does
   const load = (dialogs, focused = false) => {

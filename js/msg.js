@@ -87,9 +87,10 @@
  // The page can keep more than one chat grid mounted at once: the inbox
  // grid stays in the document while the archived view's grid mounts beside
  // it, and every first-grid lookup then reads the inbox forever, however
- // long it waits. The archived view's grid is the one whose own label
- // names it; grid identity, not document order, decides.
- const ARCHIVE_STEM=/archiv|архив|lưu trữ/i;
+ // long it waits (BlindFB #30, third report — the row-replacement wait
+ // could never pass on such a page). The archived view's grid is the one
+ // whose own label names it; grid identity, not document order, decides.
+ const ARCHIVE_STEM=/archiv|archiw|архив|lưu trữ/i;
  const allGrids=()=>{const all=[...document.querySelectorAll('[role=grid]')];const one=document.querySelector('[role=grid]');if(one&&!all.includes(one))all.unshift(one);return all;};
  const archivedGrid=()=>allGrids().find(g=>ARCHIVE_STEM.test(g.getAttribute('aria-label')||''))||null;
  F.archivedGrid=archivedGrid;
@@ -151,8 +152,15 @@
   await dismissRestore();
   // An archived scan must read the archived view's own grid: with both
   // grids mounted, the first grid in the document can be the inbox, and
-  // its rows are not archived chats however settled they look.
-  const pick=()=>archived?archivedGrid():document.querySelector('[role=grid]');
+  // its rows are not archived chats however settled they look (#30).
+  // The labelled grid wins, but a page with exactly one grid mounted has
+  // no other list it could be: openArchived already proved the pane is
+  // the archived view (its heading can carry the name when the grid
+  // itself is unlabelled or labelled in a language the stem misses),
+  // and rowsSig in openArchived settles on that same single grid. A pick
+  // stricter than the settle could only ever answer "no chat list" on
+  // such a page (BlindFB #31).
+  const pick=()=>{if(!archived)return document.querySelector('[role=grid]');const labelled=archivedGrid();if(labelled)return labelled;const all=allGrids();return all.length===1?all[0]:null;};
   let g=await waitFor(async()=>{await dismissRestore();const g=pick();return g&&g.querySelector('[role=row] a[href*="/t/"]')&&g},15000);
   if(!g){
    // A view with nothing in it (an archived list nobody has archived into yet)
@@ -160,6 +168,7 @@
    // Only a settled grid counts — one still loading may yet grow its rows.
    const empty=await waitFor(()=>{const e=pick();return e&&!F.pageLoading(e)&&e},5000);
    if(empty)return {chats:[],complete:true};
+   if(archived)return {err:'no chat list; grids on the page: '+JSON.stringify(allGrids().map(g=>g.getAttribute('aria-label')))};
    return {err:'no chat list'};
   }
   const sc=scroller(g)||g.parentElement;
