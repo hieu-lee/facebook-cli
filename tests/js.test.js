@@ -243,6 +243,32 @@ console.log('js removed-newest ok');
   const lazy = await run(mk(40, true), 400);
   assert.strictEqual(lazy.chats.length, 40); // pagination that lands after reaching the bottom is awaited
   assert.strictEqual(lazy.complete, true);
+  // Pagination slower than one bottom recheck (a slow fetch landing ~2.5s
+  // after the bottom is reached) must not be proven "complete" at the
+  // first mounted page.
+  const mkSlow = total => {
+    let mounted = Math.min(total, 14), top = 0, grown = null;
+    const row = i => ({
+      text: ['Chat ' + i, 'hi', '·', '1h'],
+      querySelector: q => (q.includes('a[') ? { getAttribute: k => (k === 'href' ? '/t/' + (2000 + i) + '/' : null) } : null),
+    });
+    return {
+      parentElement: null,
+      get scrollHeight() { return mounted * 100; },
+      clientHeight: 500,
+      get scrollTop() { return top; },
+      set scrollTop(v) {
+        top = Math.min(v, this.scrollHeight - 500);
+        if (top + 500 >= this.scrollHeight - 2 && mounted < total && !grown)
+          grown = setTimeout(() => { mounted = total; grown = null; }, 2500);
+      },
+      querySelector: () => true,
+      querySelectorAll: s => (s.includes('row') || s.includes('a[') ? Array.from({ length: mounted }, (_, i) => row(i)) : []),
+    };
+  };
+  const slow = await run(mkSlow(40), 400);
+  assert.strictEqual(slow.chats.length, 40, 'slow pagination is awaited, not cut at the first page');
+  assert.strictEqual(slow.complete, true);
   console.log('js chats ok');
 
   // composer focus: Facebook keeps a hidden notifications dialog mounted, which must not block input;
