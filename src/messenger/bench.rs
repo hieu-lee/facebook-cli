@@ -131,6 +131,7 @@ fn synthetic_chats(n: usize) -> Vec<Chat> {
             time: format!("{}h", i % 24),
             unread: i % 5 == 0,
             group: i % 3 == 0,
+            presence: String::new(),
         })
         .collect()
 }

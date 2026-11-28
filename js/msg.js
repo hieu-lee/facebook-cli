@@ -105,9 +105,12 @@
     // presence text ("Active now", "Active 5m ago") renders as its own chunk
     // ahead of the title on some rows; it is not part of the chat's name
     const PRES=/^Active (now|\d+\s*[smhd]\s*ago|today|yesterday)$/i;
+    // the presence chunk is the chat's current status: kept as its own field
+    // so callers can show it and filter on it, never folded into the name
+    const pres=ch.find(c=>PRES.test(c))||'';
     const body=ch.slice(0,dot>=0?dot:ch.length).filter(c=>!PRES.test(c));
     const bold=+getComputedStyle(row.querySelector('span')||row).fontWeight>=600;
-    seen.set(href,{href,name:body[0]||'',preview:body.slice(1).join(' '),time,unread:bold,group:/\/t\/\d+\/?$/.test(href)&&!!a.getAttribute('aria-label')&&/:/.test(a.getAttribute('aria-label'))});
+    seen.set(href,{href,name:body[0]||'',preview:body.slice(1).join(' '),time,unread:bold,presence:pres,group:/\/t\/\d+\/?$/.test(href)&&!!a.getAttribute('aria-label')&&/:/.test(a.getAttribute('aria-label'))});
    }
    // genuine exhaustion, checked BEFORE consulting `n`: a cap must never get mislabelled as the real end
    if(atBottom()){
