@@ -51,7 +51,7 @@ Requirements: Google Chrome installed and logged in to Facebook. Works on Linux,
 ### What `fb login` does
 
 1. Looks for your everyday Chrome's remote-debugging endpoint. Chrome 144+ has a switch for it at `chrome://inspect/#remote-debugging`. If it is on, Chrome shows an "Allow remote debugging?" dialog: click **Allow**.
-2. If the switch is off and Chrome is running, `fb login` opens that `chrome://inspect` tab for you to tick the box once. If Chrome is closed, `fb login` flips the setting, starts Chrome just long enough to read the session, and closes it again.
+2. If the switch is off, `fb login` flips the setting, starts Chrome just long enough to read the session, and closes it again. If Chrome is running, it first asks you to close every Chrome window and waits up to 3 minutes: a running Chrome ignores a `chrome://` address passed on its command line (it opens a blank New Tab instead) and would overwrite the setting when it exits.
 3. It reads your Facebook and Messenger cookies and copies them into a separate, **headless** Chrome profile that `fb` owns (`%LOCALAPPDATA%\fb\chrome` on Windows, `~/.cache/fb/chrome` elsewhere). Then it disconnects. Your own Chrome is never driven again.
 
 If you use several Chrome profiles, be logged in to Facebook in the one you used last (Chrome exposes that profile to remote debugging); otherwise use `fb login --visible`.
