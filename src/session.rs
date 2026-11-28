@@ -139,18 +139,29 @@ async fn wait_endpoint(uc: &UserChrome, secs: u64, out: &Out) -> Option<(u16, St
     None
 }
 
-/// Make the user's Chrome expose a debugging endpoint. Returns whether we launched it ourselves.
-async fn open_endpoint(uc: &UserChrome, out: &Out) -> Res<bool> {
+/// Make the user's Chrome expose a debugging endpoint by starting it with remote debugging on.
+/// An open Chrome must be closed first: it turns a chrome:// address passed on its command line
+/// into a blank New Tab (so the inspect page cannot be opened for the user), and it rewrites
+/// Local State from memory, dropping the switch.
+async fn open_endpoint(uc: &UserChrome, out: &Out) -> Res<()> {
     if uc.running() {
-        out.err("fb: in your Chrome, tick \"Allow remote debugging for this browser instance\" on the chrome://inspect/#remote-debugging tab that just opened (one time)\n");
-        uc.launch("chrome://inspect/#remote-debugging", false)
-            .await?;
-        Ok(false)
-    } else {
-        uc.enable_remote_debugging()?;
-        uc.launch("about:blank", true).await?;
-        Ok(true)
+        out.err("fb: Chrome is open: close every Chrome window so fb can restart it with remote debugging on\n");
+        let t = Instant::now();
+        while uc.running() {
+            if out.cancelled() {
+                return Err("cancelled by client".into());
+            }
+            if t.elapsed() > Duration::from_secs(180) {
+                return Err(
+                    "Chrome is still open: close every Chrome window, then run `fb login` again"
+                        .into(),
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
     }
+    uc.enable_remote_debugging()?;
+    uc.launch("about:blank", true).await
 }
 
 /// Copy the Facebook session of the user's Chrome into `dest`. `guided` may open/launch Chrome
@@ -205,21 +216,19 @@ pub async fn import(dest: &Cdp, out: &Out, guided: bool, from: Option<&str>) -> 
             if out.cancelled() {
                 return Err("cancelled by client".into()); // before touching the user's Chrome
             }
-            let launched = open_endpoint(uc, out).await?;
-            let (port, path) = wait_endpoint(uc, if launched { 40 } else { 240 }, out)
+            open_endpoint(uc, out).await?;
+            let (port, path) = wait_endpoint(uc, 40, out)
                 .await
                 .ok_or("Chrome did not expose remote debugging (older Chrome? use `fb login --visible`), or the login was cancelled")?;
             let c = match connect_source(uc, port, &path, out).await {
                 Ok(c) => c,
                 Err(e) => {
-                    if launched {
-                        out.err("fb: I started Chrome to read the session and it is still open; close it normally\n");
-                    }
+                    out.err("fb: I started Chrome to read the session and it is still open; close it normally\n");
                     return Err(e);
                 }
             };
             let cookies = fb_cookies(&c, true).await?;
-            got = Some((cookies, launched.then_some(c)));
+            got = Some((cookies, Some(c)));
         }
         got.ok_or_else(|| NOT_LOGGED_IN.to_string())?
     };
