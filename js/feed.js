@@ -205,13 +205,39 @@
     return await walk(u,path,true,me,()=>u.isConnected&&key(u)===k&&ownLink(u)===want);
    }finally{scrollTo(0,y)}
   },
+  /* a reel's own page: no dialog and no feed card — the reel sits in the Reels
+     main as one snap-scrolled unit, its only menu button ("More options", not
+     "Actions for this post") in the action rail under Share. The page's
+     address names the current reel, and the current reel is the unit snapped
+     to the middle of the screen; the units above and below are other reels,
+     whose menus must never be pressed. A unit is the smallest ancestor of
+     its menu button that holds the reel's own video (or Like button) and no
+     second menu button. */
+  reelRoot(){
+   if(!/^\/reel\//.test(location.pathname))return null;
+   const mid=innerHeight/2;let only=null,count=0;
+   for(const b of document.querySelectorAll('[aria-haspopup=menu][role=button]')){
+    if(!window.__fb.visible(b))continue;
+    let u=b;
+    while(u&&u!==document.body){
+     if((u.querySelector('video')||u.querySelector('[data-ad-rendering-role=like_button]'))&&u.querySelectorAll('[aria-haspopup=menu][role=button]').length===1)break;
+     u=u.parentElement;
+    }
+    if(!u||u===document.body)continue;
+    count++;only=u;
+    const r=u.getBoundingClientRect();
+    if(r.top<=mid&&r.bottom>=mid)return u;
+   }
+   return count===1?only:null;
+  },
   /* post-menu on a post's own page: the post opens in a dialog over the feed, or fills main */
   async postMenu(path,url){
    const me=begin();
    const want=url?canon(url):'';
    const root=await waitFor(()=>[...document.querySelectorAll('[role=dialog]')].filter(d=>window.__fb.visible(d)&&actionsOf(d)).pop()||window.__fb.postCards().find(c=>c.closest('[role=main]')&&actionsOf(c))
     /* a photo page: the side panel beside the photo holds only that photo's caption and menu */
-    ||[...document.querySelectorAll('[role=complementary]')].find(c=>window.__fb.visible(c)&&c.querySelector('[data-ad-rendering-role=like_button]')&&actionsOf(c)),12000,200);
+    ||[...document.querySelectorAll('[role=complementary]')].find(c=>window.__fb.visible(c)&&c.querySelector('[data-ad-rendering-role=like_button]')&&actionsOf(c))
+    ||window.__fbFeed.reelRoot(),12000,200);
    if(me.stopped)return STOPPED;
    if(!root)return {err:'this post has no actions menu'};
    /* a post address can redirect (a removed or pending post goes to its author's profile), and
