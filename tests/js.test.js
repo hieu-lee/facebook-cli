@@ -243,6 +243,29 @@ console.log('js removed-newest ok');
   const lazy = await run(mk(40, true), 400);
   assert.strictEqual(lazy.chats.length, 40); // pagination that lands after reaching the bottom is awaited
   assert.strictEqual(lazy.complete, true);
+  // presence: the "Active now" chunk is the chat's status — captured as its
+  // own field, never folded into the name; a row without one gets ""
+  const mkPres = () => {
+    const texts = [
+      ['Active now', 'Bea', 'hello', '·', '2m'],
+      ['Cal', 'hey', '·', '3m'],
+    ];
+    const row = i => ({
+      text: texts[i],
+      querySelector: q => (q.includes('a[') ? { getAttribute: k => (k === 'href' ? '/t/' + (3000 + i) + '/' : null) } : null),
+    });
+    return {
+      parentElement: null,
+      scrollHeight: 200, clientHeight: 500, scrollTop: 0,
+      querySelector: () => true,
+      querySelectorAll: () => texts.map((_, i) => row(i)),
+    };
+  };
+  const pres = await run(mkPres(), 10);
+  assert.strictEqual(pres.chats.length, 2);
+  assert.strictEqual(pres.chats[0].presence, 'Active now');
+  assert.strictEqual(pres.chats[0].name, 'Bea');
+  assert.strictEqual(pres.chats[1].presence, '');
   console.log('js chats ok');
 
   // composer focus: Facebook keeps a hidden notifications dialog mounted, which must not block input;

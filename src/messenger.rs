@@ -14,6 +14,8 @@ pub struct Chat {
     pub time: String,
     pub unread: bool,
     pub group: bool,
+    /// Facebook's own activity text for the chat ("Active now", "Active 5m ago"), empty when the row shows none.
+    pub presence: String,
 }
 
 impl Chat {
@@ -71,6 +73,8 @@ fn parse_chats(json: &str) -> Res<(Vec<Chat>, bool)> {
         unread: bool,
         #[serde(default, deserialize_with = "flag")]
         group: bool,
+        #[serde(default, deserialize_with = "text")]
+        presence: String,
     }
     #[derive(Deserialize)]
     struct Page {
@@ -96,6 +100,7 @@ fn parse_chats(json: &str) -> Res<(Vec<Chat>, bool)> {
             time: r.time,
             unread: r.unread,
             group: r.group,
+            presence: r.presence,
         })
         .collect();
     Ok((list, page.complete))
@@ -149,13 +154,15 @@ impl ChatCache {
         let list = lines
             .filter_map(|l| {
                 let f: Vec<&str> = l.split('\t').collect();
-                (f.len() == 6).then(|| Chat {
+                // cache files written before the presence field have 6 fields, not 7
+                (f.len() == 6 || f.len() == 7).then(|| Chat {
                     path: f[0].into(),
                     name: f[1].into(),
                     time: f[2].into(),
                     unread: f[3] == "1",
                     group: f[4] == "1",
                     preview: f[5].into(),
+                    presence: if f.len() == 7 { f[6].into() } else { String::new() },
                 })
             })
             .collect::<Vec<_>>()
@@ -192,6 +199,8 @@ impl ChatCache {
             s.push(if c.group { '1' } else { '0' });
             s.push('\t');
             clean(&mut s, &c.preview);
+            s.push('\t');
+            clean(&mut s, &c.presence);
             s.push('\n');
         }
         let _ = std::fs::write(path, s);
@@ -270,12 +279,13 @@ pub fn trunc(s: &str, n: usize) -> String {
 }
 
 pub async fn chats(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
-    let a = crate::ops::parse(args, &[], &["unread"])?;
+    let a = crate::ops::parse(args, &[], &["unread", "active"])?;
     let n = a.n.unwrap_or(20);
     let only_unread = a.flag("unread");
+    let only_active = a.flag("active");
     let q = (!a.pos.is_empty()).then(|| a.pos.join(" ").to_lowercase());
     let b = d.browser(out).await?;
-    let want = if q.is_some() || only_unread {
+    let want = if q.is_some() || only_unread || only_active {
         n.max(100)
     } else {
         n.max(30)
@@ -284,6 +294,9 @@ pub async fn chats(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     let mut shown = 0;
     for c in list.iter() {
         if only_unread && !c.unread {
+            continue;
+        }
+        if only_active && c.presence.is_empty() {
             continue;
         }
         if let Some(q) = &q
@@ -296,12 +309,13 @@ pub async fn chats(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
         }
         shown += 1;
         out.line(format!(
-            "{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}",
             d.refs.put('c', &c.path),
             flags(c),
             one_line(&c.time),
             one_line(&c.name),
-            trunc(&one_line(&c.preview), 80)
+            trunc(&one_line(&c.preview), 80),
+            one_line(&c.presence)
         ));
     }
     Ok(())
@@ -1273,6 +1287,7 @@ mod tests {
             time: String::new(),
             unread,
             group,
+            presence: String::new(),
         };
         assert_eq!(flags(&c("/messages/t/1/", false, false)), "-");
         assert_eq!(flags(&c("/messages/e2ee/t/1/", true, false)), "!e");
@@ -1287,6 +1302,7 @@ mod tests {
             time: String::new(),
             unread: false,
             group: false,
+            presence: String::new(),
         }
     }
 
@@ -1355,6 +1371,7 @@ mod tests {
         c.preview = "x\ty".into();
         c.time = "1h".into();
         c.unread = true;
+        c.presence = "Active now".into();
         let cache = ChatCache {
             uid: "9".into(),
             at: Instant::now(),
@@ -1365,7 +1382,7 @@ mod tests {
         cache.save(&file);
         assert_eq!(
             std::fs::read_to_string(&file).unwrap(),
-            "#uid=9\n#n=5\n#complete=1\n/messages/t/1/\tA B C\t1h\t1\t0\tx y\n/messages/e2ee/t/2/\tZed\t\t0\t0\t\n"
+            "#uid=9\n#n=5\n#complete=1\n/messages/t/1/\tA B C\t1h\t1\t0\tx y\tActive now\n/messages/e2ee/t/2/\tZed\t\t0\t0\t\t\n"
         );
         let back = ChatCache::load(&file).unwrap();
         std::fs::remove_file(&file).unwrap();
@@ -1376,6 +1393,8 @@ mod tests {
             ("A B C", "x y")
         );
         assert!(back.list[0].unread && !back.list[0].group && back.list[1].e2ee());
+        assert_eq!(back.list[0].presence, "Active now");
+        assert_eq!(back.list[1].presence, "");
     }
 
     #[test]
