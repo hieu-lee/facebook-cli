@@ -1,12 +1,12 @@
 use crate::browser::{Browser, Tab};
 use crate::cdp::Res;
 use crate::daemon::{Daemon, Out};
-use crate::messenger::push_one_line;
+use crate::messenger::{one_line, push_one_line};
 use crate::ops::Args;
 use serde_json::Value;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{Mutex, Notify, oneshot};
 
 #[derive(Clone, Debug, Default)]
 pub struct Post {
@@ -219,9 +219,14 @@ struct Inner {
     epoch: u64,
     started: Option<Instant>,
     error: Option<String>,
+    /// page scripts `fb post-menu` runs in this tab, where the listed posts' cards live
+    actions: Vec<(String, oneshot::Sender<Res<Value>>)>,
 }
 
-const AHEAD: usize = 60;
+/// Read-ahead beyond what callers asked for. Small on purpose: Facebook keeps only the last
+/// 10-25 posts of a scrolled feed mounted, and post-menu needs the cards of the posts being
+/// read still there.
+const AHEAD: usize = 5;
 const STALE: Duration = Duration::from_secs(20 * 60);
 
 impl FeedBuf {
@@ -240,6 +245,10 @@ impl FeedBuf {
                 continue;
             }
             g.running = false;
+            // no producer is left to run queued menu actions: answer them now, not at their deadline
+            for (_, done) in g.actions.drain(..) {
+                let _ = done.send(Err("the feed tab closed before this ran; nothing was pressed".into()));
+            }
             if g.epoch == epoch
                 && let Err(e) = r
             {
@@ -273,9 +282,40 @@ impl FeedBuf {
                 tokio::pin!(notified);
                 notified.as_mut().enable();
                 {
-                    let g = self.inner.lock().await;
+                    let mut g = self.inner.lock().await;
                     if g.epoch != epoch {
                         return Ok(());
+                    }
+                    // oldest first; one whose caller gave up (timed out) is dropped, never run late
+                    g.actions.retain(|(_, done)| !done.is_closed());
+                    if !g.actions.is_empty() {
+                        let (expr, mut done) = g.actions.remove(0);
+                        drop(g);
+                        if frozen {
+                            // a tab that will not thaw is retired like on the normal path
+                            if let Err(e) = b.set_lifecycle(&t, false).await {
+                                let _ = done.send(Err(format!(
+                                    "the feed tab could not be woken ({e}); nothing was pressed"
+                                )));
+                                return Err(e);
+                            }
+                            frozen = false;
+                        }
+                        // a caller that gives up mid-walk (its timeout) stops the remaining presses
+                        let r = tokio::select! {
+                            r = bounded(90, b.eval(&t, &expr)) => Some(r),
+                            _ = done.closed() => None,
+                        };
+                        // gave up or hit the 90 s bound: the page script still runs, so stop it there
+                        if !matches!(r, Some(Ok(_))) {
+                            let _ = bounded(10, b.eval(&t, "window.__fbFeed.stop()")).await;
+                        }
+                        close_layers(b, &t).await;
+                        if let Some(r) = r {
+                            let _ = done.send(r);
+                        }
+                        last = Instant::now();
+                        continue;
                     }
                     if g.posts.len() - g.cursor >= AHEAD.max(g.want) {
                         drop(g);
@@ -380,6 +420,26 @@ impl FeedBuf {
         }
     }
 
+    /// Run `expr` in the feed tab between pump steps; `None` when no feed tab is open.
+    async fn act(&self, expr: String) -> Option<Res<Value>> {
+        let (done, rx) = oneshot::channel();
+        {
+            let mut g = self.inner.lock().await;
+            if !g.running {
+                return None;
+            }
+            g.actions.push((expr, done));
+        }
+        self.wake.notify_waiters();
+        // past the deadline the walk may already have pressed something: report that, never let
+        // the caller replay the presses on the post page (dropping rx stops the rest of the walk)
+        match tokio::time::timeout(Duration::from_secs(120), rx).await {
+            Ok(Ok(r)) => Some(r),
+            _ => Some(Err("the feed tab did not finish within 120 s; some presses may have happened, check the post before trying again"
+                .into())),
+        }
+    }
+
     async fn take(&self, n: usize) -> Res<Vec<Post>> {
         let deadline = Instant::now() + Duration::from_secs(60);
         loop {
@@ -425,6 +485,109 @@ pub async fn feed(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
     let urls = a.flag("urls");
     for p in d.feed.take(a.n.unwrap_or(10)).await? {
         out.line(format_post(&d.refs, &p, urls));
+    }
+    Ok(())
+}
+
+const CANCELLED: &str = "cancelled by client; presses after that point were not made";
+
+/// Resolves once the client went away (Ctrl-C, its timeout, a closed connection).
+async fn client_gone(out: &Out) {
+    while !out.cancelled() {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+/// Close whatever menus and dialogs post-menu left open (Escape needs trusted key presses).
+async fn close_layers(b: &Browser, t: &Tab) {
+    for _ in 0..3 {
+        // bounded: a key event Chrome never answers must not wedge the feed pump
+        let _ = tokio::time::timeout(Duration::from_secs(5), b.key(t, "Escape", "Escape", 27, 0)).await;
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
+}
+
+/// `fb post-menu <post> [--press <label>]...`: a post's "Actions for this post" menu. Each
+/// `--press` presses that label in what the previous press showed (a submenu, a dialog such as
+/// Report), and the output describes what shows after the last one. A post `fb feed` listed is
+/// worked on its feed card, the only place Facebook offers Interested / Not interested; any
+/// other post, or one whose card Facebook has dropped, on the post's own page.
+pub async fn post_menu(d: &Daemon, args: &[String], out: &Out) -> Res<()> {
+    let a = crate::ops::parse(args, &["press"], &[])?;
+    let spec = a.pos.first().ok_or("usage: post-menu <post> [--press <label>]...")?;
+    // a post only: on a profile or page the fallback would press the first post's menu there
+    let url = crate::ops::resolve_post_strict(d, spec).await?;
+    let path = Value::from(a.opts_all("press"));
+    let b = d.browser(out).await?;
+    let gen0 = b.generation.load(std::sync::atomic::Ordering::SeqCst);
+    // a press can change the account (hide, snooze, report): hold it like other mutations
+    let _account = d.account.read().await;
+    if b.generation.load(std::sync::atomic::Ordering::SeqCst) != gen0 {
+        return Err(
+            "the account changed while this command waited; nothing was done, try again".into(),
+        );
+    }
+    let card = format!("window.__fbFeed.menu({},{path})", Value::from(url.as_str()));
+    let feed = tokio::select! {
+        r = d.feed.act(card) => r,
+        // dropping the action's receiver makes the feed tab stop the walk before its next press
+        _ = client_gone(out) => return Err(CANCELLED.into()),
+    };
+    let (from, r) = match feed {
+        Some(Ok(r)) if r["gone"] != Value::Bool(true) => ("feed", r),
+        Some(Err(e)) => return Err(e),
+        card => {
+            // why the feed card was not used, for the caller to explain the shorter menu
+            let why = match &card {
+                Some(Ok(r)) => r["why"].as_str().unwrap_or("").to_string(),
+                _ => "no feed is open".to_string(),
+            };
+            out.line(format!("feedcard\t{}", one_line(&why)));
+            let page = if url.starts_with('/') {
+                format!("https://www.facebook.com{url}")
+            } else {
+                url.clone()
+            };
+            let t = b.acquire().await?;
+            let r = async {
+                b.goto(&t, &page).await?;
+                wait_main(&b, &t).await?;
+                let walk = format!("window.__fbFeed.postMenu({path},{})", Value::from(page.as_str()));
+                let r = tokio::select! {
+                    r = bounded(90, b.eval(&t, &walk)) => r,
+                    _ = client_gone(out) => Err(CANCELLED.into()),
+                };
+                // a cancelled or timed-out walk is still running in the page: stop it there
+                if r.is_err() {
+                    let _ = bounded(10, b.eval(&t, "window.__fbFeed.stop()")).await;
+                }
+                r
+            }
+            .await;
+            close_layers(&b, &t).await;
+            b.release(t).await;
+            ("post", r?)
+        }
+    };
+    if let Some(e) = r["err"].as_str() {
+        return Err(e.to_string());
+    }
+    out.line(format!("from\t{from}"));
+    let s = |v: &Value| one_line(v.as_str().unwrap_or(""));
+    if r["done"] == Value::Bool(true) {
+        out.line("done");
+    } else {
+        out.line(format!("title\t{}", s(&r["title"])));
+        for line in r["text"].as_array().into_iter().flatten() {
+            out.line(format!("text\t{}", s(line)));
+        }
+        for o in r["options"].as_array().into_iter().flatten() {
+            let on = if o[2] == Value::Bool(true) { "on" } else { "" };
+            out.line(format!("option\t{}\t{}\t{on}", s(&o[0]), s(&o[1])));
+        }
+    }
+    for note in r["notes"].as_array().into_iter().flatten() {
+        out.line(format!("note\t{}", s(note)));
     }
     Ok(())
 }

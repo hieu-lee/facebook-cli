@@ -37,6 +37,15 @@ const F = global.window.__fb;
     getClientRects() { return [{}]; }, matches() { return this.disabled; }, closest() { return null; }, getBoundingClientRect() { return { x: 0, y: 0, width: 20, height: 20 }; },
     dispatchEvent(e) { this.events.push(e.type); this.onEvent?.(e.type); },
   });
+  // post-menu (#56 review): a card Facebook reuses for another post during the press's
+  // pointer events fails the walk's identity check, so the click never reaches it.
+  {
+    let same = true;
+    const actions = button('div', 'Actions for this post');
+    actions.onEvent = type => { if (type === 'pointerover') same = false; };
+    assert.throws(() => G.press(actions, { valid: () => same }), /action target changed/);
+    assert.deepEqual(actions.events, ['pointerover']);
+  }
   buttons = [button('button')];
   assert.strictEqual(await G.composePrepare(), true, 'native Post button is recognized');
   assert.strictEqual(G.composeCheck('requested draft'), true);
@@ -630,4 +639,41 @@ console.log('js removed-newest ok');
     ['/fixture-page', null],
   ]) assert.strictEqual(kindOf(href), kind, href);
   console.log('js search kinds ok');
+  // reelRoot: a reel page's current reel is the unit snapped to the middle
+  // of the screen; the next reel's identical "More options" button must
+  // never be picked. Off a reel page there is no reel root.
+  {
+    // globals are restored afterwards: an earlier async chain still reads them
+    const savedGlobals = { document: global.document, window: global.window, location: global.location, innerHeight: global.innerHeight };
+    const bodyEl = { parentElement: null, querySelector: () => null, querySelectorAll: () => [] };
+    const mkUnit = (top, bottom) => {
+      const button = { getAttribute: k => (k === 'aria-label' ? 'More options' : null), querySelector: () => null, querySelectorAll: () => [] };
+      const rail = { querySelector: () => null, querySelectorAll: () => [], parentElement: null };
+      const unit = {
+        querySelector: sel => (sel === 'video' ? {} : null),
+        querySelectorAll: () => [button],
+        parentElement: null,
+        getBoundingClientRect: () => ({ top, bottom }),
+      };
+      button.parentElement = rail; rail.parentElement = unit;
+      return { unit, button };
+    };
+    const A = mkUnit(-100, 900), B = mkUnit(900, 1900);
+    const mainEl = { querySelector: () => ({}), querySelectorAll: () => [A.button, B.button], parentElement: bodyEl };
+    A.unit.parentElement = mainEl; B.unit.parentElement = mainEl;
+    global.document = {
+      body: bodyEl,
+      querySelectorAll: sel => (sel.includes('aria-haspopup') ? [A.button, B.button] : []),
+      querySelector: () => null,
+    };
+    global.location = { pathname: '/reel/1174401988609147/', href: 'https://www.facebook.com/reel/1174401988609147/' };
+    global.innerHeight = 800;
+    global.window = { __fb: { ...F, visible: () => true } };
+    new Function(fs.readFileSync(path.join(__dirname, '../js/feed.js'), 'utf8')).call(global.window);
+    assert.strictEqual(global.window.__fbFeed.reelRoot(), A.unit, 'the centered reel unit wins');
+    global.location = { pathname: '/watch/', href: 'https://www.facebook.com/watch/' };
+    assert.strictEqual(global.window.__fbFeed.reelRoot(), null, 'no reel root off a reel page');
+    Object.assign(global, savedGlobals);
+    console.log('js reelRoot ok');
+  }
 })();
